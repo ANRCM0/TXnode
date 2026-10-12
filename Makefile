@@ -1,6 +1,8 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
-LDFLAGS := -s -w -X github.com/ANRCM0/TX-Node/internal/buildinfo.Version=$(VERSION) -X github.com/ANRCM0/TX-Node/internal/buildinfo.BuildTime=$(BUILD_TIME) -X github.com/ANRCM0/TX-Node/internal/buildinfo.Commit=$(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
+COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+SOURCE_URL ?= https://github.com/ANRCM0/tx-core
+LDFLAGS := -s -w -X github.com/ANRCM0/TX-Node/internal/buildinfo.Version=$(VERSION) -X github.com/ANRCM0/TX-Node/internal/buildinfo.BuildTime=$(BUILD_TIME) -X github.com/ANRCM0/TX-Node/internal/buildinfo.Commit=$(COMMIT)
 
 .PHONY: build clean test test-runtime-stability docker build-linux build-linux-arm64 build-all
 
@@ -45,4 +47,4 @@ clean:
 
 # Build Docker image
 docker:
-	docker build -t tx-node:$(VERSION) -t tx-node:latest .
+	docker build --build-arg VERSION="$(VERSION)" --build-arg COMMIT="$(COMMIT)" --build-arg BUILD_TIME="$(BUILD_TIME)" --build-arg SOURCE_URL="$(SOURCE_URL)" -t tx-node:$(VERSION) -t tx-node:latest .

@@ -1,0 +1,227 @@
+{
+  "schema_version": 1,
+  "scope": "node-runtime-monorepo-integration",
+  "verification_date": "2026-10-13",
+  "committed_base": "44208666d0e34d85bf657a7e46d4cf3f276427f0",
+  "snapshot": "/tmp/tx-core-node-monorepo-4420866-v2",
+  "snapshot_manifest": {
+    "path": ".tmp/node-monorepo-evidence/tx-core-node-monorepo-4420866-v2/node-monorepo-snapshot.json",
+    "sha256": "8af9125e7dfdd6c8d5918b01245bd415679a09d923e68427054da6f1ae48f199"
+  },
+  "launcher": {
+    "path": ".tmp/node-monorepo-gate.py",
+    "sha256": "ddbad3b09ee00c82de64b9179ba27b8407edbf97396bfdbaccce7878248d3520"
+  },
+  "plan": {
+    "path": ".tmp/node-monorepo-gate-plan.json",
+    "sha256": "922d1aa4510dce1b4ee0036794a3394d2080bda4cb746d379dbc4c627641d0b5"
+  },
+  "source_sha256": {
+    ".github/workflows/ci-node.yml": "c96c3b7f2b935ca2e1226901fad8045f4218a20cdd8c07ad219fba10561e45bd",
+    "node/.github/release/NOTES.md": "d0e375a445331f34b21afe66da6776445f7fc3aab1269a5f7d1e1e59209c7e15",
+    "node/.gitignore": "adbb73d0126eef68b7b556ec317ce85f782dc57e4fe6930710a1c63b9b1e7797",
+    "node/.dockerignore": "8aaa0ed64e8c670140a27df4ed58a2dde187e7b7c400f44b2287d80905b63a2b",
+    "node/Dockerfile": "68266273e41d60f6e42b21bbf541ba56e523831baa5f4bdcc7ce2875f854762a",
+    "node/Makefile": "8116ed93a61ccb9a0d9517effe57c33fd3fb008afefaea855eb65331608f9108",
+    "node/README.md": "45241c9563aa6b07d642dffaa9207715f51dd91f1afae9a1d44055e0b7a49154",
+    "node/docs/standalone.md": "1aedaf2e542483d6c1ac91665776ef5e75eeb1a2619c181e74e8c3dad56e32da",
+    "node/docs/legacy-compatibility-inventory.md": "3ba2a43c5627ac1421cebde6d58127dd13080e78b2bc71c566a619db9b48ca69"
+  },
+  "tested_source_sha256": {
+    ".github/workflows/ci-node.yml": "c96c3b7f2b935ca2e1226901fad8045f4218a20cdd8c07ad219fba10561e45bd",
+    "node/.github/release/NOTES.md": "d0e375a445331f34b21afe66da6776445f7fc3aab1269a5f7d1e1e59209c7e15",
+    "node/.gitignore": "adbb73d0126eef68b7b556ec317ce85f782dc57e4fe6930710a1c63b9b1e7797",
+    "node/.dockerignore": "8aaa0ed64e8c670140a27df4ed58a2dde187e7b7c400f44b2287d80905b63a2b",
+    "node/Dockerfile": "10c83bdf98d74ed3298dc64afb424ff866ee429a336ada70d1290af0ad15e756",
+    "node/Makefile": "8116ed93a61ccb9a0d9517effe57c33fd3fb008afefaea855eb65331608f9108",
+    "node/README.md": "45241c9563aa6b07d642dffaa9207715f51dd91f1afae9a1d44055e0b7a49154",
+    "node/docs/standalone.md": "1aedaf2e542483d6c1ac91665776ef5e75eeb1a2619c181e74e8c3dad56e32da",
+    "node/docs/legacy-compatibility-inventory.md": "3ba2a43c5627ac1421cebde6d58127dd13080e78b2bc71c566a619db9b48ca69"
+  },
+  "deleted_source": [
+    "node/.github/workflows/ci.yml",
+    "node/.github/workflows/publish-release.yml"
+  ],
+  "parent_owned_helper_sha256": {
+    "scripts/resolve-image-tags.sh": "4087d0564d4f53067760112f4aee737e9ecf2b30f30dce8e116acd9f7684de74",
+    "scripts/test-image-tags.sh": "fffc92fc47f66599f7a8ce163ee65a6c10766cedf8bca99089c0e882bd146cc7"
+  },
+  "report_added_after_gates": "docs-only verification report; the fixed test snapshot is unchanged",
+  "post_gate_changes": [
+    {
+      "path": "node/Dockerfile",
+      "before_sha256": "10c83bdf98d74ed3298dc64afb424ff866ee429a336ada70d1290af0ad15e756",
+      "after_sha256": "68266273e41d60f6e42b21bbf541ba56e523831baa5f4bdcc7ce2875f854762a",
+      "reason": "Parent-approved native builder cross-compilation avoids compiling Go under QEMU for arm64.",
+      "static_verified": "Only builder FROM --platform=$BUILDPLATFORM, declared TARGETOS/TARGETARCH and CGO_ENABLED=0 GOOS/GOARCH assignments changed. Runtime platform and existing Go tags/dependencies are unchanged.",
+      "local_docker_tested": false,
+      "required_remote_gate": "Existing image-smoke and two-platform build/publish jobs."
+    }
+  ],
+  "go_identity": {
+    "module": "github.com/ANRCM0/TX-Node",
+    "imports_changed": false,
+    "go_source_files_unchanged": 193,
+    "go_mod_unchanged": true,
+    "go_sum_unchanged": true,
+    "source_comparison": "Fixed imported Git archive; original checkout comparison normalized CRLF/LF only."
+  },
+  "environment": {
+    "toolchain": "go1.26.3 linux/amd64",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOTOOLCHAIN": "local",
+    "GOMAXPROCS": "4",
+    "make_unavailable": true,
+    "make_target_expansion": "Exact test, test-runtime-stability, build-linux and build-linux-arm64 commands and Makefile SHA256 are in raw logs."
+  },
+  "results": {
+    "internal_tests": {
+      "main_tests_passed": 432,
+      "subtests_passed": 194,
+      "skipped": 0,
+      "failed": 0,
+      "packages_passed": 27,
+      "packages_without_tests": [
+        "github.com/ANRCM0/TX-Node/internal/buildinfo",
+        "github.com/ANRCM0/TX-Node/internal/kernel",
+        "github.com/ANRCM0/TX-Node/internal/kernel/geodata",
+        "github.com/ANRCM0/TX-Node/internal/monitor",
+        "github.com/ANRCM0/TX-Node/internal/nlog"
+      ],
+      "flags": [
+        "-v",
+        "-race",
+        "-count=1"
+      ]
+    },
+    "command_package": {
+      "package": "github.com/ANRCM0/TX-Node/cmd/tx-node",
+      "passed": true,
+      "individual_case_count": null,
+      "reason": "The original command uses non-verbose go test; no case count is inferred."
+    },
+    "runtime_stability": {
+      "packages_passed": 8,
+      "flags": [
+        "-race",
+        "-shuffle=on",
+        "-count=10",
+        "-timeout=5m"
+      ],
+      "individual_case_count": null
+    },
+    "build": {
+      "platforms": [
+        "linux/amd64",
+        "linux/arm64"
+      ],
+      "tags": [
+        "with_quic",
+        "with_utls",
+        "with_wireguard",
+        "with_acme",
+        "with_clash_api"
+      ],
+      "amd64_binary_executed": true,
+      "arm64_binary_executed": false,
+      "version_output": "tx-node monorepo-local-verification (built 2026-10-13T00:00:00Z)",
+      "embedded_commit": "44208666d0e34d85bf657a7e46d4cf3f276427f0"
+    }
+  },
+  "attempts": [
+    {
+      "attempt": "v1/static",
+      "status": "passed_prior_source_revision",
+      "log": ".tmp/node-monorepo-evidence/tx-core-node-monorepo-4420866-v1/node-monorepo-static.log",
+      "sha256": "b0ba9aaebddc927a5f3a5dd5948404d9ce04be468dee6f4f88ff5f7fb669c5bc",
+      "detail": "Original shell/static attempt; superseded by v2 after fail-closed Git diff handling."
+    },
+    {
+      "attempt": "v1/modules",
+      "status": "environment_failed",
+      "log": ".tmp/node-monorepo-evidence/tx-core-node-monorepo-4420866-v1/node-monorepo-modules.log",
+      "sha256": "af6b587a9e1a9ac49f77036bee4c1dc70fb5a12183f9d0129c3366592a6eb88a",
+      "detail": "Default Go 1.24.13 is older than go.mod 1.26; no Go tests began."
+    },
+    {
+      "attempt": "v2/static",
+      "status": "passed",
+      "log": ".tmp/node-monorepo-evidence/tx-core-node-monorepo-4420866-v2/node-monorepo-static.log",
+      "sha256": "6ad4f6b5fa47af4d8634e4a446f6899b4d8a232a25056b945c0a7d923a52e222",
+      "detail": "20 workflow shell blocks pass bash -n; shared image resolver tests pass; actual workflow classification: 16 cases, promotion: 4 cases, diff-failure rejection: 2 cases."
+    },
+    {
+      "attempt": "v2/modules",
+      "status": "passed",
+      "log": ".tmp/node-monorepo-evidence/tx-core-node-monorepo-4420866-v2/node-monorepo-modules.log",
+      "sha256": "a9c4e12777cb29fd6c51f8b1eb67c5c5f436d478e989349354e8205cf3459646",
+      "detail": "Existing Go 1.26.3: go mod verify and go mod tidy -diff pass with dependency networking disabled."
+    },
+    {
+      "attempt": "v2/test",
+      "status": "environment_failed",
+      "log": ".tmp/node-monorepo-evidence/tx-core-node-monorepo-4420866-v2/node-monorepo-test.log",
+      "sha256": "a59967ccdccbc8009b14cec65a6876a892ec1a9ee5e32cb4d0fc5a775f6c9ede",
+      "detail": "make is absent; no Go tests began. Original Makefile goals were then expanded exactly in attempt2."
+    },
+    {
+      "attempt": "v2/test-attempt2",
+      "status": "passed",
+      "log": ".tmp/node-monorepo-evidence/tx-core-node-monorepo-4420866-v2/node-monorepo-test-attempt2.log",
+      "sha256": "fd95670501b7f0e4214babe7b7f6accd54d1d872041535a78f71da6926e71422",
+      "detail": "Original Makefile test target expanded without changing flags; internal verbose counts and separate cmd package result are recorded below."
+    },
+    {
+      "attempt": "v2/vet",
+      "status": "passed",
+      "log": ".tmp/node-monorepo-evidence/tx-core-node-monorepo-4420866-v2/node-monorepo-vet.log",
+      "sha256": "e344e8a34667aeb5eeaf868062a7dccc7351d93f927e4351d96d11d19889a007",
+      "detail": "go vet ./..."
+    },
+    {
+      "attempt": "v2/stability",
+      "status": "passed",
+      "log": ".tmp/node-monorepo-evidence/tx-core-node-monorepo-4420866-v2/node-monorepo-stability.log",
+      "sha256": "1636449961d5a1edb9d0a8daa9926ac32f04cbbb22796677530915d69e1d4f1b",
+      "detail": "Original 8-package race/shuffle/count=10/timeout=5m target expanded exactly."
+    },
+    {
+      "attempt": "v2/build",
+      "status": "passed",
+      "log": ".tmp/node-monorepo-evidence/tx-core-node-monorepo-4420866-v2/node-monorepo-build.log",
+      "sha256": "fa10040744e659b093247940311a0bfebef9fc7fd0fdb9598bad8077d5ffe3ea",
+      "detail": "Original Linux amd64 and arm64 release build goals expanded exactly; actual amd64 -v execution passes."
+    }
+  ],
+  "release_behavior": {
+    "active_workflow": ".github/workflows/ci-node.yml",
+    "container_context": "node",
+    "image_repository": "ghcr.io/anrcm0/tx-node",
+    "unified_tag_prefix": "v",
+    "main_channel": [
+      "dev",
+      "dev-sha-<12 SHA>"
+    ],
+    "stable_channel": [
+      "vX.Y.Z",
+      "latest"
+    ],
+    "preview_channel": [
+      "vX.Y.Z-{rc,beta,preview}.N",
+      "preview"
+    ],
+    "documentation_and_test_only_main_pushes_publish": false,
+    "release_assets": [
+      "tx-node-linux-amd64",
+      "tx-node-linux-arm64"
+    ],
+    "release_creation": "Node workflow creates the unified GitHub Release after its gates, binaries and image publish succeed. Core and Gateway image publication remain independent."
+  },
+  "limits": [
+    "No local Docker build or container smoke was run; the root Node workflow preserves those gates before publishing.",
+    "No image, GitHub Release, deployment or remote CI execution is claimed by these local results.",
+    "Three component images are published independently; this does not establish atomic publication.",
+    "No runtime authority, Go source, dependency pin, credentials or host installation behavior changed."
+  ]
+}

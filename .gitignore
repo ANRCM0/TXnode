@@ -35,3 +35,5 @@ cmd/xboard-node-bench
 
 # tx-node local build artifacts
 /tx-node
+/tx-node-linux-*
+/dist/

@@ -1,6 +1,6 @@
 # TX-Node v2.3.0
 
-TX-Node v2.3.0 是下一次拟发布的运行时版本，聚焦原生 TXBoard 节点协议、多控制平面适配和运行时可靠性。本文件仅准备发布说明；合并代码不会自动创建 Tag、发布 Release 或覆盖 GHCR `latest`。
+本文件保留合仓前拟发布的 TX-Node v2.3.0 说明，聚焦原生 TXBoard 节点协议、多控制平面适配和运行时可靠性。它与旁边的 VERSION 是历史记录，不再驱动 `tx-core` 统一版本或发布；当前策略见 [Node README](../../README.md)。
 
 ## 新功能与改进
 
@@ -24,4 +24,4 @@ TX-Node v2.3.0 是下一次拟发布的运行时版本，聚焦原生 TXBoard �
 - `tx-node-linux-amd64`
 - `tx-node-linux-arm64`
 
-Docker 多架构镜像发布到 `ghcr.io/anrcm0/tx-node`。每次 `main` 提交通过 CI 后自动生成开发镜像 `:dev` 和不可变提交 SHA 标签；严格的稳定版 Tag `v2.3.0` 才会推送 `:v2.3.0` 和 `:latest`，并生成 GitHub Release。没有预览版/RC 渠道；当前准备的发布说明不会自行打 Tag。
+Docker 多架构镜像继续发布到 `ghcr.io/anrcm0/tx-node`。合仓后的根工作流使用统一 `v*` Tag、开发版 `dev-sha` 和 stable/preview 渠道，并向统一 Release 上传双架构二进制。本文件不会自行打 Tag或改写统一 Release 的说明。

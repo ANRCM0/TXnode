@@ -1,12 +1,12 @@
 # TX-Node standalone maintenance policy
 
-TX-Node is maintained as an independent project. It originated from Xboard-Node and keeps Xboard panel compatibility where that compatibility is part of the protocol surface, but TX-Node no longer treats upstream synchronization as its development model.
+TX-Node is maintained as an independent runtime in the `node/` module of the `tx-core` monorepo. It originated from Xboard-Node and keeps Xboard panel compatibility where that compatibility is part of the protocol surface, but TX-Node no longer treats upstream synchronization as its development model.
 
 ## Source of truth
 
-- `ANRCM0/TX-Node` is the source of truth for development and releases.
+- `ANRCM0/tx-core`, directory `node/`, is the source of truth for development and releases.
 - `main` is the product mainline.
-- Development images are built automatically from each `main` push (`:dev` and commit SHA); stable releases are created from strict `vX.Y.Z` tags only. No RC/preview release channel.
+- Development images use `:dev` and `:dev-sha-<12 monorepo SHA digits>`. Unified `vX.Y.Z` tags publish `:latest` and the exact version; `vX.Y.Z-{rc,beta,preview}.N` tags publish `:preview` and the exact prerelease version. The root image-channel resolver is shared with Core and Gateway.
 - Upstream repositories are references for fixes and ideas, not merge targets.
 
 ## Upstream changes
@@ -61,7 +61,7 @@ Canonical TX-Node-facing identities are:
 
 - node binary: `tx-node`;
 - Docker image: `ghcr.io/anrcm0/tx-node`;
-- runtime source/release repository: `ANRCM0/TX-Node`;
+- runtime source/release repository: `ANRCM0/tx-core`, directory `node/`;
 - installation and host-management entry point: public `ANRCM0/TX-Node-Installer`.
 
 The runtime repository intentionally does not carry an installer copy. Host deployment layout such as `/etc/txnode`, the `txnode` management command, multi-panel instance management, backup/rollback, and Docker Compose generation are owned by TX-Node-Installer.
@@ -76,7 +76,9 @@ The Go module and TX-Node self-imports use:
 github.com/ANRCM0/TX-Node
 ```
 
-This source-identity change does not alter Xboard panel protocol compatibility.
+The module/import identity remains stable when its directory moves. Clone the monorepo and run Go/Make commands from `node/`; build-time commit metadata uses the monorepo HEAD. This preserves local source builds and the existing interop fixture. It does not establish a new remote `go get` endpoint for the old module path; remote module publication would require a separate compatibility decision.
+
+The root `ci-node.yml` retains Go dependency/source guards, full tests, vet and runtime stability checks. Docker version and canonical/legacy config-path smoke checks run before publishing. Core and Gateway remain separate images. Node binaries attach to the same unified GitHub Release only after Node's own gates pass; three-image atomic publication is not claimed. Historical verification JSON files retain their original source paths and SHAs.
 
 ## Kernel fork dependencies
 

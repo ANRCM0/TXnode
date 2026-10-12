@@ -1,6 +1,8 @@
 # Build stage
-FROM golang:1.26-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
+# Retain git for Go module downloads that need a direct VCS fallback. Build
+# identity is supplied explicitly; this context contains only the node module.
 RUN apk add --no-cache git
 
 WORKDIR /build
@@ -10,15 +12,30 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 go build -ldflags "-s -w \
-    -X github.com/ANRCM0/TX-Node/internal/buildinfo.Version=$(git describe --tags --always --dirty 2>/dev/null || echo dev) \
-    -X github.com/ANRCM0/TX-Node/internal/buildinfo.BuildTime=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
-    -X github.com/ANRCM0/TX-Node/internal/buildinfo.Commit=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" \
+ARG VERSION=dev
+ARG BUILD_TIME=unknown
+ARG COMMIT=unknown
+ARG TARGETOS
+ARG TARGETARCH
+
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags "-s -w \
+    -X github.com/ANRCM0/TX-Node/internal/buildinfo.Version=${VERSION} \
+    -X github.com/ANRCM0/TX-Node/internal/buildinfo.BuildTime=${BUILD_TIME} \
+    -X github.com/ANRCM0/TX-Node/internal/buildinfo.Commit=${COMMIT}" \
     -tags "with_quic with_utls with_wireguard with_clash_api" \
     -o tx-node ./cmd/tx-node
 
 # Runtime stage — sing-box & xray-core are embedded as Go libraries
 FROM alpine:3.20
+
+ARG VERSION=dev
+ARG BUILD_TIME=unknown
+ARG COMMIT=unknown
+ARG SOURCE_URL=https://github.com/ANRCM0/tx-core
+LABEL org.opencontainers.image.source="${SOURCE_URL}" \
+      org.opencontainers.image.revision="${COMMIT}" \
+      org.opencontainers.image.version="${VERSION}" \
+      org.opencontainers.image.created="${BUILD_TIME}"
 
 RUN apk add --no-cache ca-certificates tzdata
 
