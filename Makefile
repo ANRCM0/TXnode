@@ -1,7 +1,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 BUILD_TIME ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
-SOURCE_URL ?= https://github.com/ANRCM0/tx-core
+SOURCE_URL ?= https://github.com/ANRCM0/TXBoard
 LDFLAGS := -s -w -X github.com/ANRCM0/TX-Node/internal/buildinfo.Version=$(VERSION) -X github.com/ANRCM0/TX-Node/internal/buildinfo.BuildTime=$(BUILD_TIME) -X github.com/ANRCM0/TX-Node/internal/buildinfo.Commit=$(COMMIT)
 
 .PHONY: build clean test test-runtime-stability docker build-linux build-linux-arm64 build-all

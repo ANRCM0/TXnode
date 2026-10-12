@@ -2,7 +2,7 @@
 
 TX-Node 是 TXBoard 体系中的独立 **Agent / Data Plane Runtime**，同时保留 Xboard 协议兼容。它负责 Control Plane 通信、Machine / Node 编排、Kernel 生命周期、用户与流量策略执行、运行状态上报和有限 typed ops；它不是第二个 Control Plane，也不是通用主机管理 Agent。
 
-TX-Node 支持 `sing-box` / `xray-core` 双内核。安装、升级、回滚与主机部署生命周期继续由公开的 TX-Node-Installer 负责。
+TX-Node 支持 `sing-box` / `xray-core` 双内核。安装、升级、回滚与主机部署生命周期统一由公开的 TXBoard-Deploy 负责。
 
 运行时职责收口规则见 [`docs/runtime-boundary.md`](docs/runtime-boundary.md)。
 
@@ -18,15 +18,14 @@ Provider 的构造错误处理、配置继承及原生协议验收边界见 [`do
 
 ## 安装与部署
 
-TX-Node 的运行时源码现位于 `tx-core` monorepo 的 `node/`，保持独立的 Go module、进程和镜像。安装、升级、多面板实例、隔离实例和主机运维脚本继续由独立的公开安装器仓库维护：
+TX-Node 的运行时源码现位于 TXBoard 主仓（后续名 `tx-core`）的 `node/`，保持独立的 Go module、进程和镜像。安装、升级、多面板实例、隔离实例和主机运维脚本由统一公开安装仓维护：
 
-**TX-Node Installer**  
-https://github.com/ANRCM0/TX-Node-Installer
+[TXBoard-Deploy 的 Node 安装器](https://github.com/ANRCM0/TXBoard-Deploy/tree/main/node)
 
 推荐安装入口：
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/ANRCM0/TX-Node-Installer/main/deploy.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/ANRCM0/TXBoard-Deploy/main/node/deploy.sh)
 ```
 
 TXBoard 生成的非交互安装命令同样使用公开 Installer。运行时镜像仍由本仓库 CI 构建并发布到：
@@ -35,17 +34,17 @@ TXBoard 生成的非交互安装命令同样使用公开 Installer。运行时�
 ghcr.io/anrcm0/tx-node:latest
 ```
 
-Node 运行时与 TX-Node-Installer 的职责边界：
+Node 运行时与 TXBoard-Deploy 的职责边界：
 
 - **TX-Node**：Go 运行时、ControlPlane、Machine、内核适配、审计客户端、配置模型、测试、Docker 镜像与二进制发布。
-- **TX-Node-Installer**：安装/升级/卸载、Docker Compose、`txnode` 运维命令、多面板 `instances:`、隔离实例、配置备份与回滚。
+- **TXBoard-Deploy/node**：安装/升级/卸载、Docker Compose、`txnode` 运维命令、多面板 `instances:`、隔离实例、配置备份与回滚。
 - 运行时仓库不再维护 `deploy.sh` / `install.sh` 的副本，避免安装逻辑双轨演进。
 
 开发者应克隆完整 monorepo 后进入 `node/`。Go module/import 保留 `github.com/ANRCM0/TX-Node`，不因目录移动更名；构建从此目录解析本地模块，无需从旧仓库下载自身源码。需要直接运行二进制时，可以参照 [config.yml.example](config.yml.example) 复制并填写凭据：
 
 ```bash
-git clone https://github.com/ANRCM0/tx-core.git
-cd tx-core/node
+git clone https://github.com/ANRCM0/TXBoard.git
+cd TXBoard/node
 make build
 cp config.yml.example config.yml
 # 编辑 config.yml 中的 panel.url、token 和 node_id
@@ -77,7 +76,7 @@ Core、Gateway、Node 使用同一 monorepo `v*` Tag 和根目录发布渠道解
 - 维护者正常推送统一 `v*` Tag 后，三个根目录工作流分别发布各自镜像。Node 工作流在自身 gates、双架构 binaries 和镜像发布成功后创建或复用同 Tag 的 GitHub Release，再上传 Node 二进制；这不证明三个镜像原子发布或三个组件均已验收。
 - 原 `node/.github/release/VERSION` / `NOTES.md` 保留为旧 Node 发布记录，不再决定统一版本；旧单组件手动打 Tag 工作流已移除。统一 Node CI 位于 [根工作流](../.github/workflows/ci-node.yml)。
 - 版本、完整 commit 和 OCI revision/source 来自 monorepo 构建输入。Docker context 仅为 `node/`，不依赖其中存在 `.git`。
-- 开发版不应部署到生产环境。安装器默认使用稳定渠道 `:latest`；更新 GHCR 标签不会自动更新正在运行的容器，实际升级需由 [TX-Node-Installer](https://github.com/ANRCM0/TX-Node-Installer) 执行。
+- 开发版不应部署到生产环境。安装器默认使用稳定渠道 `:latest`；更新 GHCR 标签不会自动更新正在运行的容器，实际升级需由 [TXBoard-Deploy](https://github.com/ANRCM0/TXBoard-Deploy) 执行。
 - **发布不等于上线验收**：首次启用原生 TXBoard 模式前，仍需验证 Machine / Node 联调、WS、双内核及异步流量队列结算与持久化重放。
 
 ## 访问审计（可选 · 双面板）
@@ -113,7 +112,7 @@ audit:
 
 ## Xboard 兼容与项目来源
 
-TX-Node 保留 Xboard 面板协议及兼容配置字段。`xbctl` 和 `xboard-node` 二进制兼容产物已从 TX-Node v2 主线移除。历史 native/systemd 安装仍可由 TX-Node-Installer 识别、迁移和清理；新的 Docker 运维入口统一为 `deploy.sh` / `txnode`。
+TX-Node 保留 Xboard 面板协议及兼容配置字段。`xbctl` 和 `xboard-node` 二进制兼容产物已从 TX-Node v2 主线移除。历史 native/systemd 安装仍可由 TXBoard-Deploy 的 Node 安装器识别、迁移和清理；新的 Docker 运维入口统一为 `deploy.sh` / `txnode`。
 
 项目历史来源于 [cedar2025/Xboard-Node](https://github.com/cedar2025/Xboard-Node)。后续 TX-Node 版本独立维护和发布；上游修复仅按需审查、移植，不再整分支同步。详见 [`docs/standalone.md`](docs/standalone.md)。
 

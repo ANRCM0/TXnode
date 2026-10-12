@@ -6,11 +6,11 @@ This is the active compatibility inventory for TX-Node. **Protocol interoperabil
 
 | Surface | Canonical owner or location |
 | --- | --- |
-| Runtime agent | `ANRCM0/tx-core/node`, stable Go module `github.com/ANRCM0/TX-Node`, executable `tx-node` |
+| Runtime agent | `ANRCM0/TXBoard/node` (planned repository name `tx-core`), stable Go module `github.com/ANRCM0/TX-Node`, executable `tx-node` |
 | Container registry | `ghcr.io/anrcm0/tx-node` |
 | Container config | `/etc/txnode/config.yml` |
 | Persistent node state | `kernel.config_dir`; Installer mounts `/etc/txnode` from host persistent storage |
-| Docker installation, upgrade and rollback | `ANRCM0/TX-Node-Installer`, `txnode` command |
+| Docker installation, upgrade and rollback | `ANRCM0/TXBoard-Deploy/node`, `txnode` command |
 | TXBoard control-plane protocol | `panel.provider: txboard` / `/txapi/node/v1/*` |
 | Xboard compatibility protocol | `panel.provider: xboard` / Xboard V1/V2 |
 
@@ -41,4 +41,4 @@ The Installer is the single authority for moving a legacy native/systemd deploym
 
 Do not infer zero legacy usage solely because telemetry is absent. A historical GitHub Release can retain retired artifacts for reproducibility; that does **not** mean the current CI should publish them.
 
-See [runtime boundaries](./runtime-boundary.md), [control-plane adapters](./control-plane-providers.md) and the public [Installer](https://github.com/ANRCM0/TX-Node-Installer).
+See [runtime boundaries](./runtime-boundary.md), [control-plane adapters](./control-plane-providers.md) and the public [Installer](https://github.com/ANRCM0/TXBoard-Deploy/tree/main/node).

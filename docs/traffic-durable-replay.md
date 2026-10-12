@@ -10,4 +10,4 @@ Startup fails closed if the spool is corrupt, unreadable or cannot be written. S
 
 Limitations: bytes tracked in memory but not yet flushed to a durable batch may be lost in an abrupt crash. A panel that acknowledges queuing and later fails permanently to settle a batch also requires operator-side queue recovery and reconciliation. Pending-batch replay alone cannot resolve those cases.
 
-Regression acceptance includes: retries after timeout, repeated IDs with identical payloads, rejecting mismatched duplicate payloads, successful reboot/recreation with the data mount, queue failure recovery, and user/server statistics reconciliation. See [Installer's durable data guidance](https://github.com/ANRCM0/TX-Node-Installer#durable-runtime-data-s8).
+Regression acceptance includes: retries after timeout, repeated IDs with identical payloads, rejecting mismatched duplicate payloads, successful reboot/recreation with the data mount, queue failure recovery, and user/server statistics reconciliation. See [Installer's durable data guidance](https://github.com/ANRCM0/TXBoard-Deploy/blob/main/node/README.md#durable-runtime-data-s8).

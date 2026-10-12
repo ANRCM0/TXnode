@@ -19,7 +19,7 @@ The following responsibilities belong in TX-Node Core:
 - user, traffic, device and speed-limit enforcement;
 - runtime status/traffic/device reporting;
 - bounded typed Node Ops;
-- Machine runtime update **delegation** to TX-Node-Installer;
+- Machine runtime update **delegation** to TXBoard-Deploy's Node installer;
 - runtime-safe configuration validation needed before applying data-plane state.
 
 These responsibilities are data-plane facts or actions. They must not depend on TXBoard database internals or host deployment implementation.
@@ -41,9 +41,9 @@ TXBoard owns:
 
 TX-Node never becomes a second source of truth for those domains.
 
-### TX-Node-Installer
+### TXBoard-Deploy
 
-TX-Node-Installer owns:
+TXBoard-Deploy's `node/` installer owns:
 
 - install;
 - upgrade;
@@ -90,7 +90,7 @@ fallback.
 
 The TX-Node v2 mainline no longer builds or publishes the historical
 `xboard-node` binary alias or `xbctl`. Host migration/cleanup responsibility
-belongs to TX-Node-Installer.
+belongs to TXBoard-Deploy's Node installer.
 
 Frozen-for-expansion means:
 
@@ -99,7 +99,7 @@ Frozen-for-expansion means:
 - new product features should not target these surfaces first;
 - removal requires an explicit breaking release and migration plan.
 
-The canonical product path is Machine mode managed by TXBoard, deployed through TX-Node-Installer.
+The canonical product path is Machine mode managed by TXBoard, deployed through TXBoard-Deploy.
 
 ## 5. Optional capabilities
 
@@ -168,7 +168,7 @@ Before adding a new TX-Node feature, answer these questions in order:
    If yes, it belongs in TXBoard.
 
 2. Is this install/upgrade/rollback/host lifecycle?  
-   If yes, it belongs in TX-Node-Installer.
+   If yes, it belongs in TXBoard-Deploy.
 
 3. Is this proxy protocol/runtime behavior?  
    If yes, prefer the kernel adapter/runtime.

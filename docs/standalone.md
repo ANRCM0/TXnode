@@ -53,7 +53,7 @@ The following are compatibility surfaces, not branding leftovers:
 - Xboard panel API paths such as `/api/v1/server/UniProxy/*` and `/api/v2/server/*`;
 - panel authentication fields such as `token`, `node_type`, and `machine_id`;
 - existing Xboard node configuration fields consumed by deployed panels;
-- historical `xboard-node` executable and `xbctl` CLI names, **removed from current TX-Node v2 artifacts**; existing native/systemd deployments can still be detected and migrated by TX-Node-Installer;
+- historical `xboard-node` executable and `xbctl` CLI names, **removed from current TX-Node v2 artifacts**; existing native/systemd deployments can still be detected and migrated by TXBoard-Deploy's Node installer;
 - the legacy native/systemd `/etc/xboard-node` layout on existing hosts, still recognized by the Installer's migration/cleanup flow;
 - the in-container `/etc/xboard-node/config.yml` path until deployment compatibility is migrated explicitly.
 
@@ -61,10 +61,10 @@ Canonical TX-Node-facing identities are:
 
 - node binary: `tx-node`;
 - Docker image: `ghcr.io/anrcm0/tx-node`;
-- runtime source/release repository: `ANRCM0/tx-core`, directory `node/`;
-- installation and host-management entry point: public `ANRCM0/TX-Node-Installer`.
+- runtime source/release repository: `ANRCM0/TXBoard` (planned name `tx-core`), directory `node/`;
+- installation and host-management entry point: public `ANRCM0/TXBoard-Deploy`, directory `node/`.
 
-The runtime repository intentionally does not carry an installer copy. Host deployment layout such as `/etc/txnode`, the `txnode` management command, multi-panel instance management, backup/rollback, and Docker Compose generation are owned by TX-Node-Installer.
+The runtime repository intentionally does not carry an installer copy. Host deployment layout such as `/etc/txnode`, the `txnode` management command, multi-panel instance management, backup/rollback, and Docker Compose generation are owned by TXBoard-Deploy.
 
 The old `xbctl` host-management program has been retired from TX-Node v2 builds and releases. The Installer now owns the `txnode` management command, Docker deployment, migration, and rollback. Do not reinstate the legacy CLI or host binaries as release artifacts.
 
@@ -97,4 +97,4 @@ The historical `cedar2025/Xboard-Node` repository declares `MPL-2.0` in its READ
 
 ## Compatibility window
 
-TX-Node v2 releases publish only the canonical `tx-node` binary. Existing `xboard-node` / `xbctl` installations remain **migration inputs** for TX-Node-Installer, not binaries or aliases published by TX-Node.
+TX-Node v2 releases publish only the canonical `tx-node` binary. Existing `xboard-node` / `xbctl` installations remain **migration inputs** for TXBoard-Deploy's Node installer, not binaries or aliases published by TX-Node.

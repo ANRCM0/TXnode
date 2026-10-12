@@ -1,6 +1,6 @@
 # TX-Node 配置示例（一个文件启用一种模式；不要同时启用下列互斥配置）
 # 默认展示 TXBoard 原生单节点。运行前请替换 URL、ID 和 Token。
-# 保存为 config.yml，或使用 TX-Node-Installer 生成正式部署配置。
+# 保存为 config.yml，或使用 TXBoard-Deploy 的 Node 安装器生成正式部署配置。
 
 # 方案 A（当前启用）：TXBoard 原生 Node
 panel:

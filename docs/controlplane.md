@@ -102,7 +102,7 @@ Xboard support is a protocol compatibility feature, not the identity of TX-Node.
 
 ## Machine Runtime Update v1
 
-Machine-mode deployments can optionally expose a bounded runtime update bridge installed by **TX-Node-Installer**.
+Machine-mode deployments can optionally expose a bounded runtime update bridge installed by **TXBoard-Deploy's Node installer**.
 
 The control flow is:
 
