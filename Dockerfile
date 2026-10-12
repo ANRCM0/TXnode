@@ -56,7 +56,7 @@ WORKDIR /etc/txnode
 #     -e apiHost=https://panel.example.com \
 #     -e apiKey=YOUR_TOKEN \
 #     -e nodeID=1 \
-#     ghcr.io/anrcm0/tx-node:latest
+#     ghcr.io/anrcm0/txboard-node:latest
 #
 # Supported env vars:
 #   apiHost  / API_HOST    → panel URL

@@ -60,7 +60,7 @@ The following are compatibility surfaces, not branding leftovers:
 Canonical TX-Node-facing identities are:
 
 - node binary: `tx-node`;
-- Docker image: `ghcr.io/anrcm0/tx-node`;
+- Docker image: `ghcr.io/anrcm0/txboard-node`;
 - runtime source/release repository: `ANRCM0/TXBoard` (planned name `tx-core`), directory `node/`;
 - installation and host-management entry point: public `ANRCM0/TXBoard-Deploy`, directory `node/`.
 

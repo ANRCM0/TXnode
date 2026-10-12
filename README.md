@@ -31,7 +31,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/ANRCM0/TXBoard-Deploy/main/n
 TXBoard 生成的非交互安装命令同样使用公开 Installer。运行时镜像仍由本仓库 CI 构建并发布到：
 
 ```text
-ghcr.io/anrcm0/tx-node:latest
+ghcr.io/anrcm0/txboard-node:latest
 ```
 
 Node 运行时与 TXBoard-Deploy 的职责边界：
@@ -62,17 +62,18 @@ make docker
 
 ## 镜像发布策略
 
-Core、Gateway、Node 使用同一 monorepo `v*` Tag 和根目录发布渠道解析器。Node 镜像名称继续固定为 `ghcr.io/anrcm0/tx-node`，不会随仓库名变更。
+Core、Gateway、Node 使用同一 monorepo `v*` Tag 和根目录发布渠道解析器。主仓新建 Node 镜像包 `ghcr.io/anrcm0/txboard-node`，不会写入、覆盖或转绑旧 `ghcr.io/anrcm0/tx-node` 包。Go 模块、CLI 和 Release 二进制仍使用 `tx-node` 名称。
 
 | 渠道 | 自动触发条件 | GHCR 镜像 | GitHub Release |
 | --- | --- | --- | --- |
-| **开发版** | Push/合并到 `main`，且 Node gates 通过 | `ghcr.io/anrcm0/tx-node:dev` + `:dev-sha-<12位monorepo SHA>` | 不创建 |
-| **稳定版** | 推送严格匹配 `vX.Y.Z` 的 Git Tag，且 Node gates 通过 | `ghcr.io/anrcm0/tx-node:vX.Y.Z`、`:latest` | 同一 Tag 的统一 Release 附 Linux amd64/arm64 二进制 |
+| **开发版** | Push/合并到 `main`，且 Node gates 通过 | `ghcr.io/anrcm0/txboard-node:dev` + `:dev-sha-<12位monorepo SHA>` | 不创建 |
+| **稳定版** | 推送严格匹配 `vX.Y.Z` 的 Git Tag，且 Node gates 通过 | `ghcr.io/anrcm0/txboard-node:vX.Y.Z`、`:latest` | 同一 Tag 的统一 Release 附 Linux amd64/arm64 二进制 |
 | **预览版** | 推送 `vX.Y.Z-rc.N`、`-beta.N` 或 `-preview.N`，且 Node gates 通过 | 精确预览 Tag、`:preview` | 同一 Tag 的 prerelease 附双架构二进制 |
 
 - `main` 与 PR 按 Node、相关协议契约及构建脚本路径触发验证；文档或测试-only Push 不发布镜像。Node gates 包含完整 Go 测试、vet、运行时 race/stability 和实际 Docker 版本/配置路径 smoke；镜像发布只在这些检查全部通过后进行。
 - `:dev` 指向成功构建且尚未被 `main` 后续 Node runtime 变更取代的镜像。并发文档/测试-only 提交不取消原构建，也不阻挡同一 runtime 的发布；若新的 runtime 提交正在构建或失败，`:dev` 仍保留上一次成功镜像。
 - 稳定版更新 `:latest`；预览版只更新 `:preview`，不会覆盖稳定版。非上述格式的 Tag 拒绝发布。
+- 新包在首次正式版本发布前只有开发通道，测试安装须显式选择 `dev`；已有容器不会因镜像包名称变更自动切换，升级由 TXBoard-Deploy 管理。
 - 维护者正常推送统一 `v*` Tag 后，三个根目录工作流分别发布各自镜像。Node 工作流在自身 gates、双架构 binaries 和镜像发布成功后创建或复用同 Tag 的 GitHub Release，再上传 Node 二进制；这不证明三个镜像原子发布或三个组件均已验收。
 - 原 `node/.github/release/VERSION` / `NOTES.md` 保留为旧 Node 发布记录，不再决定统一版本；旧单组件手动打 Tag 工作流已移除。统一 Node CI 位于 [根工作流](../.github/workflows/ci-node.yml)。
 - 版本、完整 commit 和 OCI revision/source 来自 monorepo 构建输入。Docker context 仅为 `node/`，不依赖其中存在 `.git`。

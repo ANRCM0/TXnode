@@ -7,7 +7,7 @@ This is the active compatibility inventory for TX-Node. **Protocol interoperabil
 | Surface | Canonical owner or location |
 | --- | --- |
 | Runtime agent | `ANRCM0/TXBoard/node` (planned repository name `tx-core`), stable Go module `github.com/ANRCM0/TX-Node`, executable `tx-node` |
-| Container registry | `ghcr.io/anrcm0/tx-node` |
+| Container registry | `ghcr.io/anrcm0/txboard-node` |
 | Container config | `/etc/txnode/config.yml` |
 | Persistent node state | `kernel.config_dir`; Installer mounts `/etc/txnode` from host persistent storage |
 | Docker installation, upgrade and rollback | `ANRCM0/TXBoard-Deploy/node`, `txnode` command |
