@@ -106,6 +106,11 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 	}
 
 	cfgMap := buildConfig(s.cfg, nodeConfig, users, tls)
+	if s.boundedPrepared != nil {
+		if err := isolateBoundedListeners(cfgMap); err != nil {
+			return err
+		}
+	}
 	data, err := json.Marshal(cfgMap)
 	if err != nil {
 		return fmt.Errorf("marshal config: %w", err)
@@ -734,4 +739,31 @@ func buildUserMap(users []model.UserSpec) map[string]int {
 		m[u.UUID] = u.ID
 	}
 	return m
+}
+
+// isolateBoundedListeners scopes the explicitly prepared usage prototype before
+// box.New can create an inbound. Normal v1 config generation is untouched.
+func isolateBoundedListeners(cfg M) error {
+	inbounds, ok := cfg["inbounds"].([]M)
+	if !ok || len(inbounds) == 0 {
+		return fmt.Errorf("USAGE_V2_ISOLATED_LISTENER_INVALID")
+	}
+	for _, inbound := range inbounds {
+		kind, ok := inbound["type"].(string)
+		if !ok || kind == "" {
+			return fmt.Errorf("USAGE_V2_ISOLATED_LISTENER_INVALID")
+		}
+		port, ok := inbound["listen_port"].(int)
+		if !ok || port < 1 || port > 65535 {
+			return fmt.Errorf("USAGE_V2_ISOLATED_LISTENER_INVALID")
+		}
+		if _, ok := inbound["listen"].(string); !ok {
+			return fmt.Errorf("USAGE_V2_ISOLATED_LISTENER_INVALID")
+		}
+	}
+	// Validate the whole set before mutating any member.
+	for _, inbound := range inbounds {
+		inbound["listen"] = "127.0.0.1"
+	}
+	return nil
 }
