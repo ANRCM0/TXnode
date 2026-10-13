@@ -1,0 +1,114 @@
+{
+  "phase": "B4.7",
+  "status": "verified-isolated-current",
+  "production_acceptance": false,
+  "verified_date_local": "2026-10-14",
+  "timezone": "Asia/Shanghai",
+  "base": "dc47812db0e96f4a79c5c4bfbe2de89d9b622e0e",
+  "snapshot": "/opt/txboard-baseline/node-next-window-r2",
+  "archive_sha256": "c7c8561036de57333d08a5f5fb5e1ef4537654ae10d5f51a961c3114f6fe783b",
+  "runtime_and_test_sha256": {
+    "node/internal/providerproof/verifier.go": "0c985625fe47a366cca63949a24ee5a7f4fb045305ea8ca82c80af8b3ca483b2",
+    "node/internal/providerproof/window.go": "4a5d72514a6e61a2e27c290cc875f5e3ee3f0ee20ed42c2884e2d208b6511c72",
+    "node/internal/providerproof/window_test.go": "767bff32e546cac121f09c0b9bf73e0e625471409d177aae22f8791408464e45",
+    "node/internal/providerproof/verifier_test.go": "228eee27d319baaea4741a2b8ae920d87a7ae22fac9dd784a7c8bb77a9e6b9bb"
+  },
+  "candidate_contract_in_test_snapshot_sha256": "cf47786e9e8e1fd932979896e64362a778b6d1645892cba6840811cc90c741b1",
+  "contract_after_verification_sha256": "06ddbaff99997a9e0e4f13a5e3a600917de4fd003c57e6a18722d1f2f3ae5b1b",
+  "api_runtime_changed": false,
+  "same_runtime_sources_for_race_vet_and_interop": true,
+  "dependencies": {
+    "composer_lock_sha256": "f47b212c2fc530a7820e370eab7c6d624d13962e7d26e4f2ddf57a11848257c0",
+    "installed_json_sha256": "8e668e456c9772ae428a038ab003fba5752ab2591980fc8396d9122851145b80",
+    "go_mod_sha256": "bea9e7f584efe7b8e22818e00b43c31337a6fe3cda1d5df5b36442cd13ee3fa7",
+    "go_sum_sha256": "394ac62565ba74b4ef6b51c5eba4fdb9c20b5eb9722f5f471645c01e594d922c"
+  },
+  "environment": {
+    "php": "8.4.16",
+    "go": "1.26.3 linux/amd64",
+    "GOTOOLCHAIN": "local",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOMAXPROCS": "4",
+    "database": "in-memory SQLite; synthetic Provider only",
+    "redis": "isolated fixture prefix on local Redis; databases 18/19"
+  },
+  "verification": {
+    "go": {
+      "mode": "go",
+      "exit_code": 0,
+      "log_sha256": "29ec7914a8bd957ecd955b50895b08f760ddd9a745c73e7409fd89b7c65ab1ef",
+      "snapshot": "/opt/txboard-baseline/node-next-window-r2",
+      "go_version": "go version go1.26.3 linux/amd64",
+      "main_passed": 14,
+      "subtests_passed": 56,
+      "main_skipped": 1,
+      "failed": 0
+    },
+    "vet": {
+      "mode": "vet",
+      "exit_code": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "snapshot": "/opt/txboard-baseline/node-next-window-r2",
+      "go_version": "go version go1.26.3 linux/amd64"
+    },
+    "interop": {
+      "mode": "interop",
+      "exit_code": 0,
+      "log_sha256": "6f177762ce80560cb08c0ebc2b5adc46b304f34c0c4d0cb32a23e9a8368aeec5",
+      "snapshot": "/opt/txboard-baseline/node-next-window-r2",
+      "go_version": "go version go1.26.3 linux/amd64",
+      "summary": "1 passed (6 assertions)"
+    }
+  },
+  "incremental_window_tests": {
+    "main_passed": 7,
+    "subtests_passed": 26
+  },
+  "actual_core_interop": {
+    "php_tests_passed": 1,
+    "php_assertions": 6,
+    "go_case": "TestCoreFixtureInterop",
+    "scope": "Actual Core initial-binding transaction and full PHP signature/profile validation produce original signed bytes and public-only trust. Go verifies those bytes, tests last-nanosecond validity, exact expiry and terminal refusal under a private controlled test clock. No Node admission."
+  },
+  "callable_surface": [
+    "Verifier.OpenWindow(originalSignedStatement)",
+    "Window.Check(explicitCurrentVerifier)",
+    "Window.Close()"
+  ],
+  "callers": [
+    "node/internal/providerproof/window_test.go",
+    "node/internal/providerproof/verifier_test.go:TestCoreFixtureInterop"
+  ],
+  "default_service_imports": false,
+  "usage_or_credential_consumer_imports": false,
+  "workers_timers_network_files_created_by_window": false,
+  "covered_boundaries": [
+    "original signed bytes required; caller-created signature proof cannot initialize usable window",
+    "private production clock; exact subsecond UTC and monotonic deadlines",
+    "observed nanosecond UTC rollback and monotonic regression are terminal",
+    "crypto-time deadline consumption checked before return",
+    "same key ID with changed epoch, SPKI, validity bounds, removal or revocation refused",
+    "unchanged retained predecessor can be checked without extending signed expiry",
+    "Close concurrent with 32 readers; proof copies cannot modify retained state"
+  ],
+  "limitations": [
+    "non-authorizing diagnostic; nested business semantics and live Core eligibility not evaluated",
+    "explicit current public trust must be independently provisioned/refreshed; stale trust cannot prove current non-revocation",
+    "instance-only denial; new instances, process restart, database restore and unobserved rollback not fenced",
+    "no trusted external clock, suspend/HA proof, Node secret delivery, admission/lease enforcement, revocation ACK or convergence",
+    "no metering attribution, v2 Service activation or production transport",
+    "API sources unchanged; full API regression is delegated to root combined-stage verification"
+  ],
+  "previous_snapshots": [
+    {
+      "snapshot": "/opt/txboard-baseline/node-next-window-r1",
+      "status": "prepared only, no tests run; preserved before extra SPKI-replacement/reverse-Proof cases"
+    }
+  ],
+  "remote_ci": {
+    "status": "not_started_by_agent",
+    "existing_workflow": ".github/workflows/ci-provider-proof.yml",
+    "notes": "Existing path filter and whole providerproof race/vet plus actual-Core test already cover this slice; root owns commit/push and remote result closure."
+  }
+}

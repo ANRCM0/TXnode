@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 var testKey *rsa.PrivateKey
@@ -326,4 +327,20 @@ func TestCoreFixtureInterop(t *testing.T) {
 		proof.BusinessEvidenceValidation != "not_evaluated" || proof.LiveCoreEligibility != "not_evaluated" || proof.WindowValidation != "not_evaluated" {
 		t.Fatal("actual Core signed proof did not match independent Go diagnostic")
 	}
+	// The original Core statement is exercised under an explicit private test
+	// clock; this is finite-window interoperability, not Node admission evidence.
+	c := &controlledWindowClock{}
+	c.set(proof.IssuedAt, 0, 0)
+	w, err := v.openWindow(fixture.Token, c.read)
+	if err != nil {
+		t.Fatal("actual Core diagnostic window failed")
+	}
+	c.set(proof.LeaseExpiresAt-1, 999999999, time.Duration(proof.LeaseExpiresAt-proof.IssuedAt)*time.Second-time.Nanosecond)
+	if observed, err := w.Check(v); err != nil || observed.AdmissionGranted || observed.WindowValidation != "valid_at_observation" || observed.PayloadSHA256 != proof.PayloadSHA256 {
+		t.Fatal("actual Core finite-window diagnostic mismatch")
+	}
+	c.set(proof.LeaseExpiresAt, 0, time.Duration(proof.LeaseExpiresAt-proof.IssuedAt)*time.Second)
+	assertWindowRefused(t, w, v)
+	c.set(proof.IssuedAt, 0, 0)
+	assertWindowRefused(t, w, v)
 }
