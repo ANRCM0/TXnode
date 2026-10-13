@@ -19,7 +19,7 @@
   },
   "workflow_sha256": "8afa5d42ee9561bfaba95bfa9b61f8e041f6aa5744fbfabc180341e6dec22e25",
   "workflow_static_validation": "actionlint passed",
-  "workflow_remote_status": "pending-after-push",
+  "workflow_remote_status": "Real matrix passed at519e763; full Node/image qualification pending direct-module fix push",
   "dependencies": {
     "go_mod_sha256": "bea9e7f584efe7b8e22818e00b43c31337a6fe3cda1d5df5b36442cd13ee3fa7",
     "go_sum_sha256": "394ac62565ba74b4ef6b51c5eba4fdb9c20b5eb9722f5f471645c01e594d922c",
@@ -690,5 +690,57 @@
       "unknown_tail_lease_predicates_and_Core_production_gates_unchanged": true,
       "fixed_static_origin_rule_is_AND_and_exact_destination": true
     }
-  }
+  },
+  "module_classification_correction": {
+    "base": "519e763833cf8b10e4de5e9291c7dc7699cf378a",
+    "source": "node/go.mod",
+    "change": "Existing pinned sing-vmess moved from indirect to direct because live protocol test imports it",
+    "dependency_versions_unchanged": true,
+    "go_sum_unchanged": true,
+    "prior_go_mod_sha256": "bea9e7f584efe7b8e22818e00b43c31337a6fe3cda1d5df5b36442cd13ee3fa7",
+    "final_go_mod_sha256": "2b275c44f17dad07b2c8e32ed245c3a6d50f30ead1a28c5d8551d21dd3cf113e",
+    "go_sum_sha256": "394ac62565ba74b4ef6b51c5eba4fdb9c20b5eb9722f5f471645c01e594d922c",
+    "verification": {
+      "tidy": {
+        "mode": "tidy",
+        "exit_code": 0,
+        "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "snapshot": "/opt/txboard-baseline/node-live-module-fix-r1"
+      },
+      "verify": {
+        "mode": "verify",
+        "exit_code": 0,
+        "log_sha256": "b4537ed75f533f993f371954de47e42a793b8e5b0587577de7e27fb3e50696bd",
+        "snapshot": "/opt/txboard-baseline/node-live-module-fix-r1"
+      },
+      "go": {
+        "mode": "go",
+        "exit_code": 0,
+        "log_sha256": "1c212979d110723f5477c0a7ad24a06b5349caebb29b56751ec4b1e5da728311",
+        "snapshot": "/opt/txboard-baseline/node-live-module-fix-r1",
+        "main_passed": 473,
+        "subtests_passed": 332,
+        "skipped": 3,
+        "failed": 0
+      }
+    },
+    "first_remote_node_CI": {
+      "run_id": 38457118723,
+      "head_sha": "519e763833cf8b10e4de5e9291c7dc7699cf378a",
+      "conclusion": "failure",
+      "step": "go mod tidy -diff",
+      "reason": "Test directly imports existing indirect sing-vmess; declaration classification only",
+      "failed_log_sha256": "0f1617239e625606085594b5c5e4e8722dd57a4babb592a59cc53411b1beb09c"
+    }
+  },
+  "first_remote_protocol_CI": [
+    {
+      "conclusion": "success",
+      "databaseId": 38457118726,
+      "headSha": "519e763833cf8b10e4de5e9291c7dc7699cf378a",
+      "name": "node-live-protocol-core-usage",
+      "status": "completed",
+      "url": "https://github.com/ANRCM0/TXBoard/actions/runs/38457118726"
+    }
+  ]
 }
