@@ -363,14 +363,53 @@
     "nine complete affected packages rather than full Node repo; original CI owns full-repo run"
   ],
   "remote_ci": {
-    "status": "pending-after-push",
+    "status": "passed",
     "workflow": ".github/workflows/ci-node-service-usage.yml",
     "workflow_sha256": "d54fa3b17ff7a99a0e95318272f442f2d81237e5b2b72fccf93cf3543c7b67a8",
     "actionlint": "passed",
     "existing_node_workflow": ".github/workflows/ci-node.yml",
     "database_engine": "Oracle MySQL8.4",
     "exclusive_database": "txboard_service_usage_test",
-    "scope": "Real Service capture and settled query/replay with Core; full Node CI owns whole-repository regression"
+    "scope": "Real Service capture and settled query/replay with Core; full Node CI owns whole-repository regression",
+    "head_sha": "b9145368165820a1586f7ac34e04ce3b41f8c5be",
+    "verified_date_local": "2026-10-14",
+    "all_triggered_runs": 4,
+    "all_triggered_runs_success": true,
+    "evidence_sha256": "84fed6869ba5545b6bc60a15eb37ae8e5006cb8acf1049a776dc9c23c9fe7db6",
+    "runs": [
+      {
+        "conclusion": "success",
+        "databaseId": 38453608226,
+        "headSha": "b9145368165820a1586f7ac34e04ce3b41f8c5be",
+        "name": "bounded-node-core-usage",
+        "status": "completed",
+        "url": "https://github.com/ANRCM0/TXBoard/actions/runs/38453608226"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38453608174,
+        "headSha": "b9145368165820a1586f7ac34e04ce3b41f8c5be",
+        "name": "node-service-core-usage",
+        "status": "completed",
+        "url": "https://github.com/ANRCM0/TXBoard/actions/runs/38453608174"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38453608060,
+        "headSha": "b9145368165820a1586f7ac34e04ce3b41f8c5be",
+        "name": "Documentation",
+        "status": "completed",
+        "url": "https://github.com/ANRCM0/TXBoard/actions/runs/38453608060"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38453608269,
+        "headSha": "b9145368165820a1586f7ac34e04ce3b41f8c5be",
+        "name": "Node CI and images",
+        "status": "completed",
+        "url": "https://github.com/ANRCM0/TXBoard/actions/runs/38453608269"
+      }
+    ]
   },
   "coordinator_verification": {
     "go": {
