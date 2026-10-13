@@ -47,6 +47,7 @@ func TestServiceUsageV2LiveRevocation(t *testing.T) {
 	if err := os.MkdirAll(cfg.Kernel.ConfigDir, 0700); err != nil {
 		t.Fatal(err)
 	}
+	phase := os.Getenv("TXBOARD_LIVE_REVOCATION_PHASE")
 	origin, err := net.ListenTCP("tcp4", &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: fixture.OriginPort})
 	if err != nil {
 		t.Fatal(err)
@@ -63,9 +64,21 @@ func TestServiceUsageV2LiveRevocation(t *testing.T) {
 	go func() { done <- svc.Run(ctx) }()
 	liveProtocolWait(t, done, 12*time.Second, svc.kernel.IsRunning)
 	liveProtocolCheckListener(t, fixture.NodePort)
+	var expiry time.Time
+	var startupLease time.Duration
+	if caseName == "expiry" && phase == "expiry" {
+		if svc.usageV2 == nil {
+			t.Fatal("finite lease phase did not start bounded usage")
+		}
+		expiry = svc.usageV2.expires
+		startupLease = time.Until(expiry)
+		if startupLease <= time.Second || startupLease > 4*time.Second {
+			t.Fatal("fixture timing exhausted the Core-issued lease during startup", startupLease)
+		}
+	}
 	nodeAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(fixture.NodePort))
 	dest := M.ParseSocksaddr(net.JoinHostPort("127.0.0.1", strconv.Itoa(fixture.OriginPort)))
-	if os.Getenv("TXBOARD_LIVE_REVOCATION_PHASE") == "history" {
+	if phase == "history" {
 		flow := revocationExchange(t, origin, fixture.Protocol, nodeAddr, dest, 43, 79)
 		if err := flow.raw.CloseWrite(); err != nil {
 			t.Fatal(err)
@@ -93,12 +106,12 @@ func TestServiceUsageV2LiveRevocation(t *testing.T) {
 		liveProtocolWait(t, done, 12*time.Second, func() bool {
 			return revocationRecord(cfg.UsageV2.Directory, &record) && record.Receipt != nil && record.Receipt.SettlementStatus == "settled"
 		})
-		if caseName == "history" {
+		if caseName == "history" || caseName == "expiry" {
 			cancel()
 			revocationStopped(t, done, false)
 			return
 		}
-	} else if os.Getenv("TXBOARD_LIVE_REVOCATION_PHASE") != "tail" {
+	} else if phase != "tail" && phase != "expiry" {
 		t.Fatal("invalid live revocation phase")
 	}
 
@@ -112,6 +125,27 @@ func TestServiceUsageV2LiveRevocation(t *testing.T) {
 		revocationWaitFile(t, done, dir, "trigger.json", 10*time.Second)
 		cancel()
 		revocationStopped(t, done, false)
+	} else if caseName == "expiry" {
+		if phase != "expiry" || expiry.IsZero() {
+			t.Fatal("finite lease phase did not start bounded usage")
+		}
+		tailRemaining := time.Until(expiry)
+		if tailRemaining <= 0 {
+			t.Fatal("finite lease expired before the actual tail was open")
+		}
+		revocationStopped(t, done, true)
+		stoppedAt := time.Now()
+		if stoppedAt.Before(expiry) || stoppedAt.After(expiry.Add(1500*time.Millisecond)) {
+			t.Fatal("actual Service shutdown outside lease expiry allowance", stoppedAt.Sub(expiry))
+		}
+		liveProtocolWrite(t, filepath.Join(dir, "expiry-boundary-result.json"), map[string]any{
+			"case": caseName, "protocol": fixture.Protocol, "actual_service_run": true,
+			"lease_expires_at": expiry.Unix(), "remaining_at_service_start_ms": startupLease.Milliseconds(),
+			"remaining_at_tail_open_ms": tailRemaining.Milliseconds(),
+			"actual_close_lag_ms":       stoppedAt.Sub(expiry).Milliseconds(),
+			"listener_closed":           !svc.kernel.IsRunning(), "unknown_tail_successful_batch": false,
+			"production_authorization": false,
+		})
 	} else if caseName == "ban-baseline" {
 		liveProtocolWait(t, done, 8*time.Second, func() bool { return revocationEmptyPoll(dir) })
 		// Wait through further genuine polls after the native sole-user removal.
