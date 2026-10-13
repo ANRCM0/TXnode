@@ -2,7 +2,6 @@ package controlplane
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -162,14 +161,6 @@ func (p *PanelControlPlane) newPushClient(metricsFn func() map[string]interface{
 
 func TranslateWSEvent(event panel.WSEvent, kcfg config.KernelConfig) (Event, error) {
 	translated := Event{Type: EventType(event.Type), DeltaAction: event.DeltaAction, DeviceUsers: event.DeviceUsers}
-	if event.OpsRequest != nil {
-		translated.Type = EventOpsRequest
-		translated.OpsRequest = &OpsRequest{
-			RequestID: event.OpsRequest.RequestID,
-			Operation: event.OpsRequest.Operation,
-			Args:      event.OpsRequest.Args,
-		}
-	}
 	if event.Config != nil {
 		var err error
 		translated.Config, err = model.NodeSpecFromPanelValidated(event.Config, kcfg)
@@ -190,27 +181,4 @@ func (p *panelPushClient) Run(ctx context.Context) { p.inner.Run(ctx) }
 func (p *panelPushClient) IsConnected() bool       { return p.inner.IsConnected() }
 func (p *panelPushClient) SendDeviceReport(devices map[int][]string) {
 	p.inner.SendDeviceReport(devices)
-}
-
-func (p *panelPushClient) SendOpsResult(result OpsResult) {
-	payload := map[string]interface{}{
-		"request_id": result.RequestID,
-		"operation":  result.Operation,
-		"ok":         result.OK,
-	}
-	if result.Result != nil {
-		payload["result"] = result.Result
-	}
-	if result.ErrorCode != "" {
-		payload["error_code"] = result.ErrorCode
-	}
-	if result.Message != "" {
-		payload["message"] = result.Message
-	}
-	data, err := json.Marshal(payload)
-	if err != nil {
-		nlog.Core().Warn("cannot encode ops result", "error", err)
-		return
-	}
-	p.inner.SendRaw(panel.WSEventOpsResult, data)
 }

@@ -1,7 +1,6 @@
 package controlplane
 
 import (
-	"strconv"
 	"testing"
 
 	"github.com/ANRCM0/TX-Node/internal/model"
@@ -161,67 +160,5 @@ func TestNodeMailboxDeltaFailedApplyNotifies(t *testing.T) {
 	state := mb.DrainIfReady()
 	if !state.NeedsReconcile {
 		t.Fatal("expected NeedsReconcile for invalid delta action")
-	}
-}
-
-
-func TestNodeMailboxPreservesOpsRequestsInOrder(t *testing.T) {
-	mb := NewNodeMailbox()
-	mb.Apply(Event{
-		Type: EventOpsRequest,
-		OpsRequest: &OpsRequest{RequestID: "ops_1", Operation: "ops.kernel.status", Args: map[string]interface{}{}},
-	})
-	mb.Apply(Event{
-		Type: EventOpsRequest,
-		OpsRequest: &OpsRequest{RequestID: "ops_2", Operation: "ops.kernel.restart", Args: map[string]interface{}{}},
-	})
-	mb.MarkReady()
-
-	state := mb.DrainIfReady()
-	if len(state.OpsRequests) != 2 {
-		t.Fatalf("expected 2 ops requests, got %d", len(state.OpsRequests))
-	}
-	if state.OpsRequests[0].RequestID != "ops_1" || state.OpsRequests[1].RequestID != "ops_2" {
-		t.Fatalf("unexpected ops order: %+v", state.OpsRequests)
-	}
-
-	// Draining consumes operation requests exactly once.
-	state = mb.DrainIfReady()
-	if len(state.OpsRequests) != 0 {
-		t.Fatalf("expected ops queue to be empty after drain, got %+v", state.OpsRequests)
-	}
-}
-
-func TestNodeMailboxOpsOverflowRejectsNewestWithoutAffectingSnapshots(t *testing.T) {
-	mb := NewNodeMailbox()
-	mb.Apply(Event{Type: EventSyncConfig, Config: &model.NodeSpec{Protocol: "vless", ServerPort: 443}})
-	for i := 0; i < maxPendingOpsRequests; i++ {
-		if !mb.Apply(Event{Type: EventOpsRequest, OpsRequest: &OpsRequest{
-			RequestID: strconv.Itoa(i), Operation: "ops.kernel.status",
-		}}) {
-			t.Fatalf("operation %d rejected before reaching the limit", i)
-		}
-	}
-	if mb.Apply(Event{Type: EventOpsRequest, OpsRequest: &OpsRequest{
-		RequestID: "overflow", Operation: "ops.kernel.restart",
-	}}) {
-		t.Fatal("overflow must be rejected instead of allocating an unbounded queue")
-	}
-	mb.MarkReady()
-	state := mb.DrainIfReady()
-	if !state.HasConfig || state.Config.Protocol != "vless" {
-		t.Fatal("ops saturation must not evict coalesced config state")
-	}
-	if len(state.OpsRequests) != maxPendingOpsRequests {
-		t.Fatalf("queued operations = %d, want %d", len(state.OpsRequests), maxPendingOpsRequests)
-	}
-	if state.OpsRequests[0].RequestID != "0" || state.OpsRequests[len(state.OpsRequests)-1].RequestID != strconv.Itoa(maxPendingOpsRequests-1) {
-		t.Fatal("queue did not preserve accepted FIFO requests")
-	}
-	if !mb.Apply(Event{Type: EventOpsRequest, OpsRequest: &OpsRequest{RequestID: "retry"}}) {
-		t.Fatal("queue must accept new operations after drain")
-	}
-	if next := mb.DrainIfReady(); len(next.OpsRequests) != 1 || next.OpsRequests[0].RequestID != "retry" {
-		t.Fatalf("unexpected queue after retry: %+v", next.OpsRequests)
 	}
 }

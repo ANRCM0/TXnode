@@ -16,22 +16,14 @@ import (
 
 // WSEvent types
 const (
-	WSEventSyncConfig    = "sync.config"
-	WSEventSyncUsers     = "sync.users"
-	WSEventSyncUserDelta = "sync.user.delta"
-	WSEventSyncDevices   = "sync.devices"   // panel → node: global device state
-	WSEventSyncNodes     = "sync.nodes"     // panel → machine: node list changed
-	WSEventReportDevices  = "report.devices" // node → panel: report device snapshot
-	WSEventOpsKernelStatus = "ops.kernel.status"
-	WSEventOpsKernelRestart = "ops.kernel.restart"
-	WSEventOpsConfigValidate = "ops.config.validate"
-	WSEventOpsConfigReload = "ops.config.reload"
-	WSEventOpsSystemInfo = "ops.system.info"
-	WSEventOpsNetworkDNS = "ops.network.dns"
-	WSEventOpsNetworkPortCheck = "ops.network.port_check"
-	WSEventOpsLogsTail = "ops.logs.tail"
+	WSEventSyncConfig              = "sync.config"
+	WSEventSyncUsers               = "sync.users"
+	WSEventSyncUserDelta           = "sync.user.delta"
+	WSEventSyncDevices             = "sync.devices"   // panel → node: global device state
+	WSEventSyncNodes               = "sync.nodes"     // panel → machine: node list changed
+	WSEventReportDevices           = "report.devices" // node → panel: report device snapshot
 	WSEventOpsMachineRuntimeUpdate = "ops.machine.runtime.update"
-	WSEventOpsResult = "ops.result"
+	WSEventOpsResult               = "ops.result"
 )
 
 // WSEvent is a parsed data event delivered to the service layer.
@@ -49,11 +41,8 @@ type WSEvent struct {
 	// Machine node discovery fields (for sync.nodes)
 	Nodes []MachineNode
 
-	// Typed Agent Ops request. Only allow-listed per-node ops.* events populate this.
-	OpsRequest *OpsRequest
-
 	// MachineRuntimeUpdate is a machine-scoped lifecycle request. It is kept
-	// separate from per-node OpsRequest so a machine update can never be
+	// separate from node state events so a machine update can never be
 	// mistaken for a node operation or routed into a node mailbox.
 	MachineRuntimeUpdate *MachineRuntimeUpdateRequest
 }
@@ -100,16 +89,6 @@ type syncDevicesPayload struct {
 // syncNodesPayload carries the updated node list for a machine.
 type syncNodesPayload struct {
 	Nodes []MachineNode `json:"nodes"`
-}
-
-// OpsRequest is a typed, bounded operation request delivered by TXBoard.
-// Operation is populated from the WebSocket event name and is never taken from
-// caller-controlled data inside the payload.
-type OpsRequest struct {
-	RequestID string                 `json:"request_id"`
-	Args      map[string]interface{} `json:"args"`
-	NodeID    int                    `json:"node_id"`
-	Operation string                 `json:"-"`
 }
 
 // MachineRuntimeUpdateRequest is intentionally narrow: v1 accepts only a
@@ -385,15 +364,7 @@ func (w *WSClient) handleMessage(msg wsMessage) {
 	case WSEventSyncNodes:
 		w.handleDataEvent(msg)
 
-	case WSEventOpsKernelStatus,
-		WSEventOpsKernelRestart,
-		WSEventOpsConfigValidate,
-		WSEventOpsConfigReload,
-		WSEventOpsSystemInfo,
-		WSEventOpsNetworkDNS,
-		WSEventOpsNetworkPortCheck,
-		WSEventOpsLogsTail,
-		WSEventOpsMachineRuntimeUpdate:
+	case WSEventOpsMachineRuntimeUpdate:
 		w.handleDataEvent(msg)
 
 	default:
@@ -515,33 +486,6 @@ func (w *WSClient) handleDataEvent(msg wsMessage) {
 		}
 		event.MachineRuntimeUpdate = &p
 
-	case WSEventOpsKernelStatus,
-		WSEventOpsKernelRestart,
-		WSEventOpsConfigValidate,
-		WSEventOpsConfigReload,
-		WSEventOpsSystemInfo,
-		WSEventOpsNetworkDNS,
-		WSEventOpsNetworkPortCheck,
-		WSEventOpsLogsTail:
-		var p OpsRequest
-		if err := decodeData(msg.Data, &p); err != nil {
-			nlog.Core().Warn("ws: cannot decode ops request", "event", msg.Event, "error", err)
-			return
-		}
-		if p.RequestID == "" {
-			nlog.Core().Warn("ws: ops request missing request_id", "event", msg.Event)
-			return
-		}
-		if len(p.RequestID) > 64 {
-			nlog.Core().Warn("ws: ops request_id too long", "event", msg.Event)
-			return
-		}
-		if p.Args == nil {
-			p.Args = map[string]interface{}{}
-		}
-		p.Operation = msg.Event
-		event.OpsRequest = &p
-		event.NodeID = p.NodeID
 	}
 
 	w.onEvent(event)

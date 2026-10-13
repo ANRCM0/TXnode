@@ -23,7 +23,6 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/monitor"
 	"github.com/ANRCM0/TX-Node/internal/nlog"
-	"github.com/ANRCM0/TX-Node/internal/nodeops"
 	"github.com/ANRCM0/TX-Node/internal/nodesync"
 	"github.com/ANRCM0/TX-Node/internal/pushsync"
 	"github.com/ANRCM0/TX-Node/internal/reporting"
@@ -62,13 +61,9 @@ type Service struct {
 	machineMailbox   *controlplane.NodeMailbox
 	machineMailboxCh <-chan struct{}
 
-	// metricsMu guards mutable runtime snapshots consumed by reporting/ops.
+	// metricsMu guards mutable runtime snapshots consumed by reporting.
 	// Push transport state is owned independently by pushsync.Controller.
 	metricsMu sync.RWMutex
-
-	// Typed Node Ops are isolated behind a narrow runtime adapter. Service owns
-	// orchestration; nodeops.Executor owns operation dispatch/replay protection.
-	ops *nodeops.Executor
 
 	observerMu    sync.Mutex
 	observer      *usageobserver.Observer
@@ -148,7 +143,6 @@ func newService(cfg *config.Config, cp controlplane.ControlPlane) *Service {
 		push:            pushsync.New(cp),
 		reporter:        reporter,
 	}
-	s.ops = nodeops.New(serviceOpsRuntime{service: s}, s.sendOpsResult)
 	return s
 }
 
@@ -341,10 +335,6 @@ func (s *Service) drainMachineMailbox(ctx context.Context) {
 	if state.HasDevices {
 		s.handleWSEvent(ctx, controlplane.Event{Type: controlplane.EventSyncDevices, DeviceUsers: state.DeviceUsers})
 	}
-	for i := range state.OpsRequests {
-		request := state.OpsRequests[i]
-		s.handleWSEvent(ctx, controlplane.Event{Type: controlplane.EventOpsRequest, OpsRequest: &request})
-	}
 	if state.NeedsReconcile {
 		s.requestWSResync(ctx, "machine_mailbox_reconcile")
 	}
@@ -410,11 +400,6 @@ func (s *Service) handleWSEvent(ctx context.Context, event controlplane.Event) {
 		// Sync global device state
 		if event.DeviceUsers != nil {
 			s.kernel.UpdateGlobalDevices(event.DeviceUsers)
-		}
-
-	case controlplane.EventOpsRequest:
-		if event.OpsRequest != nil && s.ops != nil {
-			s.ops.Handle(ctx, event.OpsRequest)
 		}
 
 	default:

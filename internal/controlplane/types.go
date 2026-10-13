@@ -13,23 +13,7 @@ const (
 	EventSyncUsers     EventType = "sync.users"
 	EventSyncUserDelta EventType = "sync.user.delta"
 	EventSyncDevices   EventType = "sync.devices"
-	EventOpsRequest     EventType = "ops.request"
 )
-
-type OpsRequest struct {
-	RequestID string
-	Operation string
-	Args      map[string]interface{}
-}
-
-type OpsResult struct {
-	RequestID string
-	Operation string
-	OK        bool
-	Result    map[string]interface{}
-	ErrorCode string
-	Message   string
-}
 
 type Event struct {
 	Type        EventType
@@ -38,7 +22,6 @@ type Event struct {
 	DeltaAction string
 	DeltaUsers  []model.UserSpec
 	DeviceUsers map[int][]string
-	OpsRequest  *OpsRequest
 }
 
 type StatusChange struct {
@@ -81,12 +64,6 @@ type PushClient interface {
 	Run(ctx context.Context)
 	IsConnected() bool
 	SendDeviceReport(devices map[int][]string)
-}
-
-// OpsResultSender is intentionally separate from PushClient so non-WebSocket
-// control planes and existing test doubles do not gain an unnecessary method.
-type OpsResultSender interface {
-	SendOpsResult(result OpsResult)
 }
 
 type Source interface {

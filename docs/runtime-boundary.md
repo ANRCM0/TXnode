@@ -122,43 +122,9 @@ Rules:
 
 Certificate consumption by the kernel remains a runtime need. Owning an ever-growing external DNS-provider catalog is not automatically a TX-Node Core responsibility.
 
-## 6. Typed Ops boundary
+## 6. Retired Agent operations
 
-Typed Ops are a core capability, but the Service orchestrator must not implement every operation directly.
-
-The target shape is:
-
-```text
-ControlPlane event
-       |
-       v
-nodeops.Executor
-       |
-       v
-narrow Runtime adapter
-       |
-       v
-Service / Kernel
-```
-
-The executor owns:
-
-- operation allow-list dispatch;
-- bounded argument validation;
-- replay protection;
-- bounded log/network diagnostics;
-- typed result construction.
-
-The Service adapter exposes only the minimum runtime actions needed by the executor.
-
-Typed Ops must never turn into:
-
-- arbitrary shell;
-- arbitrary filesystem access;
-- Docker API;
-- SSH;
-- arbitrary HTTP fetch;
-- package management.
+Agent/MCP and the per-node AI operation executor were removed under the2026-10-13 product decision. No operation queue or runtime diagnostic executor is retained. Config/user synchronization, local kernel lifecycle and usage observers remain authoritative for normal service work. Machine installer updates remain a separate lifecycle capability.
 
 ## 7. New feature gate
 
@@ -195,7 +161,6 @@ TXBoard native / Xboard compatible / Local
          -> certcoord         (TLS normalization and certificate coordination)
          -> auditcoord        (optional Xboard-only AccessAudit attachment)
          -> geoassets        (optional geo/routing asset provisioning)
-         -> nodeops           (bounded allow-listed operations)
     -> internal/kernel        (sing-box or Xray)
 ```
 

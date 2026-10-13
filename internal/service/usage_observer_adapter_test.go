@@ -147,7 +147,7 @@ func TestObserverConsumesRealMeterWithoutChangingLegacyTraffic(t *testing.T) {
 	if k.reads != 2 {
 		t.Fatalf("observer drained meter separately: %d reads", k.reads)
 	}
-	if err := (serviceOpsRuntime{s}).ReloadCurrent(); err != nil {
+	if err := s.reloadKernelObserved(s.lastConfig, s.users.Users()); err != nil {
 		t.Fatal(err)
 	}
 	s.applyUserUpdate(context.Background(), nil, "", srcWSFull)
@@ -242,7 +242,7 @@ func TestObserverKernelFailureAndUserDeltaKeepBoundaryEvidence(t *testing.T) {
 	s, k, _ := observedService(t, 0)
 	k.running = true
 	k.reloadErr = errors.New("kernel reload failure")
-	if err := (serviceOpsRuntime{s}).ReloadCurrent(); err == nil {
+	if err := s.reloadKernelObserved(s.lastConfig, s.users.Users()); err == nil {
 		t.Fatal("expected reload failure")
 	}
 	s.applyUserDelta(context.Background(), "add", []model.UserSpec{{ID: 7, UUID: "u"}})

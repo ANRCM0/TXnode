@@ -1,15 +1,15 @@
 package machine
 
 import (
- "encoding/json"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -208,7 +208,6 @@ func TestReportHealthPublishesDegraded(t *testing.T) {
 	}
 }
 
-
 func TestMachineRuntimeUpdateDelegatesToInstallerBridge(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(
@@ -304,32 +303,49 @@ func TestMachineWSDiscoveryRecoversAfterInitialHandshakeFailure(t *testing.T) {
 // S6 adapter contract: a machine socket exposes only the two outbound
 // operations, while the Xboard adapter retains the original wire event names.
 type recordingMachineSocket struct {
- connected bool
- devices [][]byte
- results [][]byte
+	connected bool
+	devices   [][]byte
+	results   [][]byte
 }
+
 func (s *recordingMachineSocket) Run(ctx context.Context) { <-ctx.Done() }
-func (s *recordingMachineSocket) IsConnected() bool { return s.connected }
-func (s *recordingMachineSocket) SendDeviceReport(data json.RawMessage) { s.devices = append(s.devices, append([]byte(nil), data...)) }
-func (s *recordingMachineSocket) SendOpsResult(data json.RawMessage) { s.results = append(s.results, append([]byte(nil), data...)) }
+func (s *recordingMachineSocket) IsConnected() bool       { return s.connected }
+func (s *recordingMachineSocket) SendDeviceReport(data json.RawMessage) {
+	s.devices = append(s.devices, append([]byte(nil), data...))
+}
+func (s *recordingMachineSocket) SendOpsResult(data json.RawMessage) {
+	s.results = append(s.results, append([]byte(nil), data...))
+}
 func TestMachineNodePushUsesSocketContract(t *testing.T) {
- sock := &recordingMachineSocket{connected: true}
- push := &machineNodePush{nodeID: 42, wsLookup: func() machineSocket { return sock }}
- if !push.IsConnected() { t.Fatal("expected connected socket") }
- push.SendDeviceReport(map[int][]string{7: {"192.0.2.1"}})
- push.SendOpsResult(controlplane.OpsResult{RequestID:"req-1", Operation:"restart", OK:false, ErrorCode:"ops_queue_full"})
- if len(sock.devices) != 1 || len(sock.results) != 1 { t.Fatalf("outbound count: devices=%d results=%d", len(sock.devices),len(sock.results)) }
- var device struct { NodeID int `json:"node_id"`; Devices map[string][]string `json:"devices"` }
- if err := json.Unmarshal(sock.devices[0], &device); err != nil { t.Fatal(err) }
- if device.NodeID != 42 || len(device.Devices["7"]) != 1 { t.Fatalf("device payload: %+v",device) }
- var result struct { NodeID int `json:"node_id"`; RequestID string `json:"request_id"`; ErrorCode string `json:"error_code"` }
- if err := json.Unmarshal(sock.results[0], &result); err != nil { t.Fatal(err) }
- if result.NodeID != 42 || result.RequestID != "req-1" || result.ErrorCode != "ops_queue_full" { t.Fatalf("ops payload: %+v",result) }
+	sock := &recordingMachineSocket{connected: true}
+	push := &machineNodePush{nodeID: 42, wsLookup: func() machineSocket { return sock }}
+	if !push.IsConnected() {
+		t.Fatal("expected connected socket")
+	}
+	push.SendDeviceReport(map[int][]string{7: {"192.0.2.1"}})
+	if len(sock.devices) != 1 || len(sock.results) != 0 {
+		t.Fatalf("outbound count: devices=%d results=%d", len(sock.devices), len(sock.results))
+	}
+	var device struct {
+		NodeID  int                 `json:"node_id"`
+		Devices map[string][]string `json:"devices"`
+	}
+	if err := json.Unmarshal(sock.devices[0], &device); err != nil {
+		t.Fatal(err)
+	}
+	if device.NodeID != 42 || len(device.Devices["7"]) != 1 {
+		t.Fatalf("device payload: %+v", device)
+	}
+
 }
 
 func TestMachineEventAdapterNormalizesControlEvents(t *testing.T) {
- syncEvent := translateMachineEvent(panel.WSEvent{Type:panel.WSEventSyncNodes},config.KernelConfig{})
- if syncEvent.Kind != machineEventSyncNodes { t.Fatalf("sync event kind=%s",syncEvent.Kind) }
- runtimeEvent := translateMachineEvent(panel.WSEvent{Type:panel.WSEventOpsMachineRuntimeUpdate,MachineRuntimeUpdate:&panel.MachineRuntimeUpdateRequest{RequestID:"update-1",Target:"latest"}},config.KernelConfig{})
- if runtimeEvent.Kind != machineEventRuntimeUpdate || runtimeEvent.RuntimeUpdate == nil || runtimeEvent.RuntimeUpdate.RequestID != "update-1" { t.Fatalf("runtime event=%+v",runtimeEvent) }
+	syncEvent := translateMachineEvent(panel.WSEvent{Type: panel.WSEventSyncNodes}, config.KernelConfig{})
+	if syncEvent.Kind != machineEventSyncNodes {
+		t.Fatalf("sync event kind=%s", syncEvent.Kind)
+	}
+	runtimeEvent := translateMachineEvent(panel.WSEvent{Type: panel.WSEventOpsMachineRuntimeUpdate, MachineRuntimeUpdate: &panel.MachineRuntimeUpdateRequest{RequestID: "update-1", Target: "latest"}}, config.KernelConfig{})
+	if runtimeEvent.Kind != machineEventRuntimeUpdate || runtimeEvent.RuntimeUpdate == nil || runtimeEvent.RuntimeUpdate.RequestID != "update-1" {
+		t.Fatalf("runtime event=%+v", runtimeEvent)
+	}
 }

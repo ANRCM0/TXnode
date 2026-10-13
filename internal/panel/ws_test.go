@@ -290,7 +290,6 @@ func TestWSClient_UserDeltaEvent(t *testing.T) {
 	}
 }
 
-
 func TestWSClient_EmptyUserSnapshotIsDelivered(t *testing.T) {
 	var received *WSEvent
 	ws := &WSClient{
@@ -322,52 +321,16 @@ func TestWSClient_EmptyUserSnapshotIsDelivered(t *testing.T) {
 	}
 }
 
-
-func TestWSClient_OpsRequestEvent(t *testing.T) {
-	var received *WSEvent
-	ws := &WSClient{
-		onEvent: func(event WSEvent) {
-			copy := event
-			received = &copy
-		},
+func TestWSClient_RetiredNodeOperationsAreIgnored(t *testing.T) {
+	calls := 0
+	ws := &WSClient{onEvent: func(WSEvent) { calls++ }}
+	for _, name := range []string{"ops.kernel.restart", "ops.config.reload", "ops.network.dns", "ops.logs.tail"} {
+		ws.handleMessage(wsMessage{Event: name, Data: json.RawMessage(`{"request_id":"retired","node_id":7,"args":{}}`)})
 	}
-
-	ws.handleMessage(wsMessage{
-		Event: WSEventOpsKernelRestart,
-		Data: json.RawMessage(`{"request_id":"ops_123","node_id":7,"args":{}}`),
-	})
-
-	if received == nil {
-		t.Fatal("expected ops request to be delivered")
-	}
-	if received.OpsRequest == nil {
-		t.Fatal("expected OpsRequest")
-	}
-	if received.NodeID != 7 {
-		t.Fatalf("NodeID = %d, want 7", received.NodeID)
-	}
-	if received.OpsRequest.RequestID != "ops_123" {
-		t.Fatalf("RequestID = %q, want ops_123", received.OpsRequest.RequestID)
-	}
-	if received.OpsRequest.Operation != WSEventOpsKernelRestart {
-		t.Fatalf("Operation = %q, want %q", received.OpsRequest.Operation, WSEventOpsKernelRestart)
+	if calls != 0 {
+		t.Fatal("retired Node operations reached runtime")
 	}
 }
-
-func TestWSClient_OpsRequestRejectsMissingRequestID(t *testing.T) {
-	called := false
-	ws := &WSClient{onEvent: func(WSEvent) { called = true }}
-
-	ws.handleMessage(wsMessage{
-		Event: WSEventOpsKernelStatus,
-		Data:  json.RawMessage(`{"node_id":7,"args":{}}`),
-	})
-
-	if called {
-		t.Fatal("expected invalid ops request to be dropped")
-	}
-}
-
 
 func TestWSClient_MachineRuntimeUpdateEvent(t *testing.T) {
 	var received *WSEvent
