@@ -1,0 +1,482 @@
+{
+  "phase": "B3.7",
+  "status": "verified-isolated-service-current",
+  "production_acceptance": false,
+  "verified_date_local": "2026-10-14",
+  "timezone": "Asia/Shanghai",
+  "base": "614acb8db1ea0a725d57082de3934280a10ac453",
+  "snapshot": "/opt/txboard-baseline/node-service-r6",
+  "archive_sha256": "ba3c7fc2695695f81367ec76e91d892d6585b9b7c2edfe5502c259ee9c01ef41",
+  "runtime_and_test_sha256": {
+    "node/internal/config/config.go": "890d37b167a753f3408c7435457b9ef58424afa9147d7144f91e2d5b8e06c8c1",
+    "node/internal/config/usage_v2.go": "d7b957f75add3f1b2ce38bdfa5c4fae5cade9c617e4bedc9da8ee86b2af8f497",
+    "node/internal/config/usage_v2_test.go": "551895972eb646b97c8a15276ec145b123f3a363ef120b40c7f55c95184bead8",
+    "node/internal/controlplane/txboard.go": "e9dacdcb8e4c58d4a603232ef333f33548791915dc72bfa15275a40e5a73e27a",
+    "node/internal/controlplane/types.go": "44ea51bb522d5d1d5a4bdd1d575ec7ca44d6f81098f0e012907830418add91e9",
+    "node/internal/txboard/usage_v2_service.go": "ff6f2b74f75bb7bc72e70045c05f12d195c2b6f76b79c4ed8a249090ddeb578d",
+    "node/internal/kernel/singbox/conntracker.go": "288e3c9c96395a0cb0bf0cf7fd05e152abc8c7383cf7104edc6e36c9e5601a24",
+    "node/internal/kernel/singbox/singbox.go": "ca7327a5f7d9a327f01f510d134e3c69ab0a6b9c6f2ff6fb6ae401af5fb45e52",
+    "node/internal/kernel/singbox/usage_interval.go": "69dfcfb99a8bb3dcbe9a829190faa488d9a6da53c03e16db6fa335a917b3382b",
+    "node/internal/kernel/singbox/usage_interval_test.go": "43a88efcc8021e1e08d5545a5dc32e230915d6dcc54ef2b8c70e4c27a1913f17",
+    "node/internal/usageinterval/collector.go": "ee5fa48d43c326855857c11c0f8c8fc4435ef1391da6d1b9022d3d5cf509865c",
+    "node/internal/reporting/controller.go": "b45f1d677fe39f354c9a44bbcf6aa2a998ff8291973eb837662294a0be00cb1b",
+    "node/internal/tracker/tracker.go": "79795145f86145c64603723ea07a3617ee74d473c11cebb08c5377859669d549",
+    "node/internal/tracker/usage_v2_test.go": "70821cb8024ba7befd12e489ed2afc0ed01ef6bdeb29fbb0fc03816dab933296",
+    "node/internal/service/service.go": "bdc80fe9fa7b7ef4fab1ad9fff6e93afcc68b2e45f12c68313ce0acb055ff469",
+    "node/internal/service/usage_v2_adapter.go": "221f3be4e1f2ae1c9dd657c27d6d33ba33f3c2055809d707a345970c618e07d6",
+    "node/internal/service/usage_v2_adapter_test.go": "ac749d6ff779645cb370c61518baf6c9b65c4c67ab27659e5c169c5afd5703f0",
+    "node/internal/service/report_adapter.go": "dc4b12fee3fdce303d3530c6a95ac80dd7a0c4eeb8481dd454d24ad2fafddea1",
+    "node/internal/service/kernel_adapter.go": "afc1511c4bd5146690b39034b9c46080cae795a7926e625d4fc5b1f8231b245b",
+    "node/internal/service/user_adapter.go": "c997b82d04f75eae0dfbd24a061af8daaa844e3df91d654455e090b4024cbbcb",
+    "node/internal/service/sync_adapter.go": "7422e18812275b3687af6a04ddea5dba019e0a8c43567271730ea8c102a61251",
+    "node/internal/service/usage_v2_crash_linux_test.go": "bd565c31aab295ba9085ed4f980c7445f3e4361a4903fb7e0b160f8141ec1b3b"
+  },
+  "fixture_sources_sha256": {
+    "scripts/tests/node-service-usage/fixture.php": "a0fd16633163a2b106fbe0bac0a210488e692a5e4074aeeb372621fa8da68b59",
+    "scripts/tests/node-service-usage/run.py": "9be75926f6e81f383eb43dacf1059bbde528cf407c924c57a50f55095dfea1be",
+    "scripts/tests/node-service-usage/tls-proxy.py": "98329a5783a59ace8ae5e40baa4991820627f3455cbfbfccee0d62d24d13009a"
+  },
+  "candidate_contract_snapshot_sha256": "51bcd2a0fb88e1024649fac1355fa9250e0eda46badb8f94c0178f31bf219c29",
+  "verified_contract_sha256": "1d71b944941ea9457db399732759dfebed00ca445cdb1c583c757ca655ef8862",
+  "core_runtime_changed": false,
+  "default_v1_service_changed": false,
+  "optional_service_mode_added": true,
+  "dependencies": {
+    "go_mod_sha256": "bea9e7f584efe7b8e22818e00b43c31337a6fe3cda1d5df5b36442cd13ee3fa7",
+    "go_sum_sha256": "394ac62565ba74b4ef6b51c5eba4fdb9c20b5eb9722f5f471645c01e594d922c",
+    "composer_lock_sha256": "f47b212c2fc530a7820e370eab7c6d624d13962e7d26e4f2ddf57a11848257c0",
+    "installed_json_sha256": "8e668e456c9772ae428a038ab003fba5752ab2591980fc8396d9122851145b80"
+  },
+  "environment": {
+    "go": "1.26.3 linux/amd64 race",
+    "php": "8.4.16",
+    "database": "dedicated txboard_service_usage_test MariaDB11.4.12; single-db synthetic principal",
+    "https": "loopback fixed-path transparent TLS1.3 with127.0.0.1/localhost SAN; native Node Bearer/NodeID; no Admin/Internal mTLS",
+    "GOTOOLCHAIN": "local",
+    "GOPROXY": "off",
+    "GOSUMDB": "off",
+    "GOMAXPROCS": "4"
+  },
+  "verification": {
+    "go": {
+      "mode": "go",
+      "exit_code": 0,
+      "log_sha256": "4ed2cc042fe6997e5d935c941ce8c31c85133e8319430f4d177424f91fb0e16d",
+      "snapshot": "/opt/txboard-baseline/node-service-r6",
+      "go_version": "go version go1.26.3 linux/amd64",
+      "main_passed": 239,
+      "subtests_passed": 152,
+      "skipped": 1,
+      "failed": 0
+    },
+    "vet": {
+      "mode": "vet",
+      "exit_code": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "snapshot": "/opt/txboard-baseline/node-service-r6",
+      "go_version": "go version go1.26.3 linux/amd64"
+    },
+    "interop": {
+      "mode": "interop",
+      "exit_code": 0,
+      "log_sha256": "008799587f04edade4b43e0f24d30f44ca43ac78b1e398ec4b4dda1aa7001fdc",
+      "snapshot": "/opt/txboard-baseline/node-service-r6",
+      "go_version": "go version go1.26.3 linux/amd64"
+    }
+  },
+  "package_counts": {
+    "internal/config": {
+      "main_passed": 27,
+      "subtests_passed": 17,
+      "skipped": 0
+    },
+    "internal/controlplane": {
+      "main_passed": 22,
+      "subtests_passed": 0,
+      "skipped": 0
+    },
+    "internal/kernel/singbox": {
+      "main_passed": 89,
+      "subtests_passed": 42,
+      "skipped": 0
+    },
+    "internal/reporting": {
+      "main_passed": 8,
+      "subtests_passed": 0,
+      "skipped": 0
+    },
+    "internal/service": {
+      "main_passed": 39,
+      "subtests_passed": 14,
+      "skipped": 1
+    },
+    "internal/tracker": {
+      "main_passed": 14,
+      "subtests_passed": 0,
+      "skipped": 0
+    },
+    "internal/txboard": {
+      "main_passed": 6,
+      "subtests_passed": 0,
+      "skipped": 0
+    },
+    "internal/usageinterval": {
+      "main_passed": 13,
+      "subtests_passed": 40,
+      "skipped": 0
+    },
+    "internal/usagev2": {
+      "main_passed": 21,
+      "subtests_passed": 39,
+      "skipped": 0
+    }
+  },
+  "complete_package_run_without_filter": true,
+  "full_node_repository_run": false,
+  "explicit_skip": {
+    "name": "TestServiceUsageV2ActualCoreHTTPInterop",
+    "pure_go_skip_count": 1,
+    "separate_actual_core_runs": [
+      "capture",
+      "settled"
+    ],
+    "separate_passed": true,
+    "same_runtime_and_test_sources": true
+  },
+  "source_consumers": {
+    "service_constructor": "ordinary NewChecked/NewWithControlPlane; usage_v2 explicit default-off preflight/init",
+    "session_producer": "actual TXBoardControlPlane.Initial authenticated handshake with config/users and typed Session/HTTPTransport",
+    "data_producer": "Service.startKernel -> SingBox prepared enforcing NewConnTrackerWithBoundedUsage installed before listeners -> real Read11/extended Write7",
+    "data_consumer": "one Service worker -> complete bounded Flush -> immutable Journal/Spool -> native Reporter HTTPS -> Core UsageReceipts SQL accepted outbox -> existing UsageSettlement worker -> Node settled query/replay",
+    "integration_kernel_boundary": "injected lifecycle using actual production enforcing ConnTracker and memory TCP; no live VLESS/VMESS protocol claim",
+    "independent_actual_kernel_test": "TestSingBoxPreparedUsageTrackerInstalledBeforeFirstStartAndCannotRestart"
+  },
+  "handoff_checked_observations": [
+    "exact durable v1 pending path absent via CheckHandoff",
+    "reporting Controller no RAM pending or active batch under owner lock",
+    "Tracker no pending/last bytes or active online",
+    "actual kernel not running and cumulative bytes/connections empty",
+    "real frozen Session grants match native User mapping before Start"
+  ],
+  "stop_boundaries": [
+    "lease main-loop timer independent of blocked worker; exact collector UTC/monotonic Begin/Complete checks",
+    "UDP/unknown binding/local config or User mutation/worker store or receipt error fixed mode refusal",
+    "no v1 billing fallback; v1 totals used only for metrics and heartbeat/online",
+    "normal/failed shutdown closes active connections, unsealed tail unknown",
+    "two-second join retains stalled original FD/flock; permanent process owner never reassigned",
+    "same source epoch live restart after Close or SIGKILL refused; historical sealed payload/receipt unchanged"
+  ],
+  "sql_evidence": {
+    "pending": {
+      "persisted_ack_sql_verified": true,
+      "batch_rows": "1",
+      "entry_rows": "0",
+      "receipt_id": "receipt_c4b8eb41-e533-412c-a0c7-8e17871396c8"
+    },
+    "settlement": {
+      "status": "settled",
+      "sql_batch_rows": "1",
+      "sql_entry_rows": "1",
+      "raw_up_bytes": "11",
+      "raw_down_bytes": "7",
+      "billed_up_bytes": "16",
+      "billed_down_bytes": "10",
+      "billable_bytes": "26",
+      "receipt_id": "receipt_c4b8eb41-e533-412c-a0c7-8e17871396c8",
+      "second_scan_empty": true
+    },
+    "after_replay": {
+      "batch_rows": "1",
+      "entry_rows": "1",
+      "billable_bytes": "26",
+      "duplicate_counted_twice": false,
+      "legacy_user_u": "0",
+      "legacy_user_d": "0",
+      "status": "settled"
+    }
+  },
+  "original_artifact_metadata": {
+    "session": {
+      "protocol_version": 2,
+      "core_instance_id": "service_usage_core_fixture_1",
+      "node_id": "1",
+      "source_epoch": "1",
+      "receipt_generation": "1",
+      "retention_seconds": 604800,
+      "max_late_report_seconds": 86400,
+      "receipt_retention_seconds": 1209600,
+      "issued_at": 1791916068,
+      "grants": [
+        {
+          "user_id": "7",
+          "access_subject_id": "1",
+          "auth_snapshot_id": "1",
+          "tariff_revision_id": "1",
+          "terms_id": "1",
+          "usage_period_id": "1",
+          "issued_at": 1791915967,
+          "lease_expires_at": 1791916167,
+          "revocation_version": "0"
+        }
+      ]
+    },
+    "submission": {
+      "payload": {
+        "batch_id": "f4ee105020d5d142315e1d687425afb9",
+        "ended_at": 1791916069,
+        "entries": [
+          {
+            "access_subject_id": "1",
+            "auth_snapshot_id": "1",
+            "raw_down_bytes": "7",
+            "raw_up_bytes": "11",
+            "tariff_revision_id": "1",
+            "terms_id": "1",
+            "usage_period_id": "1"
+          }
+        ],
+        "node_id": "1",
+        "protocol_version": 2,
+        "source_epoch": "1",
+        "started_at": 1791916068
+      },
+      "payload_digest": "sha256:fbdf81deefa5c5e52f360e22b979d8fb9c8147ae10493fca66d9c934e06227d6"
+    },
+    "pending_receipt": {
+      "protocol_version": 2,
+      "core_instance_id": "service_usage_core_fixture_1",
+      "receipt_generation": "1",
+      "node_id": "1",
+      "source_epoch": "1",
+      "batch_id": "f4ee105020d5d142315e1d687425afb9",
+      "payload_digest": "sha256:fbdf81deefa5c5e52f360e22b979d8fb9c8147ae10493fca66d9c934e06227d6",
+      "receipt_status": "persisted",
+      "settlement_status": "pending",
+      "accepted_at": 1791916070,
+      "receipt_id": "receipt_c4b8eb41-e533-412c-a0c7-8e17871396c8",
+      "updated_at": 1791916070
+    },
+    "settled_receipt": {
+      "protocol_version": 2,
+      "core_instance_id": "service_usage_core_fixture_1",
+      "receipt_generation": "1",
+      "node_id": "1",
+      "source_epoch": "1",
+      "batch_id": "f4ee105020d5d142315e1d687425afb9",
+      "payload_digest": "sha256:fbdf81deefa5c5e52f360e22b979d8fb9c8147ae10493fca66d9c934e06227d6",
+      "receipt_status": "persisted",
+      "settlement_status": "settled",
+      "accepted_at": 1791916070,
+      "receipt_id": "receipt_c4b8eb41-e533-412c-a0c7-8e17871396c8",
+      "settled_at": 1791916071,
+      "updated_at": 1791916071
+    }
+  },
+  "artifacts_sha256": {
+    "seed.log": "00c9e2c3c5f14b8edcdca4aca4d68cdbd1717665bed93e7c1e6838587ff0c492",
+    "build.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "core-http.log": "731379c808cec5669834ab54d0fbb899bd1d64de49129d8d328b464ad7769a19",
+    "sql-pending.log": "203bdc5b8729230c5785374addd4b16845fe346dfcddc20a3ca58e2f74b793b1",
+    "sql-settlement.log": "cf781a8f2f82257a11d3f253e973a572b8ab6ee5b3b8e2266c99717b035e357e",
+    "node-settled-run.log": "fdb172e6f1b12d4db5fe8d7c6f6300ad5ecc3199517704757660d3c11cfbd023",
+    "tls-proxy.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "fixture.json": "00c9e2c3c5f14b8edcdca4aca4d68cdbd1717665bed93e7c1e6838587ff0c492",
+    "node-capture-run.log": "bbd87e43a2f414afd375bea04da83d1d7343303484dde4ed0e47da655b1b3f16",
+    "migrate.log": "e55ce4196cf0a76d621cda8f2474da2a8432a36c8becb1571529f567543a7a1d",
+    "certificate.log": "d4e8af4c647bc1c60129b4132cc94b779a59ca332143f6cff8594baa6d834395",
+    "service-capture.json": "1325a8206324fe969abf6da441571883fc945344f67ca03199d63cbb961b0f55",
+    "sql-final.log": "b67456817c4786a842cf671b46d3136993e953b7c80a13fbe760cacc0985abd8",
+    "service-settled.json": "42ce38e905b8739f1f92628a3e386bcf2f8c7635a08c7408be965d79d758cfeb",
+    "cert.pem": "4452a78cc3f94fa37cfc536cbfee422f8aebc0ef0fcf2f1c987970eea7e3554a",
+    "mode/spool/402dcaf239455a2c38fcca5e36e72c66597ef0f6c88d9e07c00c2040d921d7bb.usage.json": "76c173e1c75d7835b554c19169e4b3154ee0194d91d20ac69e8c93c9f0419cb2",
+    "mode/spool/.usage-session": "77c0b7c7c6b016cc4e955f3f58f58b507fb51c36e7198f68a8a41803d94077af",
+    "mode/spool/.usage.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "mode/journal/.interval-source": "b73d0fb0b18c20529ff5ba5368d636fb27a82b53f362aae50c270d375bdd31a3",
+    "mode/journal/3cd7ca7a06d7c2969af6fe4ed5c59160-00000000000000000001.json": "b13548fb7c664815b1fac6e8d943ec7121735659e5523e6ffcc8e60b102487b9"
+  },
+  "result_json_sha256": "ef477574c4604a9fbc56ea3b47be08ea0dff5baddb14279418240f7e3ec715fb",
+  "public_artifacts_windows": "D:/my-project/TXX/.tmp/node-service-evidence/r6/public",
+  "private_keys_or_test_executable_exported": false,
+  "fault_and_process_tests": [
+    "TestServiceUsageV2BlockedWorkerExpiryStopsIOAndRetainsOwnerUntilCompletion",
+    "TestServiceUsageV2SIGKILLKeepsReceiptAndRefusesSameEpochResume",
+    "TestServiceUsageV2HandoffRefusesRealLegacyStateWithoutDraining",
+    "TestServiceUsageV2ExpiryUnknownUDPAndUpdatesStopModeWithoutBillingFallback",
+    "existing usageinterval fsync/SIGKILL and spool immutable receipt regression suites included"
+  ],
+  "previous_snapshots": [
+    {
+      "snapshot": "/opt/txboard-baseline/node-service-r1",
+      "result": "compile failed: fixture mistakenly used nonexistent NodeSpec.ID; corrected tests, logs preserved"
+    },
+    {
+      "snapshot": "/opt/txboard-baseline/node-service-r2",
+      "result": "transport-failure negative test used idle empty spool so no HTTP request; corrected fixture to create actual I/O batch before injected failure"
+    },
+    {
+      "snapshot": "/opt/txboard-baseline/node-service-r3",
+      "result": "targeted race10 main/28 subtests passed"
+    },
+    {
+      "snapshot": "/opt/txboard-baseline/node-service-r4",
+      "result": "complete nine package race239 main/152 subtests and vet passed; actual Core startup correctly refused fixture User1 vs grantUser7 mismatch because model id is guarded"
+    },
+    {
+      "snapshot": "/opt/txboard-baseline/node-service-r5",
+      "result": "exclusive fixture explicitly force-filled id7; real Core pipeline passed and original artifacts preserved; final root-instance enable rejection added before r6"
+    }
+  ],
+  "explicit_database_backup_resets": [
+    {
+      "database": "txboard_service_usage_test",
+      "failed_start_batch_count": "0",
+      "fixture_user_id": "1",
+      "fixture_grant_user_id": "7",
+      "reason": "User guarded id ignored mass assignment in fixture; fixed exclusive forceFill, runtime correctly refused mismatch before listeners",
+      "backup_path": "/opt/txboard-baseline/node-service-r4/service-interop-evidence/mysql-after-r4-failed-start.sql",
+      "backup_sha256": "080094d2b35068949e9458372343fed6a0c3a5424f65a148a6bc143b8c056aad",
+      "backup_mode": "0600",
+      "reset_scope": "explicit unique synthetic database only"
+    },
+    {
+      "database": "txboard_service_usage_test",
+      "settled_batch_count": "1",
+      "settled_entry_count": "1",
+      "receipt_id": "receipt_592cf525-67cd-4603-861d-0b678951cd1b",
+      "reason": "Final source verification after root-instance enable rejection and equivalent duration spelling; prior passed SQL/artifacts retained",
+      "backup_path": "/opt/txboard-baseline/node-service-r5/service-interop-evidence/mysql-after-r5-settled.sql",
+      "backup_sha256": "bfe20ba4f5a7895b0a0a86576c5b9452fb341ceae5ece4ef54d829b56523e964",
+      "backup_mode": "0600",
+      "reset_scope": "explicit unique synthetic database only"
+    }
+  ],
+  "limitations": [
+    "strict loopback local/testing isolated-copy mode; whole B3 and production readiness not complete",
+    "no live VLESS/VMESS protocol session claim; actual full kernel installation tested separately from injected Service memory TCP interop",
+    "direct TCP only; Machine/multi-node/standalone/xray/WS and simultaneous local observers refused",
+    "no production source-opening endpoint or automatic source/grant refresh; separately authorized higher epoch required after restart",
+    "no Provider proof admission, credential delivery or distributed revocation ACK/convergence",
+    "existing CoreUsage isolation gate remains; one production settlement authority only after independent authority/Provider/handoff/drain/recovery gates",
+    "unknown unfinished tail fails closed and is not restored/interpolated",
+    "same-OS evidence hashes are consistency checks, not independent attestations or malicious sandbox",
+    "clock/suspend/HA/file or DB restore, stale external authorization and production recovery coverage not solved",
+    "nine complete affected packages rather than full Node repo; original CI owns full-repo run"
+  ],
+  "remote_ci": {
+    "status": "pending-after-push",
+    "workflow": ".github/workflows/ci-node-service-usage.yml",
+    "workflow_sha256": "d54fa3b17ff7a99a0e95318272f442f2d81237e5b2b72fccf93cf3543c7b67a8",
+    "actionlint": "passed",
+    "existing_node_workflow": ".github/workflows/ci-node.yml",
+    "database_engine": "Oracle MySQL8.4",
+    "exclusive_database": "txboard_service_usage_test",
+    "scope": "Real Service capture and settled query/replay with Core; full Node CI owns whole-repository regression"
+  },
+  "coordinator_verification": {
+    "go": {
+      "mode": "go",
+      "exit_code": 0,
+      "log_sha256": "ddaf33c398724df095497bc7b58402ff993077ccf260fca8699bfb64b90e8741",
+      "snapshot": "/opt/txboard-baseline/node-service-integrated-r1",
+      "go_version": "go version go1.26.3 linux/amd64",
+      "main_passed": 239,
+      "subtests_passed": 152,
+      "skipped": 1,
+      "failed": 0
+    },
+    "vet": {
+      "mode": "vet",
+      "exit_code": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "snapshot": "/opt/txboard-baseline/node-service-integrated-r1",
+      "go_version": "go version go1.26.3 linux/amd64"
+    },
+    "interop": {
+      "mode": "interop",
+      "exit_code": 0,
+      "log_sha256": "59ee7277180d117efd6a31e01ae73086b5b67877a5440cf9520c30d5e8598570",
+      "snapshot": "/opt/txboard-baseline/node-service-integrated-r2",
+      "go_version": "go version go1.26.3 linux/amd64"
+    },
+    "race_source_base": "389c5a75c07bb75cc283419858018680ddf6f780",
+    "interop_Core_source_base": "7ac24c11d8b3c913709b83d3e193c6542ff14b14",
+    "source_sha256": {
+      "node/internal/config/config.go": "890d37b167a753f3408c7435457b9ef58424afa9147d7144f91e2d5b8e06c8c1",
+      "node/internal/config/usage_v2.go": "d7b957f75add3f1b2ce38bdfa5c4fae5cade9c617e4bedc9da8ee86b2af8f497",
+      "node/internal/config/usage_v2_test.go": "551895972eb646b97c8a15276ec145b123f3a363ef120b40c7f55c95184bead8",
+      "node/internal/controlplane/txboard.go": "e9dacdcb8e4c58d4a603232ef333f33548791915dc72bfa15275a40e5a73e27a",
+      "node/internal/controlplane/types.go": "44ea51bb522d5d1d5a4bdd1d575ec7ca44d6f81098f0e012907830418add91e9",
+      "node/internal/txboard/usage_v2_service.go": "ff6f2b74f75bb7bc72e70045c05f12d195c2b6f76b79c4ed8a249090ddeb578d",
+      "node/internal/kernel/singbox/conntracker.go": "288e3c9c96395a0cb0bf0cf7fd05e152abc8c7383cf7104edc6e36c9e5601a24",
+      "node/internal/kernel/singbox/singbox.go": "ca7327a5f7d9a327f01f510d134e3c69ab0a6b9c6f2ff6fb6ae401af5fb45e52",
+      "node/internal/kernel/singbox/usage_interval.go": "69dfcfb99a8bb3dcbe9a829190faa488d9a6da53c03e16db6fa335a917b3382b",
+      "node/internal/kernel/singbox/usage_interval_test.go": "43a88efcc8021e1e08d5545a5dc32e230915d6dcc54ef2b8c70e4c27a1913f17",
+      "node/internal/usageinterval/collector.go": "ee5fa48d43c326855857c11c0f8c8fc4435ef1391da6d1b9022d3d5cf509865c",
+      "node/internal/reporting/controller.go": "b45f1d677fe39f354c9a44bbcf6aa2a998ff8291973eb837662294a0be00cb1b",
+      "node/internal/tracker/tracker.go": "79795145f86145c64603723ea07a3617ee74d473c11cebb08c5377859669d549",
+      "node/internal/tracker/usage_v2_test.go": "70821cb8024ba7befd12e489ed2afc0ed01ef6bdeb29fbb0fc03816dab933296",
+      "node/internal/service/service.go": "bdc80fe9fa7b7ef4fab1ad9fff6e93afcc68b2e45f12c68313ce0acb055ff469",
+      "node/internal/service/usage_v2_adapter.go": "221f3be4e1f2ae1c9dd657c27d6d33ba33f3c2055809d707a345970c618e07d6",
+      "node/internal/service/usage_v2_adapter_test.go": "ac749d6ff779645cb370c61518baf6c9b65c4c67ab27659e5c169c5afd5703f0",
+      "node/internal/service/report_adapter.go": "dc4b12fee3fdce303d3530c6a95ac80dd7a0c4eeb8481dd454d24ad2fafddea1",
+      "node/internal/service/kernel_adapter.go": "afc1511c4bd5146690b39034b9c46080cae795a7926e625d4fc5b1f8231b245b",
+      "node/internal/service/user_adapter.go": "c997b82d04f75eae0dfbd24a061af8daaa844e3df91d654455e090b4024cbbcb",
+      "node/internal/service/sync_adapter.go": "7422e18812275b3687af6a04ddea5dba019e0a8c43567271730ea8c102a61251",
+      "node/internal/service/usage_v2_crash_linux_test.go": "bd565c31aab295ba9085ed4f980c7445f3e4361a4903fb7e0b160f8141ec1b3b",
+      "scripts/tests/node-service-usage/fixture.php": "a0fd16633163a2b106fbe0bac0a210488e692a5e4074aeeb372621fa8da68b59",
+      "scripts/tests/node-service-usage/run.py": "9be75926f6e81f383eb43dacf1059bbde528cf407c924c57a50f55095dfea1be",
+      "scripts/tests/node-service-usage/tls-proxy.py": "98329a5783a59ace8ae5e40baa4991820627f3455cbfbfccee0d62d24d13009a",
+      "contracts/v2/node-usage/isolated-service-v2-v1.md": "1d71b944941ea9457db399732759dfebed00ca445cdb1c583c757ca655ef8862",
+      "scripts/tests/node-service-usage/README.md": "52e64683611d1fbeeee8976cc2f7e10b0302d88d271aec94c724fc9e762767b4"
+    },
+    "unchanged27_frozen_source_paths_across_root_snapshots": true,
+    "actual_result": {
+      "persisted_ack_sql_verified": {
+        "persisted_ack_sql_verified": true,
+        "batch_rows": "1",
+        "entry_rows": "0",
+        "receipt_id": "receipt_aa7a25d7-cca3-47fd-a474-9a8fa609c59f"
+      },
+      "settlement": {
+        "status": "settled",
+        "sql_batch_rows": "1",
+        "sql_entry_rows": "1",
+        "raw_up_bytes": "11",
+        "raw_down_bytes": "7",
+        "billed_up_bytes": "16",
+        "billed_down_bytes": "10",
+        "billable_bytes": "26",
+        "receipt_id": "receipt_aa7a25d7-cca3-47fd-a474-9a8fa609c59f",
+        "second_scan_empty": true
+      },
+      "final_sql": {
+        "batch_rows": "1",
+        "entry_rows": "1",
+        "billable_bytes": "26",
+        "duplicate_counted_twice": false,
+        "legacy_user_u": "0",
+        "legacy_user_d": "0",
+        "status": "settled"
+      },
+      "batch_id": "6b9a0b51cd9ab41b8fc58c2cb73364c0"
+    },
+    "prior_database_backup": {
+      "database": "txboard_service_usage_test",
+      "prior_batch": "f4ee105020d5d142315e1d687425afb9",
+      "prior_receipt": "receipt_c4b8eb41-e533-412c-a0c7-8e17871396c8",
+      "prior_batch_rows": 1,
+      "prior_entry_rows": 1,
+      "legacy_user_u": "0",
+      "legacy_user_d": "0",
+      "backup_path": "/opt/txboard-baseline/node-service-integrated-r2/mysql-before-root-interop.sql",
+      "backup_sha256": "84ae281a7b4dfafdb0589181daab4b15a5615c597fd3289cae3c108b5211f648",
+      "backup_mode": "0600",
+      "reason": "Root verifies latest accepted Core with unchanged frozen Node sources; original r6 evidence preserved"
+    },
+    "public_artifacts": ".tmp/node-service-integrated-evidence/r2/public",
+    "private_key_and_executable_exported": false,
+    "kernel_scope": "Actual Service lifecycle with injected kernel/memoryTCP; real sing-box start installation separately tested; live VLESS/VMESS session remains B3.8",
+    "native_https_tls13_peer_validation_and_node_credentials": true,
+    "global_or_production_authority_not_enabled": true
+  }
+}

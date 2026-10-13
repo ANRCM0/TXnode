@@ -38,6 +38,11 @@ func (s *Service) requestWSResync(ctx context.Context, reason string) {
 // Service runtime mutation. nodesync prepares immutable snapshots; Service
 // remains authoritative for validation and applying them to the data plane.
 func (s *Service) applySyncResult(ctx context.Context, result nodesync.Result) {
+	if s.usageMode() && (result.CertChanged || result.Config != nil && result.ConfigHash != s.lastConfigHash || result.Users != nil && result.UserHash != s.users.Hash()) {
+		s.failUsageV2()
+		return
+	}
+
 	if s.syncer != nil {
 		s.syncer.CompleteResync()
 	}

@@ -52,10 +52,13 @@ type Service struct {
 	pushInterval int // seconds
 	pullInterval int // seconds
 
-	lastConfigHash  string // hash of full config for change detection
-	syncer          *nodesync.Controller
-	reporter        *reporting.Controller
-	reporterInitErr error
+	lastConfigHash    string // hash of full config for change detection
+	syncer            *nodesync.Controller
+	reporter          *reporting.Controller
+	reporterInitErr   error
+	legacyPendingPath string
+	usageV2           *isolatedUsageRuntime
+	usageOwner        *usagebucket.ProcessOwner
 
 	push             *pushsync.Controller
 	machineMailbox   *controlplane.NodeMailbox
@@ -118,6 +121,7 @@ func newService(cfg *config.Config, cp controlplane.ControlPlane) *Service {
 
 	reporter := reporting.New(cp)
 	var reporterInitErr error
+	var legacyPendingPath string
 	if cfg.Kernel.ConfigDir != "" && !cfg.IsStandalone() {
 		// The directory must be a persistent writable volume; no traffic
 		// is acknowledged unless the pending batch is durably spooled first.
@@ -125,23 +129,25 @@ func newService(cfg *config.Config, cp controlplane.ControlPlane) *Service {
 			cfg.Panel.URL, cfg.Panel.NodeID, cfg.Panel.MachineID, cfg.InstanceID)))
 		path := filepath.Join(cfg.Kernel.ConfigDir,
 			".txnode-traffic-"+hex.EncodeToString(key[:12])+".pending.json")
+		legacyPendingPath = path
 		reporter, reporterInitErr = reporting.NewDurable(cp, path)
 	}
 	s := &Service{
-		reporterInitErr: reporterInitErr,
-		cfg:             cfg,
-		source:          cp,
-		sink:            cp,
-		kernel:          k,
-		kernelLife:      kernellifecycle.New(k),
-		tracker:         tracker.New(),
-		limiter:         l,
-		speedTracker:    st,
-		certs:           certcoord.New(cfg.Cert),
-		users:           userstate.New(l, st),
-		syncer:          nodesync.New(cp),
-		push:            pushsync.New(cp),
-		reporter:        reporter,
+		reporterInitErr:   reporterInitErr,
+		legacyPendingPath: legacyPendingPath,
+		cfg:               cfg,
+		source:            cp,
+		sink:              cp,
+		kernel:            k,
+		kernelLife:        kernellifecycle.New(k),
+		tracker:           tracker.New(),
+		limiter:           l,
+		speedTracker:      st,
+		certs:             certcoord.New(cfg.Cert),
+		users:             userstate.New(l, st),
+		syncer:            nodesync.New(cp),
+		push:              pushsync.New(cp),
+		reporter:          reporter,
 	}
 	return s
 }
@@ -150,6 +156,10 @@ func (s *Service) Run(ctx context.Context) error {
 	if s.reporterInitErr != nil {
 		return fmt.Errorf("durable traffic report spool initialization failed: %w", s.reporterInitErr)
 	}
+	if err := s.preflightUsageV2(); err != nil {
+		return err
+	}
+	defer s.closeUsageV2()
 	s.initUsageObserver()
 	defer s.closeUsageObserver()
 	s.initLocalEventConsumer()
@@ -165,6 +175,9 @@ func (s *Service) Run(ctx context.Context) error {
 		return fmt.Errorf("initial setup: %w", err)
 	}
 	defer s.stopKernelObserved(false)
+	s.startUsageV2Worker()
+	usageLease, stopUsageLease := s.usageLeaseChannel()
+	defer stopUsageLease()
 
 	// Set up tickers
 	trackTicker := time.NewTicker(time.Duration(s.cfg.Node.TrackInterval) * time.Second)
@@ -191,9 +204,18 @@ func (s *Service) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			if s.usageMode() {
+				s.usageV2.tracker.StopBoundedUsageTraffic()
+			}
 			s.pushReportSync()
 			return nil
 
+		case <-s.usageFailureChannel():
+			s.failUsageV2()
+			return errUsageV2
+		case <-usageLease:
+			s.failUsageV2()
+			return errUsageV2
 		case <-trackTicker.C:
 			s.trackAndEnforce(ctx)
 
@@ -218,7 +240,9 @@ func (s *Service) Run(ctx context.Context) error {
 			s.applySyncResult(ctx, result)
 
 		case <-wsDiscoveryTicker.C:
-			s.discoverPush(ctx)
+			if !s.usageMode() {
+				s.discoverPush(ctx)
+			}
 
 		case status := <-s.push.Statuses():
 			s.handlePushStatus(ctx, status)
@@ -280,6 +304,9 @@ func (s *Service) initialSetup(ctx context.Context) error {
 		return err
 	}
 
+	if err := s.initUsageV2(ctx, bootstrap); err != nil {
+		return err
+	}
 	s.metricsMu.Lock()
 	s.lastConfig = bootstrap.Config
 	s.metricsMu.Unlock()
@@ -349,6 +376,25 @@ func (s *Service) wsMetrics() map[string]interface{} {
 
 // handleWSEvent processes data events received via WebSocket
 func (s *Service) handleWSEvent(ctx context.Context, event controlplane.Event) {
+	if s.usageMode() {
+		switch event.Type {
+		case controlplane.EventSyncConfig:
+			if event.Config != nil && computeConfigHash(event.Config) != s.lastConfigHash {
+				s.failUsageV2()
+				return
+			}
+		case controlplane.EventSyncUsers:
+			if event.Users != nil && computeUserHash(event.Users) != s.users.Hash() {
+				s.failUsageV2()
+				return
+			}
+		case controlplane.EventSyncUserDelta:
+			if len(event.DeltaUsers) > 0 {
+				s.failUsageV2()
+				return
+			}
+		}
+	}
 	switch event.Type {
 	case controlplane.EventSyncConfig:
 		if event.Config == nil {
@@ -414,12 +460,23 @@ func (s *Service) trackAndEnforce(ctx context.Context) {
 
 	traffic, aliveIPs, connCount, err := s.kernel.GetUserTraffic(ctx)
 	if err != nil {
+		if s.usageMode() {
+			s.failUsageV2()
+			return
+		}
 		nlog.Core().Debug("get user traffic failed", "error", err)
 		s.observeBoundary("TRACK_ERROR", false)
 		return
 	}
 
-	s.tracker.Process(traffic, aliveIPs, connCount)
+	if s.usageMode() {
+		if !s.tracker.ProcessUsageV2Metrics(traffic, aliveIPs, connCount) {
+			s.failUsageV2()
+			return
+		}
+	} else {
+		s.tracker.Process(traffic, aliveIPs, connCount)
+	}
 	// Pass the exact original cumulative snapshot after v1 has consumed it.
 	// The observer neither polls meters again nor flushes/restores v1 state.
 	s.observeTraffic(traffic)

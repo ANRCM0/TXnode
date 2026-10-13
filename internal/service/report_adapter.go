@@ -8,7 +8,10 @@ import (
 )
 
 func (s *Service) prepareReportBatch() reporting.Batch {
-	traffic := s.tracker.FlushTraffic()
+	var traffic map[int][2]int64
+	if !s.usageMode() {
+		traffic = s.tracker.FlushTraffic()
+	}
 	aliveIPs := s.tracker.FlushAliveIPs()
 	online := s.tracker.CurrentOnline()
 	status := monitor.Collect()

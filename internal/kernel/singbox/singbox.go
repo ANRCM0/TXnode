@@ -52,6 +52,8 @@ type SingBox struct {
 	// Survives Reload (hot-swap) since live connections persist.
 	connTracker        *ConnTracker
 	localEventConsumer *usagebucket.Coordinator
+	boundedPrepared    *ConnTracker
+	boundedStarted     bool
 
 	// auditor is the tx-node audit reporter, forwarded to every new
 	// ConnTracker at Start (like speedLimitFunc). nil = disabled.
@@ -99,6 +101,9 @@ func (s *SingBox) Protocols() []string {
 func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.boundedPrepared != nil && s.boundedStarted {
+		return fmt.Errorf("USAGE_V2_KERNEL_RESTART_REFUSED")
+	}
 
 	cfgMap := buildConfig(s.cfg, nodeConfig, users, tls)
 	data, err := json.Marshal(cfgMap)
@@ -132,6 +137,23 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 		return fmt.Errorf("create sing-box instance: %w", err)
 	}
 
+	if s.boundedPrepared != nil {
+		// Install the frozen producer before any listener can accept traffic.
+		router := service.FromContext[adapter.Router](ctx)
+		if router == nil {
+			instance.Close()
+			cancel()
+			return fmt.Errorf("USAGE_V2_ROUTER_UNAVAILABLE")
+		}
+		s.boundedPrepared.SetUserMap(buildUserMap(users))
+		if err := s.boundedPrepared.CheckBoundedUsage(); err != nil {
+			instance.Close()
+			cancel()
+			return err
+		}
+		router.AppendTracker(s.boundedPrepared)
+		s.boundedStarted = true
+	}
 	if err := instance.Start(); err != nil {
 		instance.Close()
 		cancel()
@@ -147,7 +169,11 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 	s.tls = tls
 
 	// Fresh tracker on full restart.
-	s.connTracker = newRuntimeConnTracker(s.localEventConsumer)
+	if s.boundedPrepared != nil {
+		s.connTracker = s.boundedPrepared
+	} else {
+		s.connTracker = newRuntimeConnTracker(s.localEventConsumer)
+	}
 	s.connTracker.SetUserMap(buildUserMap(users))
 	if s.auditor != nil {
 		s.connTracker.SetAuditor(s.auditor)
@@ -159,7 +185,7 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 		s.connTracker.SetDeviceLimitFunc(s.deviceLimitFunc)
 	}
 
-	s.trackerRegistered = false
+	s.trackerRegistered = s.boundedPrepared != nil
 	s.registerTracker(ctx)
 
 	// Recycle old instance in background — drain then close.

@@ -355,3 +355,21 @@ func (c *Collector) Unknown() bool {
 	defer c.mu.Unlock()
 	return c.terminal || c.closed
 }
+
+// CheckCurrent samples the finite local clocks without sealing a batch. Service
+// can refuse new I/O or stop its mode without relying on a disk worker to wake.
+func (c *Collector) CheckCurrent() error {
+	if c == nil {
+		return ErrUnknown
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.terminal || c.closed {
+		return ErrUnknown
+	}
+	_, ok := c.sample()
+	if !ok {
+		return ErrUnknown
+	}
+	return nil
+}

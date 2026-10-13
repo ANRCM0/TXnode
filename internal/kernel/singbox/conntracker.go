@@ -147,8 +147,9 @@ type ConnTracker struct {
 	// auditor is the tx-node audit reporter (nil = disabled, zero overhead).
 	auditor *audit.Reporter
 	// Fixed at construction; nil on the ordinary runtime path.
-	eventBuckets *usagebucket.Meter
-	boundedUsage *usageinterval.Collector
+	eventBuckets   *usagebucket.Meter
+	boundedUsage   *usageinterval.Collector
+	enforceBounded bool
 }
 
 type trackedConnection struct {
@@ -357,6 +358,10 @@ func (t *ConnTracker) RoutedPacketConnection(
 ) N.PacketConn {
 	if t.boundedUsage != nil {
 		t.boundedUsage.Fail()
+		if t.enforceBounded {
+			_ = conn.Close()
+			return conn
+		}
 	}
 	uuid := metadata.User
 	sourceIP := metadata.Source.Addr.String()
@@ -730,6 +735,9 @@ func (c *trackedConn) Read(b []byte) (int, error) {
 			c.tracker.boundedUsage.Fail()
 		}
 		bounded = c.tracker.boundedUsage.Begin(c.userID)
+		if bounded == nil && c.tracker.enforceBounded {
+			return 0, usageinterval.ErrUnknown
+		}
 	}
 	n, err := c.Conn.Read(b)
 	if c.tracker.boundedUsage != nil {
@@ -803,6 +811,9 @@ func (c *trackedConn) Write(b []byte) (int, error) {
 			c.tracker.boundedUsage.Fail()
 		}
 		bounded = c.tracker.boundedUsage.Begin(c.userID)
+		if bounded == nil && c.tracker.enforceBounded {
+			return 0, usageinterval.ErrUnknown
+		}
 	}
 	n, err := c.Conn.Write(b)
 	if c.tracker.boundedUsage != nil {

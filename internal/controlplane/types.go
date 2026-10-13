@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ANRCM0/TX-Node/internal/model"
+	"github.com/ANRCM0/TX-Node/internal/usagev2"
 )
 
 type EventType string
@@ -35,12 +36,15 @@ type APIMetrics struct {
 }
 
 type Bootstrap struct {
-	PushInterval int
-	PullInterval int
-	Push         PushClient
-	Config       *model.NodeSpec
-	Users        []model.UserSpec
-	Mailbox      *NodeMailbox
+	PushInterval      int
+	PullInterval      int
+	Push              PushClient
+	Config            *model.NodeSpec
+	Users             []model.UserSpec
+	Mailbox           *NodeMailbox
+	UsageV2Session    *usagev2.Session
+	UsageV2Transport  usagev2.Transport
+	UsageV2NativeHTTP bool
 }
 
 type Snapshot struct {

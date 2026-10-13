@@ -55,6 +55,7 @@ type Config struct {
 	// UsageEventStore is default-off local sing-box evidence. One supported
 	// Service per process owns its consumer; no billing protocol is activated.
 	UsageEventStore UsageEventStoreConfig `yaml:"usage_event_store,omitempty"`
+	UsageV2         UsageV2Config         `yaml:"usage_v2,omitempty"`
 }
 
 type UsageEventStoreConfig struct {
@@ -357,6 +358,16 @@ func configBaseDir(configPath string) string {
 }
 
 func (rc *RootConfig) validateRoot() error {
+	if len(rc.Instances) > 0 && rc.Config.UsageV2.Enabled {
+		return fmt.Errorf("USAGE_V2_EXPLICIT_INSTANCE_REQUIRED")
+	}
+	if len(rc.Instances) > 1 {
+		for _, instance := range rc.Instances {
+			if instance.UsageV2.Enabled {
+				return fmt.Errorf("USAGE_V2_SINGLE_SERVICE_REQUIRED")
+			}
+		}
+	}
 	if len(rc.Instances) == 0 {
 		return rc.Config.validate()
 	}
@@ -739,6 +750,9 @@ func normalizeBaseURL(raw string) (string, string, error) {
 }
 
 func (c *Config) validate() error {
+	if err := c.ValidateUsageV2(); err != nil {
+		return err
+	}
 	if c.Panel.Provider != "" && c.Panel.Provider != "xboard" && c.Panel.Provider != "txboard" {
 		return fmt.Errorf("panel.provider %q is not supported; available: xboard, txboard", c.Panel.Provider)
 	}

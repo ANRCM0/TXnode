@@ -47,6 +47,10 @@ func (s *Service) applyChanges(ctx context.Context, configChanged, usersChanged 
 		return
 	}
 
+	if s.usageMode() {
+		s.failUsageV2()
+		return
+	}
 	users := s.users.Users()
 	if s.lastConfig == nil || len(users) == 0 {
 		if len(users) == 0 {

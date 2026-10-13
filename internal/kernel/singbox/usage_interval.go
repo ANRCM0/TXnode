@@ -51,3 +51,69 @@ func (c *boundedTCPView) ReaderReplaceable() bool            { return false }
 func (c *boundedTCPView) WriterReplaceable() bool            { return false }
 
 func (c *boundedTCPView) ReportTargetIP(address netip.Addr) { c.base.ReportTargetIP(address) }
+
+// EnableEnforcingBounded is Service's explicit policy before first connection.
+// The isolated prototype constructor alone retains its original v1 behavior.
+func (t *ConnTracker) EnableEnforcingBounded() bool {
+	if t == nil || t.boundedUsage == nil {
+		return false
+	}
+	t.usersMu.Lock()
+	defer t.usersMu.Unlock()
+	if len(t.connMap) != 0 || t.enforceBounded {
+		return false
+	}
+	t.enforceBounded = true
+	return true
+}
+func (t *ConnTracker) CheckBoundedUsage() error {
+	if t == nil || t.boundedUsage == nil {
+		return usageinterval.ErrUnknown
+	}
+	return t.boundedUsage.CheckCurrent()
+}
+func (t *ConnTracker) StopBoundedUsageTraffic() {
+	if t == nil || t.boundedUsage == nil {
+		return
+	}
+	t.boundedUsage.Fail()
+	t.usersMu.RLock()
+	var closers []trackedConnection
+	for _, connection := range t.connMap {
+		closers = append(closers, connection)
+	}
+	t.usersMu.RUnlock()
+	for _, connection := range closers {
+		_ = connection.closer.Close()
+	}
+}
+
+func (s *SingBox) SetBoundedUsageTracker(tracker *ConnTracker) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if tracker == nil || !tracker.enforceBounded || s.box != nil || s.connTracker != nil || s.boundedPrepared != nil || s.localEventConsumer != nil {
+		return false
+	}
+	s.boundedPrepared = tracker
+	return true
+}
+func (s *SingBox) FlushBoundedUsage() (*usagev2.Submission, error) {
+	ct := s.connTrackerSafe()
+	if ct == nil {
+		return nil, usageinterval.ErrUnknown
+	}
+	return ct.FlushBoundedUsage()
+}
+func (s *SingBox) CheckBoundedUsage() error {
+	ct := s.connTrackerSafe()
+	if ct == nil {
+		return usageinterval.ErrUnknown
+	}
+	return ct.CheckBoundedUsage()
+}
+func (s *SingBox) StopBoundedUsageTraffic() {
+	ct := s.connTrackerSafe()
+	if ct != nil {
+		ct.StopBoundedUsageTraffic()
+	}
+}

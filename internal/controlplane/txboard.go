@@ -16,12 +16,13 @@ import (
 // TXBoardControlPlane speaks the native node/v1 protocol. Xboard transport
 // stays independent so existing deployments retain their wire contract.
 type TXBoardControlPlane struct {
-	client     *txboard.Client
-	kernel     config.KernelConfig
-	ws         config.WSConfig
-	machine    bool
-	sharedPush PushClient
-	register   func(chan<- StatusChange) *NodeMailbox
+	client          *txboard.Client
+	kernel          config.KernelConfig
+	ws              config.WSConfig
+	machine         bool
+	sharedPush      PushClient
+	register        func(chan<- StatusChange) *NodeMailbox
+	isolatedUsageV2 bool
 }
 
 func NewTXBoardControlPlane(p config.PanelConfig, ws config.WSConfig, kernel config.KernelConfig) *TXBoardControlPlane {
@@ -85,6 +86,15 @@ func (p *TXBoardControlPlane) Initial(ctx context.Context, metricsFn func() map[
 		return Bootstrap{}, errors.New("TXBoard initial config not available")
 	}
 	b := Bootstrap{PushInterval: hs.Settings.PushInterval, PullInterval: hs.Settings.PullInterval, Config: snapshot.Config, Users: snapshot.Users}
+	if p.isolatedUsageV2 {
+		session, transport, err := p.client.ServiceUsageV2(hs)
+		if err != nil {
+			return Bootstrap{}, err
+		}
+		b.UsageV2Session = session
+		b.UsageV2Transport = transport
+		b.UsageV2NativeHTTP = true
+	}
 	if p.machine {
 		b.Push = p.sharedPush
 		if p.sharedPush != nil && p.register != nil {
@@ -242,4 +252,15 @@ func TranslateTXBoardEvent(raw txboard.Event, k config.KernelConfig) (Event, err
 		}
 	}
 	return event, nil
+}
+
+func (p *TXBoardControlPlane) PrepareIsolatedUsageV2(caFile string) error {
+	if p == nil || p.machine || p.client == nil {
+		return errors.New("USAGE_V2_NATIVE_HTTP_REQUIRED")
+	}
+	if err := p.client.PrepareIsolatedUsageV2TLS(caFile); err != nil {
+		return err
+	}
+	p.isolatedUsageV2 = true
+	return nil
 }

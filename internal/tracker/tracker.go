@@ -3,6 +3,7 @@ package tracker
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"math"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -306,4 +307,55 @@ func copyTrafficMap(src map[int][2]int64) map[int][2]int64 {
 		dst[k] = v
 	}
 	return dst
+}
+
+func (t *Tracker) EmptyForUsageHandoff() bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, v := range t.pendingTraffic {
+		if v[0] != 0 || v[1] != 0 {
+			return false
+		}
+	}
+	for _, v := range t.lastSeen {
+		if v[0] != 0 || v[1] != 0 {
+			return false
+		}
+	}
+	live := t.live.Load()
+	return live != nil && live.connCount == 0 && len(live.online) == 0
+}
+
+// ProcessUsageV2Metrics preserves cumulative observations for runtime metrics
+// without constructing a second v1 billing queue. It requires an empty pending
+// v1 state; unexpected residual counters cannot be silently discarded.
+func (t *Tracker) ProcessUsageV2Metrics(cumulative map[int][2]int64, alive map[int]map[string]bool, connections int) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.pendingTraffic) != 0 {
+		return false
+	}
+	var up, down int64
+	for id, current := range cumulative {
+		previous := t.lastSeen[id]
+		if current[0] < previous[0] || current[1] < previous[1] || current[0] < 0 || current[1] < 0 {
+			return false
+		}
+		du, dd := current[0]-previous[0], current[1]-previous[1]
+		if du > math.MaxInt64-up || dd > math.MaxInt64-down {
+			return false
+		}
+		up += du
+		down += dd
+		t.lastSeen[id] = current
+	}
+	online := make(map[int]int, len(alive))
+	for id, ips := range alive {
+		online[id] = len(ips)
+	}
+	t.live.Store(&snapshot{traffic: map[int][2]int64{}, aliveIPs: alive, online: online, connCount: connections, inSpeed: down, outSpeed: up})
+	return true
 }

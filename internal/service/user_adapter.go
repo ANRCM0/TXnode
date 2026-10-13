@@ -90,6 +90,12 @@ func (s *Service) applyUserUpdate(
 	newHash string,
 	src userStateSource,
 ) {
+	if s.usageMode() {
+		if computeUserHash(users) != s.users.Hash() {
+			s.failUsageV2()
+		}
+		return
+	}
 	_ = ctx
 	s.observeBoundary("USER_UPDATE_BEGIN", true)
 	defer s.observeBoundary("USER_UPDATE_END", false)
@@ -125,6 +131,12 @@ func (s *Service) applyUserDelta(
 	action string,
 	deltaUsers []model.UserSpec,
 ) {
+	if s.usageMode() {
+		if len(deltaUsers) > 0 {
+			s.failUsageV2()
+		}
+		return
+	}
 	_ = ctx
 	if (action == "add" || action == "remove") && len(deltaUsers) > 0 {
 		s.observeBoundary("USER_DELTA_BEGIN", true)

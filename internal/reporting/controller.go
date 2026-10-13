@@ -249,3 +249,14 @@ func (b *backoff) onFailure() {
 		b.skipRemaining *= 2
 	}
 }
+
+// EmptyForUsageHandoff is sampled before any reporting/listener worker starts.
+// It never drains or acknowledges an uncertain batch.
+func (c *Controller) EmptyForUsageHandoff() bool {
+	if c == nil || c.active.Load() {
+		return false
+	}
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	return c.pending == nil && !c.active.Load()
+}

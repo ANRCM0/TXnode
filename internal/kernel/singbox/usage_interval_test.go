@@ -10,11 +10,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ANRCM0/TX-Node/internal/config"
+	"github.com/ANRCM0/TX-Node/internal/kernel"
+	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/usageinterval"
 	"github.com/ANRCM0/TX-Node/internal/usagev2"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
 	N "github.com/sagernet/sing/common/network"
+	"net"
 )
 
 func intervalSession() usagev2.Session {
@@ -309,4 +313,67 @@ func (f *intervalTransport) Submit(_ context.Context, s usagev2.Submission) (usa
 		return usagev2.Receipt{}, errors.New("synthetic persisted ACK response loss")
 	}
 	return r, nil
+}
+
+func TestEnforcingBoundedTrackerRefusesActualIOAfterUnknownOrExpiry(t *testing.T) {
+	tracker, _, _ := boundedTracker(t)
+	if !tracker.EnableEnforcingBounded() {
+		t.Fatal("mode enforcement refused before listener")
+	}
+	conn, peer := lifecycleTCP(t, tracker, "user")
+	tracker.StopBoundedUsageTraffic()
+	if n, err := conn.Write([]byte("refused-after-unknown")); n != 0 || err == nil {
+		t.Fatal("unknown mode performed write")
+	}
+	if n, err := conn.Read(make([]byte, 1)); n != 0 || err == nil {
+		t.Fatal("unknown mode performed read")
+	}
+	peer.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if n, err := peer.Read(make([]byte, 1)); n != 0 || err == nil {
+		t.Fatal("unknown mode peer received bytes")
+	}
+}
+func TestSingBoxPreparedUsageTrackerInstalledBeforeFirstStartAndCannotRestart(t *testing.T) {
+	dir := t.TempDir()
+	spool, err := usagev2.OpenSpool(filepath.Join(dir, "spool"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spool.Close()
+	session := intervalSession()
+	journal, err := usageinterval.OpenJournal(filepath.Join(dir, "journal"), session, spool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer journal.Close()
+	const uuid = "00112233-4455-6677-8899-aabbccddeeff"
+	tracker, err := NewConnTrackerWithBoundedUsage(session, map[string]int{uuid: 7}, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !tracker.EnableEnforcingBounded() {
+		t.Fatal("enforcement refused")
+	}
+	runtime := New(config.KernelConfig{Type: "singbox", ConfigDir: t.TempDir(), LogLevel: "error"})
+	if !runtime.SetBoundedUsageTracker(tracker) {
+		t.Fatal("prepared tracker attachment refused")
+	}
+	port, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	listenPort := port.Addr().(*net.TCPAddr).Port
+	port.Close()
+	users := []model.UserSpec{{ID: 7, UUID: uuid}}
+	spec := &model.NodeSpec{Protocol: "vless", ListenIP: "127.0.0.1", ServerPort: listenPort}
+	if err := runtime.Start(spec, users, kernel.TLSCert{}); err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Stop()
+	if runtime.connTrackerSafe() != tracker || !runtime.trackerRegistered {
+		t.Fatal("listener did not own prepared bounded producer")
+	}
+	if err := runtime.Start(spec, users, kernel.TLSCert{}); err == nil {
+		t.Fatal("frozen source allowed full tracker restart")
+	}
 }
