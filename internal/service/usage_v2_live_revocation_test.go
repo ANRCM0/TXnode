@@ -17,6 +17,9 @@ import (
 
 	"github.com/ANRCM0/TX-Node/internal/config"
 	"github.com/ANRCM0/TX-Node/internal/usagev2"
+	"github.com/sagernet/sing-vmess"
+	"github.com/sagernet/sing-vmess/vless"
+	"github.com/sagernet/sing/common/logger"
 	M "github.com/sagernet/sing/common/metadata"
 )
 
@@ -43,7 +46,11 @@ func TestServiceUsageV2LiveRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	caseName := os.Getenv("TXBOARD_LIVE_REVOCATION_CASE")
-	cfg := &config.Config{InstanceID: "live-revocation-" + fixture.Protocol, Panel: config.PanelConfig{Provider: "txboard", URL: os.Getenv("TXBOARD_LIVE_REVOCATION_ENDPOINT"), NodeID: id, Token: "live-revocation-local-test-only"}, Kernel: config.KernelConfig{Type: "singbox", ConfigDir: filepath.Join(dir, "kernel"), LogLevel: "error", CustomRoute: []map[string]any{{"network": "tcp", "ip_cidr": []string{"127.0.0.1/32"}, "port": []int{fixture.OriginPort}, "outbound": "direct"}}}, Cert: config.CertConfig{CertMode: "none"}, Node: config.NodeConfig{TrackInterval: 1, PushInterval: 5, PullInterval: 1, DeviceReportInterval: 60}, WS: config.WSConfig{DiscoveryInterval: 60}, UsageV2: config.UsageV2Config{Enabled: true, IsolatedCopy: true, Directory: filepath.Join(dir, "mode"), CAFile: filepath.Join(dir, "cert.pem")}}
+	routes := []map[string]any{{"network": "tcp", "ip_cidr": []string{"127.0.0.1/32"}, "port": []int{fixture.OriginPort}, "outbound": "direct"}}
+	if caseName == "udp" || caseName == "xudp" {
+		routes = append(routes, map[string]any{"network": "udp", "ip_cidr": []string{"127.0.0.1/32"}, "port": []int{fixture.OriginPort}, "outbound": "direct"})
+	}
+	cfg := &config.Config{InstanceID: "live-revocation-" + fixture.Protocol, Panel: config.PanelConfig{Provider: "txboard", URL: os.Getenv("TXBOARD_LIVE_REVOCATION_ENDPOINT"), NodeID: id, Token: "live-revocation-local-test-only"}, Kernel: config.KernelConfig{Type: "singbox", ConfigDir: filepath.Join(dir, "kernel"), LogLevel: "error", CustomRoute: routes}, Cert: config.CertConfig{CertMode: "none"}, Node: config.NodeConfig{TrackInterval: 1, PushInterval: 5, PullInterval: 1, DeviceReportInterval: 60}, WS: config.WSConfig{DiscoveryInterval: 60}, UsageV2: config.UsageV2Config{Enabled: true, IsolatedCopy: true, Directory: filepath.Join(dir, "mode"), CAFile: filepath.Join(dir, "cert.pem")}}
 	if err := os.MkdirAll(cfg.Kernel.ConfigDir, 0700); err != nil {
 		t.Fatal(err)
 	}
@@ -53,6 +60,14 @@ func TestServiceUsageV2LiveRevocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer origin.Close()
+	var udpOrigin *net.UDPConn
+	if caseName == "udp" || caseName == "xudp" {
+		udpOrigin, err = net.ListenUDP("udp4", &net.UDPAddr{IP: net.ParseIP("127.0.0.1"), Port: fixture.OriginPort})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer udpOrigin.Close()
+	}
 	svc, err := NewChecked(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -113,6 +128,60 @@ func TestServiceUsageV2LiveRevocation(t *testing.T) {
 		}
 	} else if phase != "tail" && phase != "expiry" {
 		t.Fatal("invalid live revocation phase")
+	}
+	if caseName == "udp" || caseName == "xudp" {
+		if phase != "history" || udpOrigin == nil {
+			t.Fatal("packet boundary requires the real history and isolated UDP route")
+		}
+		packetRaw, packet := revocationPacketDial(t, fixture.Protocol, caseName, nodeAddr, dest)
+		defer packetRaw.Close()
+		defer packet.Close()
+		payload := []byte("synthetic-unsupported-datagram")
+		if err := packet.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		written, writeErr := packet.WriteTo(payload, dest.UDPAddr())
+		if writeErr != nil && !errors.Is(writeErr, net.ErrClosed) {
+			t.Fatal("actual protocol packet write", writeErr)
+		}
+		if written != 0 && written != len(payload) {
+			t.Fatal("partial protocol packet write", written)
+		}
+		_ = udpOrigin.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
+		buffer := make([]byte, 256)
+		n, _, originErr := udpOrigin.ReadFromUDP(buffer)
+		if originErr == nil || n != 0 {
+			t.Fatal("unsupported UDP reached exact loopback origin", n, originErr)
+		}
+		if timeout, ok := originErr.(net.Error); !ok || !timeout.Timeout() {
+			t.Fatal("UDP origin refusal observation failed", originErr)
+		}
+		stopped := false
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatal("bounded packet failure returned success")
+			}
+			stopped = true
+		case <-time.After(1500 * time.Millisecond):
+		}
+		if !stopped {
+			cancel()
+			revocationStopped(t, done, false)
+		}
+		var historical usagev2.Record
+		if !revocationRecord(cfg.UsageV2.Directory, &historical) || historical.Receipt == nil || historical.Receipt.SettlementStatus != "settled" {
+			t.Fatal("settled original history missing after unsupported packet")
+		}
+		liveProtocolWrite(t, filepath.Join(dir, "boundary-result.json"), map[string]any{
+			"case": caseName, "protocol": fixture.Protocol,
+			"packet_api":         map[bool]string{true: "DialEarlyXUDPPacketConn", false: "DialEarlyPacketConn"}[caseName == "xudp"],
+			"actual_service_run": true, "udp_origin_datagrams": 0, "origin_closed": true,
+			"service_stopped_on_tracker_detection": stopped, "listener_closed": !svc.kernel.IsRunning(),
+			"historical_receipt": historical.Receipt.ReceiptID, "unknown_packet_successful_batch": false,
+			"production_authorization": false,
+		})
+		return
 	}
 
 	// A separate live flow has real measured bytes and an unfinished read. The
@@ -260,6 +329,52 @@ func revocationExchange(t *testing.T, origin *net.TCPListener, protocol, nodeAdd
 	}
 	return flow
 }
+
+func revocationPacketDial(t *testing.T, protocol, kind, address string, dest M.Socksaddr) (*net.TCPConn, net.PacketConn) {
+	t.Helper()
+	rawConn, err := (&net.Dialer{Timeout: 2 * time.Second}).Dial("tcp4", address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, ok := rawConn.(*net.TCPConn)
+	if !ok {
+		rawConn.Close()
+		t.Fatal("non-TCP protocol transport")
+	}
+	_ = raw.SetDeadline(time.Now().Add(5 * time.Second))
+	xudp := kind == "xudp"
+	if protocol == "vless" {
+		client, err := vless.NewClient(liveProtocolUUID, "", logger.NOP())
+		if err != nil {
+			raw.Close()
+			t.Fatal(err)
+		}
+		if xudp {
+			packet, err := client.DialEarlyXUDPPacketConn(raw, dest)
+			if err != nil {
+				raw.Close()
+				t.Fatal(err)
+			}
+			return raw, packet
+		}
+		packet, err := client.DialEarlyPacketConn(raw, dest)
+		if err != nil {
+			raw.Close()
+			t.Fatal(err)
+		}
+		return raw, packet
+	}
+	client, err := vmess.NewClient(liveProtocolUUID, "aes-128-gcm", 0)
+	if err != nil {
+		raw.Close()
+		t.Fatal(err)
+	}
+	if xudp {
+		return raw, client.DialEarlyXUDPPacketConn(raw, dest)
+	}
+	return raw, client.DialEarlyPacketConn(raw, dest)
+}
+
 func revocationRecord(modeDir string, record *usagev2.Record) bool {
 	files, _ := filepath.Glob(filepath.Join(modeDir, "spool", "*.json"))
 	if len(files) != 1 {
