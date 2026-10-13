@@ -19,6 +19,7 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/audit"
 	"github.com/ANRCM0/TX-Node/internal/nlog"
 	"github.com/ANRCM0/TX-Node/internal/usagebucket"
+	"github.com/ANRCM0/TX-Node/internal/usageinterval"
 )
 
 // ipPool caches ipSnapshot maps to reduce allocations.
@@ -147,6 +148,7 @@ type ConnTracker struct {
 	auditor *audit.Reporter
 	// Fixed at construction; nil on the ordinary runtime path.
 	eventBuckets *usagebucket.Meter
+	boundedUsage *usageinterval.Collector
 }
 
 type trackedConnection struct {
@@ -180,6 +182,9 @@ func (t *ConnTracker) SetDeviceLimitFunc(fn func(uuid string) (int, bool)) {
 // another connection; their established TCP and UDP wrappers are closed.
 // Cumulative stats are retained so the final bytes remain reportable.
 func (t *ConnTracker) SetUserMap(m map[string]int) {
+	if t.boundedUsage != nil {
+		t.boundedUsage.CheckUsers(m)
+	}
 	next := make(map[string]int, len(m))
 	for uuid, uid := range m {
 		if uuid != "" && uid > 0 {
@@ -282,6 +287,9 @@ func (t *ConnTracker) RoutedConnection(
 	us := t.users[uid]
 	t.usersMu.RUnlock()
 	if uid <= 0 || us == nil {
+		if t.boundedUsage != nil {
+			t.boundedUsage.Fail()
+		}
 		_ = conn.Close()
 		return conn
 	}
@@ -334,6 +342,9 @@ func (t *ConnTracker) RoutedConnection(
 		_ = conn.Close()
 		return conn
 	}
+	if t.boundedUsage != nil {
+		return &boundedTCPView{base: wrapped}
+	}
 	return wrapped
 }
 
@@ -344,6 +355,9 @@ func (t *ConnTracker) RoutedPacketConnection(
 	metadata adapter.InboundContext,
 	_ adapter.Rule, _ adapter.Outbound,
 ) N.PacketConn {
+	if t.boundedUsage != nil {
+		t.boundedUsage.Fail()
+	}
 	uuid := metadata.User
 	sourceIP := metadata.Source.Addr.String()
 
@@ -675,6 +689,7 @@ type trackedConn struct {
 	closeOnce     sync.Once
 	closeErr      error
 	bucketSession *usagebucket.Session
+	boundedClosed atomic.Bool
 }
 
 func (c *trackedConn) reportAudit(targetIP string) {
@@ -709,7 +724,20 @@ func (c *trackedConn) Read(b []byte) (int, error) {
 	if c.bucketSession != nil {
 		operation = c.bucketSession.Begin()
 	}
+	var bounded *usageinterval.Operation
+	if c.tracker.boundedUsage != nil {
+		if c.boundedClosed.Load() {
+			c.tracker.boundedUsage.Fail()
+		}
+		bounded = c.tracker.boundedUsage.Begin(c.userID)
+	}
 	n, err := c.Conn.Read(b)
+	if c.tracker.boundedUsage != nil {
+		if c.boundedClosed.Load() {
+			c.tracker.boundedUsage.Fail()
+		}
+		c.tracker.boundedUsage.Complete(bounded, "upload", int64(n), err != nil)
+	}
 	if n > 0 {
 		if c.us != nil {
 			c.us.upload.Add(int64(n)) // 从入站读取 = 用户上传
@@ -769,7 +797,20 @@ func (c *trackedConn) Write(b []byte) (int, error) {
 	if c.bucketSession != nil {
 		operation = c.bucketSession.Begin()
 	}
+	var bounded *usageinterval.Operation
+	if c.tracker.boundedUsage != nil {
+		if c.boundedClosed.Load() {
+			c.tracker.boundedUsage.Fail()
+		}
+		bounded = c.tracker.boundedUsage.Begin(c.userID)
+	}
 	n, err := c.Conn.Write(b)
+	if c.tracker.boundedUsage != nil {
+		if c.boundedClosed.Load() {
+			c.tracker.boundedUsage.Fail()
+		}
+		c.tracker.boundedUsage.Complete(bounded, "download", int64(n), err != nil)
+	}
 	if n > 0 && c.us != nil {
 		c.us.download.Add(int64(n)) // 向入站写入 = 用户下载
 	}
@@ -782,6 +823,9 @@ func (c *trackedConn) Write(b []byte) (int, error) {
 func (c *trackedConn) Close() error {
 	c.reportAudit("")
 	c.closeOnce.Do(func() {
+		if c.tracker.boundedUsage != nil {
+			c.boundedClosed.Store(true)
+		}
 		if c.bucketSession != nil {
 			c.bucketSession.Close()
 		}
@@ -855,6 +899,9 @@ func (c *trackedConn) makeLegacyCountFunc(counter *atomic.Int64) N.CountFunc {
 }
 
 func (c *trackedConn) UnwrapReader() (io.Reader, []N.CountFunc) {
+	if c.tracker.boundedUsage != nil {
+		return &boundedTCPView{base: c}, nil
+	}
 	c.reportAudit("")
 	if c.us == nil {
 		return c.Conn, nil
@@ -863,6 +910,9 @@ func (c *trackedConn) UnwrapReader() (io.Reader, []N.CountFunc) {
 }
 
 func (c *trackedConn) UnwrapWriter() (io.Writer, []N.CountFunc) {
+	if c.tracker.boundedUsage != nil {
+		return &boundedTCPView{base: c}, nil
+	}
 	c.reportAudit("")
 	if c.us == nil {
 		return c.Conn, nil
@@ -870,9 +920,14 @@ func (c *trackedConn) UnwrapWriter() (io.Writer, []N.CountFunc) {
 	return c.Conn, []N.CountFunc{c.makeCountFunc(&c.us.download, usagebucket.TCPWriteCallback, usagebucket.Download)} // 向入站写入 = 用户下载
 }
 
-func (c *trackedConn) Upstream() any           { return c.Conn }
-func (c *trackedConn) ReaderReplaceable() bool { return true }
-func (c *trackedConn) WriterReplaceable() bool { return true }
+func (c *trackedConn) Upstream() any {
+	if c.tracker.boundedUsage != nil {
+		return nil
+	}
+	return c.Conn
+}
+func (c *trackedConn) ReaderReplaceable() bool { return c.tracker.boundedUsage == nil }
+func (c *trackedConn) WriterReplaceable() bool { return c.tracker.boundedUsage == nil }
 
 // ─── trackedPacketConn (UDP / QUIC) ─────────────────────────────────────────
 
