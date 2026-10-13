@@ -107,8 +107,33 @@
     }
   ],
   "remote_ci": {
-    "status": "not_started_by_agent",
-    "existing_workflow": ".github/workflows/ci-provider-proof.yml",
-    "notes": "Existing path filter and whole providerproof race/vet plus actual-Core test already cover this slice; root owns commit/push and remote result closure."
+    "status": "all-triggered-runs-passed",
+    "commit": "6351957f8fb947b8edc50d37c8f5861d6c7cb476",
+    "runs": [
+      {
+        "conclusion": "success",
+        "databaseId": 38427902327,
+        "headSha": "6351957f8fb947b8edc50d37c8f5861d6c7cb476",
+        "name": "Documentation",
+        "status": "completed",
+        "url": "https://github.com/ANRCM0/TXBoard/actions/runs/38427902327"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38427902294,
+        "headSha": "6351957f8fb947b8edc50d37c8f5861d6c7cb476",
+        "name": "provider-offline-proof",
+        "status": "completed",
+        "url": "https://github.com/ANRCM0/TXBoard/actions/runs/38427902294"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38427902269,
+        "headSha": "6351957f8fb947b8edc50d37c8f5861d6c7cb476",
+        "name": "Node CI and images",
+        "status": "completed",
+        "url": "https://github.com/ANRCM0/TXBoard/actions/runs/38427902269"
+      }
+    ]
   }
 }
