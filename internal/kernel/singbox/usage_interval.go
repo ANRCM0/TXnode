@@ -1,11 +1,13 @@
 package singbox
 
 import (
-	"github.com/ANRCM0/TX-Node/internal/usageinterval"
-	"github.com/ANRCM0/TX-Node/internal/usagev2"
 	"net"
 	"net/netip"
 	"time"
+
+	"github.com/ANRCM0/TX-Node/internal/usageinterval"
+	"github.com/ANRCM0/TX-Node/internal/usagev2"
+	singM "github.com/sagernet/sing/common/metadata"
 )
 
 // NewConnTrackerWithBoundedUsage is a prototype producer/consumer opt-in. No
@@ -66,6 +68,25 @@ func (t *ConnTracker) EnableEnforcingBounded() bool {
 	t.enforceBounded = true
 	return true
 }
+
+// AdmitRoutedConnection is called by the pinned sing-box fork before it starts
+// an outbound handler, so unsupported virtual mux streams cannot dial origins.
+func (t *ConnTracker) AdmitRoutedConnection(conn net.Conn) bool {
+	if t == nil || t.boundedUsage == nil || !t.enforceBounded {
+		return true
+	}
+	remote := conn.RemoteAddr()
+	if remote.Network() == "tcp" {
+		return true
+	}
+	if address, ok := remote.(singM.Socksaddr); ok && address.IsValid() {
+		return true
+	}
+	t.boundedUsage.Fail()
+	_ = conn.Close()
+	return false
+}
+
 func (t *ConnTracker) CheckBoundedUsage() error {
 	if t == nil || t.boundedUsage == nil {
 		return usageinterval.ErrUnknown

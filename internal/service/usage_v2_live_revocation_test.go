@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/ANRCM0/TX-Node/internal/config"
 	"github.com/ANRCM0/TX-Node/internal/usagev2"
+	"github.com/gofrs/uuid/v5"
 	"github.com/sagernet/sing-vmess"
 	"github.com/sagernet/sing-vmess/vless"
 	"github.com/sagernet/sing/common/logger"
@@ -180,6 +182,79 @@ func TestServiceUsageV2LiveRevocation(t *testing.T) {
 			"service_stopped_on_tracker_detection": stopped, "listener_closed": !svc.kernel.IsRunning(),
 			"historical_receipt": historical.Receipt.ReceiptID, "unknown_packet_successful_batch": false,
 			"production_authorization": false,
+		})
+		return
+	}
+	if caseName == "tcp-mux" {
+		if phase != "history" {
+			t.Fatal("classic TCP mux boundary requires the real history baseline")
+		}
+		var historical usagev2.Record
+		if !revocationRecord(cfg.UsageV2.Directory, &historical) || historical.Receipt == nil || historical.Receipt.SettlementStatus != "settled" {
+			t.Fatal("settled original history missing before classic mux")
+		}
+		muxRaw, muxConn := revocationTCPMuxDial(t, fixture.Protocol, nodeAddr, dest)
+		defer muxRaw.Close()
+		defer muxConn.Close()
+		payload := []byte("synthetic-classic-tcp-mux")
+		frame := new(bytes.Buffer)
+		address := new(bytes.Buffer)
+		if err := vmess.AddressSerializer.WriteAddrPort(address, dest); err != nil {
+			t.Fatal("locked destination serializer", err)
+		}
+		_ = binary.Write(frame, binary.BigEndian, uint16(5+address.Len()))
+		_ = binary.Write(frame, binary.BigEndian, uint16(1))
+		_ = frame.WriteByte(vmess.StatusNew)
+		_ = frame.WriteByte(vmess.OptionData)
+		_ = frame.WriteByte(vmess.NetworkTCP)
+		_, _ = frame.Write(address.Bytes())
+		_ = binary.Write(frame, binary.BigEndian, uint16(len(payload)))
+		_, _ = frame.Write(payload)
+		if _, err := muxConn.Write(frame.Bytes()); err != nil {
+			t.Fatal("locked classic TCP mux frame write", err)
+		}
+		_ = origin.SetDeadline(time.Now().Add(1200 * time.Millisecond))
+		originConn, originErr := origin.AcceptTCP()
+		originReached := originErr == nil
+		var originPayload []byte
+		if originReached {
+			_ = originConn.SetDeadline(time.Now().Add(time.Second))
+			originPayload = make([]byte, len(payload))
+			_, _ = io.ReadFull(originConn, originPayload)
+			_ = originConn.Close()
+		} else if timeout, ok := originErr.(net.Error); !ok || !timeout.Timeout() {
+			t.Fatal("classic mux origin observation failed", originErr)
+		}
+		if originReached {
+			liveProtocolWrite(t, filepath.Join(dir, "tcp-mux-bypass.json"), map[string]any{
+				"case": caseName, "protocol": fixture.Protocol, "outer_command": "CommandMux",
+				"inner_network": "TCP", "origin_connection": true,
+				"origin_received_payload": string(originPayload) == string(payload),
+				"origin_payload_sha256":   liveProtocolSHA(originPayload), "listener_closed": !svc.kernel.IsRunning(),
+				"historical_batch": historical.Submission.Payload.BatchID, "historical_receipt": historical.Receipt.ReceiptID,
+				"production_authorization": false,
+			})
+			t.Fatal("LIVE_REVOCATION_CLASSIC_TCP_MUX_REACHED_ORIGIN")
+		}
+		stopped := false
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatal("bounded mux failure returned success")
+			}
+			stopped = true
+		case <-time.After(1500 * time.Millisecond):
+		}
+		if !stopped {
+			cancel()
+			revocationStopped(t, done, false)
+		}
+		liveProtocolWrite(t, filepath.Join(dir, "boundary-result.json"), map[string]any{
+			"case": caseName, "protocol": fixture.Protocol, "outer_command": "CommandMux",
+			"inner_network": "TCP", "origin_connection": false, "actual_service_run": true,
+			"service_stopped_on_tracker_detection": stopped, "listener_closed": !svc.kernel.IsRunning(),
+			"historical_receipt":           historical.Receipt.ReceiptID,
+			"unknown_mux_successful_batch": false, "production_authorization": false,
 		})
 		return
 	}
@@ -373,6 +448,49 @@ func revocationPacketDial(t *testing.T, protocol, kind, address string, dest M.S
 		return raw, client.DialEarlyXUDPPacketConn(raw, dest)
 	}
 	return raw, client.DialEarlyPacketConn(raw, dest)
+}
+
+func revocationTCPMuxDial(t *testing.T, protocol, address string, dest M.Socksaddr) (*net.TCPConn, net.Conn) {
+	t.Helper()
+	rawConn, err := (&net.Dialer{Timeout: 2 * time.Second}).Dial("tcp4", address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, ok := rawConn.(*net.TCPConn)
+	if !ok {
+		rawConn.Close()
+		t.Fatal("non-TCP protocol transport")
+	}
+	_ = raw.SetDeadline(time.Now().Add(5 * time.Second))
+	if protocol == "vless" {
+		id, err := uuid.FromString(liveProtocolUUID)
+		if err != nil {
+			raw.Close()
+			t.Fatal(err)
+		}
+		conn := vless.NewConn(raw, id, vmess.CommandMux, dest, "")
+		if _, err := conn.Write(nil); err != nil {
+			raw.Close()
+			t.Fatal("VLESS CommandMux handshake", err)
+		}
+		return raw, conn
+	}
+	client, err := vmess.NewClient(liveProtocolUUID, "aes-128-gcm", 0)
+	if err != nil {
+		raw.Close()
+		t.Fatal(err)
+	}
+	packet := client.DialEarlyXUDPPacketConn(raw, dest)
+	conn, ok := packet.(*vmess.XUDPConn)
+	if !ok {
+		raw.Close()
+		t.Fatal("locked VMess XUDP client concrete type changed")
+	}
+	if _, err := conn.Conn.Write(nil); err != nil {
+		raw.Close()
+		t.Fatal("VMess CommandMux handshake", err)
+	}
+	return raw, conn.Conn
 }
 
 func revocationRecord(modeDir string, record *usagev2.Record) bool {

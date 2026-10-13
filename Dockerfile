@@ -8,6 +8,7 @@ RUN apk add --no-cache git
 WORKDIR /build
 
 COPY go.mod go.sum ./
+COPY internal/deps/sing-box ./internal/deps/sing-box
 RUN go mod download
 
 COPY . .

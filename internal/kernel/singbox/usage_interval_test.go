@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,9 +18,13 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/usagev2"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
+	singM "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
-	"net"
 )
+
+type unaddressedMuxStream struct{ net.Conn }
+
+func (unaddressedMuxStream) RemoteAddr() net.Addr { return singM.Socksaddr{} }
 
 func intervalSession() usagev2.Session {
 	now := time.Now().Unix()
@@ -331,6 +336,25 @@ func TestEnforcingBoundedTrackerRefusesActualIOAfterUnknownOrExpiry(t *testing.T
 	peer.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
 	if n, err := peer.Read(make([]byte, 1)); n != 0 || err == nil {
 		t.Fatal("unknown mode peer received bytes")
+	}
+}
+
+func TestEnforcingBoundedTrackerRejectsUnaddressedMuxStreamBeforeRouting(t *testing.T) {
+	tracker, _, _ := boundedTracker(t)
+	if !tracker.EnableEnforcingBounded() {
+		t.Fatal("mode enforcement refused before listener")
+	}
+	local, peer := net.Pipe()
+	t.Cleanup(func() { _ = local.Close(); _ = peer.Close() })
+	if tracker.AdmitRoutedConnection(unaddressedMuxStream{local}) {
+		t.Fatal("unaddressed mux stream passed bounded route admission")
+	}
+	if err := tracker.CheckBoundedUsage(); err != usageinterval.ErrUnknown {
+		t.Fatalf("unaddressed mux stream state = %v, want unknown", err)
+	}
+	_ = peer.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	if n, err := peer.Read(make([]byte, 1)); n != 0 || err == nil {
+		t.Fatal("rejected mux stream remained connected")
 	}
 }
 func TestSingBoxPreparedUsageTrackerInstalledBeforeFirstStartAndCannotRestart(t *testing.T) {
