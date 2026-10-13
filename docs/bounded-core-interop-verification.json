@@ -209,9 +209,27 @@
   ],
   "source_freeze_verified": true,
   "remote_ci": {
-    "status": "not_started_by_agent",
-    "root_owns_commit_push_and_ci": true,
-    "notes": "New fixture is outside default Node unit suite; root should wire a dedicated integration workflow with PHP autoload-dev, Go race, MariaDB exclusive user/database and local Redis."
+    "status": "passed",
+    "verified_date_local": "2026-10-14",
+    "head_sha": "614acb8db1ea0a725d57082de3934280a10ac453",
+    "all_triggered_runs": 25,
+    "all_triggered_runs_success": true,
+    "evidence_sha256": "00d8596cbe3cc79163e3e04ba566c38f4c0e1203b8f413ae7eebd9e2d94f67d2",
+    "runs": [
+      {
+        "name": "bounded-node-core-usage",
+        "databaseId": 38440703675,
+        "headSha": "614acb8db1ea0a725d57082de3934280a10ac453",
+        "status": "completed",
+        "conclusion": "success",
+        "url": "https://github.com/ANRCM0/TXBoard/actions/runs/38440703675"
+      }
+    ],
+    "earlier_run": {
+      "head_sha": "7c119c14cae955a112b559396488fc979af8a602",
+      "conclusion": "cancelled",
+      "reason": "superseded by newer workflow concurrency; completed replacement is recorded above"
+    }
   },
   "previous_verified_runs": [
     {
@@ -384,8 +402,9 @@
     "workflow": ".github/workflows/ci-bounded-node-usage.yml",
     "workflow_sha256": "f03e10bc7775118f5ddbee6810cef8a0204f13cae2ef69eb7d849028c8396c97",
     "actionlint": "passed",
-    "status": "pending-after-push",
+    "status": "passed",
     "database_engine": "Oracle MySQL8.4",
-    "scope": "Actual TCP -> verified Node HTTPS -> SQL ACK -> settlement -> Node replay/query; independent fixture principal"
+    "scope": "Actual TCP -> verified Node HTTPS -> SQL ACK -> settlement -> Node replay/query; independent fixture principal",
+    "verified_head_sha": "614acb8db1ea0a725d57082de3934280a10ac453"
   }
 }
