@@ -92,7 +92,8 @@ func (c *Controller) Poll(ctx context.Context, currentConfigHash string, certCha
 			}
 		}
 		if snapshot.Users != nil {
-			result.Users = append([]model.UserSpec(nil), snapshot.Users...)
+			result.Users = make([]model.UserSpec, len(snapshot.Users))
+			copy(result.Users, snapshot.Users)
 			result.UserHash = UserHash(snapshot.Users)
 		}
 

@@ -110,6 +110,42 @@ func TestControllerPollPreparesHashedSnapshot(t *testing.T) {
 	}
 }
 
+func TestControllerPreservesNilAndEmptyUserSnapshots(t *testing.T) {
+	tests := []struct {
+		name    string
+		users   []model.UserSpec
+		wantNil bool
+	}{
+		{name: "nil means unchanged", users: nil, wantNil: true},
+		{name: "empty means remove all users", users: []model.UserSpec{}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			source := &fakeSource{
+				supportsPoll: true,
+				pollResult:   controlplane.Snapshot{Users: tt.users},
+			}
+			controller := New(source)
+			if !controller.Poll(context.Background(), "", false) {
+				t.Fatal("poll should start")
+			}
+
+			select {
+			case result := <-controller.Results():
+				if gotNil := result.Users == nil; gotNil != tt.wantNil {
+					t.Fatalf("result.Users == nil: %t, want %t", gotNil, tt.wantNil)
+				}
+				if !tt.wantNil && result.UserHash != UserHash([]model.UserSpec{}) {
+					t.Fatalf("empty snapshot hash = %q, want %q", result.UserHash, UserHash([]model.UserSpec{}))
+				}
+			case <-time.After(time.Second):
+				t.Fatal("timed out waiting for poll result")
+			}
+		})
+	}
+}
+
 func TestControllerSuppressesUnchangedConfigUnlessCertificateChanged(t *testing.T) {
 	cfg := &model.NodeSpec{Protocol: "vless", ServerPort: 443}
 	source := &fakeSource{
@@ -230,7 +266,6 @@ func TestControllerCoalescesResyncRequests(t *testing.T) {
 	<-controller.Results()
 }
 
-
 func TestControllerDoesNotLatchResyncWhenPollingUnsupported(t *testing.T) {
 	source := &fakeSource{supportsPoll: false}
 	controller := New(source)
@@ -255,7 +290,6 @@ func TestControllerDoesNotLatchResyncWhenPollingUnsupported(t *testing.T) {
 		t.Fatal("timed out waiting for resync poll")
 	}
 }
-
 
 func TestControllerConsecutivePollResultHandoffStress(t *testing.T) {
 	source := &fakeSource{
