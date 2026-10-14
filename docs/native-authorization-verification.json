@@ -377,5 +377,13 @@
                                    "ha-or-disk-anti-rollback",
                                    "full-protocol-matrix"
                                ],
-    "post_acceptance_guard_note":  "Linux final snapshot native-authorization-final-r1 focused race run passed 184 main tests and 224 subtests across authorization/config/txboard/controlplane/nodesync/service, including the root-with-instances guard. The earlier full Node run in native-authorization-integrated-r2 passed 613 main and 577 subtests. Exact focused evidence: .tmp/native-authorization-final-r1/focused-result.json; source SHA-256: .tmp/native-authorization-final-r1/manifest.json."
+    "post_acceptance_guard_note":  "Linux final snapshot native-authorization-final-r1 focused race run passed 184 main tests and 224 subtests across authorization/config/txboard/controlplane/nodesync/service, including the root-with-instances guard. The earlier full Node run in native-authorization-integrated-r2 passed 613 main and 577 subtests. Exact focused evidence: .tmp/native-authorization-final-r1/focused-result.json; source SHA-256: .tmp/native-authorization-final-r1/manifest.json.",
+    "exact_head_ci_retry":  {
+                                "previous_commit":  "1bc8253e89e4a5dc9dffc6b8acdd7e1cb7b92d47",
+                                "run_id":  38631214227,
+                                "failed_job":  "Node Go tests and source guards",
+                                "failure":  "transient proxy.golang.org HTTP/2 INTERNAL_ERROR while downloading cronet-go Windows artifact during go mod tidy -diff",
+                                "local_evidence":  "same full Go suite, vet and build passed on Linux snapshots; b480f9f exact-head Node suite also passed",
+                                "repository_rerun":  "gh run rerun denied because current GitHub identity lacks repository admin rights; new review-branch push will trigger the configured Node CI path"
+                            }
 }
