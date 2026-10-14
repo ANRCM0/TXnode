@@ -24,6 +24,10 @@ Core 分方向按3:2向下取整结算64/118，共182字节。进程正常结束
 受影响包 vet、Python 编译和新增恢复 workflow 的 actionlint 通过。
 新增 Oracle MySQL8.4/Redis7.4 独立协议 matrix 将在推送后核对。
 
+`64309e8` 远端收尾：source 延续 MySQL8.4 matrix、Service、真实协议、bounded、
+Node 测试与镜像兼容、文档共六个 workflow 全部成功。后续 Core 恢复拒绝与真实
+SQL 恢复案例见[恢复边界验收](live-recovery-boundaries.md)，原 r22 证据保持保留。
+
 这完成 B3.9 的 source 延续切片。Core 实例/回执代际不匹配、真实 SQL 恢复后
 已确认回执消失仍待实际验收；生产 Provider、可信时间、全局写入排空及权威切换
 门禁继续保留。本阶段没有修改 Core 权威写入候选，也没有开启生产 Node v2。

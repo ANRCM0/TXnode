@@ -1,0 +1,945 @@
+{
+  "phase": "B3.9 Core identity and actual SQL restore boundaries",
+  "status": "verified-isolated-eight-real-protocol-cases",
+  "production_acceptance": false,
+  "verified_date_local": "2026-10-14",
+  "timezone": "Asia/Shanghai",
+  "source_snapshot": {
+    "base": "64309e8303ff5a9516905ad18787cbf71d934b47",
+    "archive_name": "node-live-recovery-64309e8.tar",
+    "archive_sha256": "6b98167977301eac984f8e4928e514d00e1a9a6588c8c38cb23a58d71a7eb4a7",
+    "source_sha256": {
+      "node/internal/service/usage_v2_live_revocation_test.go": "ab55f6706cd83f279b36d1e9f90afa441e76de2ccfa80095f3c3224a71c2e086",
+      "node/internal/service/usage_v2_live_recovery_test.go": "2166a84169925a25fecd4b8e5a818394874308f027ead9c156f62704e34135f7",
+      "scripts/tests/node-live-revocation/run.py": "1a48ce4579b806cbd225d902a1278b9d7aaea4d78f0efc44264ed47ca69c07f6",
+      "scripts/tests/node-live-revocation/fixture.php": "df346fce690cf1489c6344e73982b9751baf223433a953b0cc9866d3baa950d0",
+      "scripts/tests/node-live-revocation/tls-proxy.py": "24a0754c55942f597f5058888d3f92f0c6cb91cce88f958c82b4e64a3d2d2f5c"
+    },
+    "go_mod_sha256": "508a1aa3d828005b403eaa58c64df6b930ab7367f9f084aab1741b3f236bd25d",
+    "go_sum_sha256": "8b0f5399a4b5c12f6fbbc0b6928c98a6e3835ab6ce26eb0866ca789ff612f61b",
+    "composer_lock_sha256": "f47b212c2fc530a7820e370eab7c6d624d13962e7d26e4f2ddf57a11848257c0",
+    "installed_json_sha256": "8e668e456c9772ae428a038ab003fba5752ab2591980fc8396d9122851145b80"
+  },
+  "verification": {
+    "same_go_source_full_race": {
+      "mode": "go",
+      "exit_code": 0,
+      "log_sha256": "940ac751731762adc4cc620bbad7ba5f83671ad201c1262a75a8fc48f951a00a",
+      "snapshot": "/opt/txboard-baseline/node-live-revocation-r23",
+      "main_passed": 475,
+      "subtests_passed": 334,
+      "skipped": 5,
+      "failed": 0
+    },
+    "same_go_source_affected_vet": {
+      "mode": "vet",
+      "exit_code": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "snapshot": "/opt/txboard-baseline/node-live-revocation-r23"
+    },
+    "cases": {
+      "source-continue": {
+        "vless": {
+          "record": {
+            "mode": "vless",
+            "exit_code": 0,
+            "log_sha256": "5e7d14f9b1defa4cac20a2ffd5d26e9f1d06cb7679996026775236b689463699",
+            "snapshot": "/opt/txboard-baseline/node-live-revocation-r24",
+            "actual_result": {
+              "status": "verified-isolated-live-boundary",
+              "case": "source-continue",
+              "protocol": "vless",
+              "actual_service_run": true,
+              "actual_singbox_kernel": true,
+              "native_mutation": null,
+              "historical_persisted_ack_sql": {
+                "persisted_ack_sql_verified": true,
+                "batch_rows": "1",
+                "entry_rows": "0",
+                "receipt_id": "receipt_8063b0cb-0361-49be-b97f-763772a65cd6",
+                "scheduled_heartbeat_ack_verified": true,
+                "legacy_user_u": "0",
+                "legacy_user_d": "0",
+                "legacy_batch_rows": "0"
+              },
+              "historical_settlement": {
+                "status": "settled",
+                "sql_batch_rows": "1",
+                "sql_entry_rows": "1",
+                "raw_up_bytes": "43",
+                "raw_down_bytes": "79",
+                "billed_up_bytes": "64",
+                "billed_down_bytes": "118",
+                "billable_bytes": "182",
+                "receipt_id": "receipt_8063b0cb-0361-49be-b97f-763772a65cd6",
+                "second_scan_empty": true,
+                "legacy_user_u": "0",
+                "legacy_user_d": "0"
+              },
+              "final_sql": {
+                "status": "settled",
+                "batch_rows": "2",
+                "entry_rows": "2",
+                "old_source_epoch": "1",
+                "new_source_epoch": "2",
+                "historical_billable_bytes": "182",
+                "new_billable_bytes": "83",
+                "billable_bytes": "265",
+                "historical_receipt": "receipt_8063b0cb-0361-49be-b97f-763772a65cd6",
+                "new_receipt": "receipt_77c920f9-9fe3-48b7-92c0-a6e2c47fd5df",
+                "original_sql_history_unchanged": true,
+                "billed_up_bytes": "119",
+                "billed_down_bytes": "146",
+                "legacy_user_u": "0",
+                "legacy_user_d": "0"
+              },
+              "boundary": {
+                "actual_service_run": true,
+                "core_instance_id": "live_revocation_core_fixture_1",
+                "new_batch_id": "20c7043813d66059beb66b0af89cffaf",
+                "new_download_bytes": "19",
+                "new_receipt_id": "receipt_77c920f9-9fe3-48b7-92c0-a6e2c47fd5df",
+                "new_source_epoch": "2",
+                "new_upload_bytes": "37",
+                "old_batch_id": "bcf1ab079ddb577d00028a53ffd6e8f0",
+                "old_history_unchanged": true,
+                "old_receipt_id": "receipt_8063b0cb-0361-49be-b97f-763772a65cd6",
+                "old_source_epoch": "1",
+                "protocol": "vless",
+                "receipt_generation": "1"
+              },
+              "artifacts_sha256": {
+                "continuation-ready.json": "b0d22df19e98471c2f419a3c5160154c4176a14d27050cc1f145d68b2f303528",
+                "history-capture.json": "85434abd41e9a106c28c48eef6a87e034e81a935056cc10af850f29ae0050563",
+                "sql-continuation-settlement.log": "1c56673a48a12c6a02b286c98b2d099dab888caa60b17fafa146c6917b97ab37",
+                "continuation-result.json": "05366bb31038cd00bbaffc8a0c65440d1775bff3f2e3efec2d57841d54bedbca",
+                "sql-pending.log": "89d9e139bb8ee41964bac4957c03e7baae215335ea266cf5293ebcf84669ee72",
+                "sql-settlement.log": "ce4a864b788993236e2ed339301f03c6fbd1c66b63332406411128958f50f2dd",
+                "continuation-issued.json": "ce159959d39f60f43521ef54af64145281aabb3b2513b8a7f51abde6c2c2bf08",
+                "continuation-capture.json": "009213babf570614bccf2e1d4a5640fcd0365079562e8e9600dba112885f7396",
+                "fixture.json": "634ad87ec538997b4ca1fc7f80c7c8b5f6c698074f75ca1c50cb5dc89a5ae980",
+                "native-observations.jsonl": "ea709b869a14d5ca22cfd034ab20cf20bd4621d66eaaf8e312970b25f549fab4",
+                "sql-final.log": "1c56673a48a12c6a02b286c98b2d099dab888caa60b17fafa146c6917b97ab37",
+                "history-ready.json": "27b76b66118ccb86690a3d6091007cc94bb8f1c6bd165075308eb64a69e0c2f9",
+                "cert.pem": "3ff99313db21c6d7b91112f31dd5f178db8bebad84240bc3145b104fff6122dc",
+                "history-frozen.json": "f709950306164339c7cb31748a935731be3059abd3a23b65699bb40af1f7aab3",
+                "mode/spool/e1d094319d2e190056a9745dc27823dc0917cd2bd3ecddd5d382101d93188fc9.usage.json": "e7dab57ccc9554082696e37c60df4dd14da1a3c1c99e225ccb02233a02467e8a",
+                "mode/spool/.usage-session": "c54c6eee42dfc36634a81545b77eadb9b6b88af441f0e19fa5711f3d3e332c5e",
+                "mode/spool/.usage.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "mode/spool/976478aabd77bdf40e6a0423ee3fc92da540c01475c1a8e05c2eeae9660c15b0.usage.json": "e5f13965a4cbe5279c460a89dd18147986842c09705dea5af88a124dc22189d2",
+                "mode/journal/27ae8025e70e3517cb5f8aea3d4872a8-00000000000000000001.json": "f9a42d9df7a1b27122799ab29f49b765ed18023b8b55f768d3a345edc78ac654",
+                "mode/journal/710f8fbee014754bb0ccf0ca5a56e60b-00000000000000000001.json": "56ce0f5d9ff5a62ef8179accba47227584294a3697a5768f8d6210dc51f09a42",
+                "mode/journal/.interval-source": "0f50745c18e9d45ba65ee4b9b6333c7af6495186cc8859464b2af76c1f112b71"
+              },
+              "production_authorization": false,
+              "private_material_exported": false,
+              "test_exit_code": 0
+            }
+          },
+          "verified_sql_backup": {
+            "database": "txboard_live_revocation_test",
+            "state": "2\t2\t265\t0\t0",
+            "backup": "/opt/txboard-baseline/node-live-revocation-r24/vless-source-continue-evidence/verified-database-before-reset.sql",
+            "mode": "0600",
+            "sha256": "e6a0f49b6505008ee5f1f988a45471405fc78d41fb215f5bc454f8d44b90dea8",
+            "result_sha256": "574fdfb2971b3641138202fde1ccc15a0f6f501f44367e1c1e8e2b25e53dbe68",
+            "purpose": "Preserve verified isolated continuation before independent protocol case"
+          }
+        },
+        "vmess": {
+          "record": {
+            "mode": "vmess",
+            "exit_code": 0,
+            "log_sha256": "0f0eaecf89b372a249c93742be10f8f2bd818045c3dc059d07eb8f1e2b305de7",
+            "snapshot": "/opt/txboard-baseline/node-live-revocation-r24",
+            "actual_result": {
+              "status": "verified-isolated-live-boundary",
+              "case": "source-continue",
+              "protocol": "vmess",
+              "actual_service_run": true,
+              "actual_singbox_kernel": true,
+              "native_mutation": null,
+              "historical_persisted_ack_sql": {
+                "persisted_ack_sql_verified": true,
+                "batch_rows": "1",
+                "entry_rows": "0",
+                "receipt_id": "receipt_ce4d1f6a-0d69-44b2-a604-8ffb9839e229",
+                "scheduled_heartbeat_ack_verified": true,
+                "legacy_user_u": "0",
+                "legacy_user_d": "0",
+                "legacy_batch_rows": "0"
+              },
+              "historical_settlement": {
+                "status": "settled",
+                "sql_batch_rows": "1",
+                "sql_entry_rows": "1",
+                "raw_up_bytes": "43",
+                "raw_down_bytes": "79",
+                "billed_up_bytes": "64",
+                "billed_down_bytes": "118",
+                "billable_bytes": "182",
+                "receipt_id": "receipt_ce4d1f6a-0d69-44b2-a604-8ffb9839e229",
+                "second_scan_empty": true,
+                "legacy_user_u": "0",
+                "legacy_user_d": "0"
+              },
+              "final_sql": {
+                "status": "settled",
+                "batch_rows": "2",
+                "entry_rows": "2",
+                "old_source_epoch": "1",
+                "new_source_epoch": "2",
+                "historical_billable_bytes": "182",
+                "new_billable_bytes": "83",
+                "billable_bytes": "265",
+                "historical_receipt": "receipt_ce4d1f6a-0d69-44b2-a604-8ffb9839e229",
+                "new_receipt": "receipt_5b14c3e9-13a7-4c3b-aba4-b71d85395be5",
+                "original_sql_history_unchanged": true,
+                "billed_up_bytes": "119",
+                "billed_down_bytes": "146",
+                "legacy_user_u": "0",
+                "legacy_user_d": "0"
+              },
+              "boundary": {
+                "actual_service_run": true,
+                "core_instance_id": "live_revocation_core_fixture_1",
+                "new_batch_id": "d0e29e2b9b6436c94eccff407b5b6c60",
+                "new_download_bytes": "19",
+                "new_receipt_id": "receipt_5b14c3e9-13a7-4c3b-aba4-b71d85395be5",
+                "new_source_epoch": "2",
+                "new_upload_bytes": "37",
+                "old_batch_id": "9623cf7d1109b92835404692cb5e684a",
+                "old_history_unchanged": true,
+                "old_receipt_id": "receipt_ce4d1f6a-0d69-44b2-a604-8ffb9839e229",
+                "old_source_epoch": "1",
+                "protocol": "vmess",
+                "receipt_generation": "1"
+              },
+              "artifacts_sha256": {
+                "continuation-ready.json": "7496dc4bfe2fbe57eb98f8ce0294ab1213d5622038ab43aebc49bbabb5224ab7",
+                "history-capture.json": "e0b68f8fb2702bf04af13edfb4e13e7ceb8c4a197e3c38b9bae50e8e5ef0a0b0",
+                "sql-continuation-settlement.log": "29ba55df48134232c5fc39ea28c8f685c91440f2e11a8367ebad58a1a604c78c",
+                "continuation-result.json": "f6e384cd755e13ccfc39f10e5b7bb8959ab2e850a91aaab3c22d0a4122879335",
+                "sql-pending.log": "252b2e1742a3f873f2f77c8117b8e84dc21420dfb04a070b624ef3582ba3a82e",
+                "sql-settlement.log": "eaa358092e8a7edc1e36c28433421a2059806151ab835328dcef476b282d1143",
+                "continuation-issued.json": "287b609714bd1f57bcf86fc06e7bd9c8474d0bab4140fd9c5ebbe04aeef5700c",
+                "continuation-capture.json": "355c4f9eb956466fae85869acbc67f1f6243b386df8e93c5a2e87fcd9a18dc8e",
+                "fixture.json": "4762d9229a161fc950d72ec9b91356ad51c052a420ed982211517fdaa169f910",
+                "native-observations.jsonl": "70bb9bdb544814d17a3cbebdab0bda5427efccb0f95fba9fe67a99bc6eb43789",
+                "sql-final.log": "29ba55df48134232c5fc39ea28c8f685c91440f2e11a8367ebad58a1a604c78c",
+                "history-ready.json": "c5c28672dbaa00d93fa174e3d5a68bd54a8007e7ba52ff96343907c17e8c479d",
+                "cert.pem": "2716e05b04123998640761d8082fc42009bcbfa2357455d984831b2bde80024f",
+                "history-frozen.json": "9965e539015f23294435df1ec856e1ebc1b00efb21decf856805b3fa1f898cac",
+                "mode/spool/152f793a45edc4aa9d077151ae9626e891d008b8edd333406bd131d7270462fc.usage.json": "1cd76a5c3ebf584ed680ac48aa689a9031fe4e9c105c52f5f0c4f1fadf5f5b8d",
+                "mode/spool/.usage-session": "58cf4563a2ce1c24ae4aa6ef81da58d1ed3e6362ec7ffad813457ff7e8c78233",
+                "mode/spool/.usage.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "mode/spool/2c1abc174ab22383279627de1ea5846eecb01e862831be7a14fbe2502c05e25b.usage.json": "69e34591aadfc7e4be9611e085736f4e16c440041c2744d86135aceae425a128",
+                "mode/journal/b3810bc8cece2247ecc9faa911dbf0c3-00000000000000000001.json": "07aca6d946bd5025db471f439f11ad70c8f1a54b8b6b3c31604fa0f232d913d0",
+                "mode/journal/82d2fdaca2d3865263aa7a6179e3bb32-00000000000000000001.json": "0201acf27114c2fc56f9a8aecd64d9d62d8c8198bff3708bb1b9c8872f2bff7a",
+                "mode/journal/.interval-source": "bb7c7db349fa7c3e525868d1842ce69a583184340600b4be89317073498a0c84"
+              },
+              "production_authorization": false,
+              "private_material_exported": false,
+              "test_exit_code": 0
+            }
+          },
+          "verified_sql_backup": {
+            "database": "txboard_live_revocation_test",
+            "state": "2\t2\t265\t0\t0",
+            "backup": "/opt/txboard-baseline/node-live-revocation-r24/vmess-source-continue-evidence/verified-database-before-reset.sql",
+            "mode": "0600",
+            "sha256": "dff1198c32e12efb4655d3c1d63c6cb099d0408f751e1fa1a30f43b490fb5f9c",
+            "result_sha256": "3a471eb69c447f32a510905d5852398306f0a9edcf72544c745ce17a2af13d9c",
+            "purpose": "Preserve verified isolated continuation before independent protocol case"
+          }
+        }
+      },
+      "generation-drift": {
+        "vless": {
+          "record": {
+            "mode": "vless",
+            "exit_code": 0,
+            "log_sha256": "f9bcab2efca729b5b38303d634c433ee0c0b3b973eedea19c6d58f835d5fd478",
+            "snapshot": "/opt/txboard-baseline/node-live-revocation-r24",
+            "actual_result": {
+              "status": "verified-isolated-live-boundary",
+              "case": "generation-drift",
+              "protocol": "vless",
+              "actual_service_run": true,
+              "actual_singbox_kernel": true,
+              "native_mutation": null,
+              "historical_persisted_ack_sql": {
+                "persisted_ack_sql_verified": true,
+                "batch_rows": "1",
+                "entry_rows": "0",
+                "receipt_id": "receipt_f445f0d1-7310-4e3f-99cf-27afd355fd02",
+                "scheduled_heartbeat_ack_verified": true,
+                "legacy_user_u": "0",
+                "legacy_user_d": "0",
+                "legacy_batch_rows": "0"
+              },
+              "historical_settlement": {
+                "status": "settled",
+                "sql_batch_rows": "1",
+                "sql_entry_rows": "1",
+                "raw_up_bytes": "43",
+                "raw_down_bytes": "79",
+                "billed_up_bytes": "64",
+                "billed_down_bytes": "118",
+                "billable_bytes": "182",
+                "receipt_id": "receipt_f445f0d1-7310-4e3f-99cf-27afd355fd02",
+                "second_scan_empty": true,
+                "legacy_user_u": "0",
+                "legacy_user_d": "0"
+              },
+              "final_sql": {
+                "status": "settled",
+                "batch_rows": "1",
+                "entry_rows": "1",
+                "billable_bytes": "182",
+                "legacy_batch_rows": "0",
+                "legacy_user_u": "0",
+                "legacy_user_d": "0",
+                "historical_receipt": "receipt_f445f0d1-7310-4e3f-99cf-27afd355fd02",
+                "unknown_tail_successful_batch": false
+              },
+              "boundary": {
+                "actual_service_run": true,
+                "case": "generation-drift",
+                "confirmed_receipt_missing_query_observed": false,
+                "kernel_started": false,
+                "kernel_started_observed": false,
+                "listener_closed": true,
+                "listener_started_observed": false,
+                "old_batch_id": "58bdab12f58f1cfd27df5d38c223e804",
+                "old_receipt_id": "receipt_f445f0d1-7310-4e3f-99cf-27afd355fd02",
+                "old_source_epoch": "1",
+                "original_json_files_unchanged": true,
+                "protocol": "vless",
+                "service_error": "initial setup: USAGE_V2_MODE_STOPPED",
+                "startup_refused_before_kernel": true,
+                "usage_submit_after_restart": 0
+              },
+              "artifacts_sha256": {
+                "history-capture.json": "a5516b0348230cccad5dcb5b86704e0ec230fe8babfa45850750042794943915",
+                "sql-pending.log": "8733b25a961751f9d0a3b4bdff873856d18e7d2567eae63976d176ae2593de49",
+                "sql-settlement.log": "5e802eee59c12d48777ab7a116898825e0d8e5f8fe93b15f8e8013692161d993",
+                "recovery-result.json": "f66c4154c5fc9e40ab771837c73cbc29bb7d3ae908d58e66299bbc6cf32cb210",
+                "fixture.json": "33890b42ce66156a1cb8474dc388a2ab400b1d62d59df620cdfa41376c922837",
+                "native-observations.jsonl": "b4be9b13be838112b1b9f75744929b1e92e5fee4ef502d496534e343baca39d4",
+                "sql-final.log": "b2bf8a16722782896cf75bfae271838401d456450ccba41951d9099e1293dce2",
+                "history-ready.json": "80fd913fe5cd6b4f07f96091651c985f020400046291af676f89d126afd41727",
+                "generation-issued.log": "043b7d11d730b00d0da04b0950b62b5d04a0a539c8a3eefff9f131cb5e6c462c",
+                "cert.pem": "39e3eb7d15f697dc62decb6b9a7eb64e1fa5728926c53b946380db2daffb3d4d",
+                "history-frozen.json": "04c8049a874e23acace92d3d08cbefa30c72333431773d820813a62e002e037e",
+                "mode/spool/.usage-session": "f28357d2380e9c1521a0f5927eee5fe091b55be2f8bc8dd03f3b75de666c078c",
+                "mode/spool/.usage.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "mode/spool/79e658dea0d6110e727d3036f0f36127b20289f349cd753974b6ad860e16994a.usage.json": "ac37ffa34fcf010a480218b044ace67d0223415e29b1d37b596c413de1243e84",
+                "mode/journal/d1d21b4a2f794dd2c6df63baad772162-00000000000000000001.json": "c0f9adc33b2b6fa2099bb9d4d039650bc5905b96b3d4f2d2614cce3efe49fb45",
+                "mode/journal/.interval-source": "463fd03223a489374f85fe5edb67954f23367fad93c4eaee85d7fee874e161d4"
+              },
+              "production_authorization": false,
+              "private_material_exported": false,
+              "test_exit_code": 0
+            }
+          },
+          "verified_sql_backup": {
+            "database": "txboard_live_revocation_test",
+            "state": "1\t1\t182\t0\t0",
+            "backup": "/opt/txboard-baseline/node-live-revocation-r24/vless-generation-drift-evidence/verified-database-before-reset.sql",
+            "mode": "0600",
+            "sha256": "5c27ffba54c685976e2a3d19825e9322a353d9a7a1821997a5a80e63a32c4650",
+            "result_sha256": "e1b06b0e1a7b845104f5a16d4ce57cf0c2945311282356f29af7d333feba05b9",
+            "purpose": "Preserve verified exclusive recovery DB before independent next case"
+          }
+        },
+        "vmess": {
+          "record": {
+            "mode": "vmess",
+            "exit_code": 0,
+            "log_sha256": "682b04d262bbed987795c1ebf17476f819166cad42198f59669da27787a2b401",
+            "snapshot": "/opt/txboard-baseline/node-live-revocation-r24",
+            "actual_result": {
+              "status": "verified-isolated-live-boundary",
+              "case": "generation-drift",
+              "protocol": "vmess",
+              "actual_service_run": true,
+              "actual_singbox_kernel": true,
+              "native_mutation": null,
+              "historical_persisted_ack_sql": {
+                "persisted_ack_sql_verified": true,
+                "batch_rows": "1",
+                "entry_rows": "0",
+                "receipt_id": "receipt_45e3b25a-3d35-4061-9711-90c28f242c85",
+                "scheduled_heartbeat_ack_verified": true,
+                "legacy_user_u": "0",
+                "legacy_user_d": "0",
+                "legacy_batch_rows": "0"
+              },
+              "historical_settlement": {
+                "status": "settled",
+                "sql_batch_rows": "1",
+                "sql_entry_rows": "1",
+                "raw_up_bytes": "43",
+                "raw_down_bytes": "79",
+                "billed_up_bytes": "64",
+                "billed_down_bytes": "118",
+                "billable_bytes": "182",
+                "receipt_id": "receipt_45e3b25a-3d35-4061-9711-90c28f242c85",
+                "second_scan_empty": true,
+                "legacy_user_u": "0",
+                "legacy_user_d": "0"
+              },
+              "final_sql": {
+                "status": "settled",
+                "batch_rows": "1",
+                "entry_rows": "1",
+                "billable_bytes": "182",
+                "legacy_batch_rows": "0",
+                "legacy_user_u": "0",
+                "legacy_user_d": "0",
+                "historical_receipt": "receipt_45e3b25a-3d35-4061-9711-90c28f242c85",
+                "unknown_tail_successful_batch": false
+              },
+              "boundary": {
+                "actual_service_run": true,
+                "case": "generation-drift",
+                "confirmed_receipt_missing_query_observed": false,
+                "kernel_started": false,
+                "kernel_started_observed": false,
+                "listener_closed": true,
+                "listener_started_observed": false,
+                "old_batch_id": "f1c7051ae07fcac5da0c1f712cb368e7",
+                "old_receipt_id": "receipt_45e3b25a-3d35-4061-9711-90c28f242c85",
+                "old_source_epoch": "1",
+                "original_json_files_unchanged": true,
+                "protocol": "vmess",
+                "service_error": "initial setup: USAGE_V2_MODE_STOPPED",
+                "startup_refused_before_kernel": true,
+                "usage_submit_after_restart": 0
+              },
+              "artifacts_sha256": {
+                "history-capture.json": "f8c7d833cc41d34416ad0621f962ec74e1357994fa4ed5aab360723f42e076af",
+                "sql-pending.log": "fbdc8126f78b67c18bf09b9dda7e436e8727ba26804b9914166f1c21d2d95423",
+                "sql-settlement.log": "4845245d2c73e42561b82dcc600be913c1c2ee16cd72ac0d2a025c22f01f87ff",
+                "recovery-result.json": "dd419a0223b80f7feb0fffe0b6f01c476140e12591ebf0a7f640958369f505c4",
+                "fixture.json": "9a05f21887b5d4ff6bc746005184f2ed975926980e1e6fa8debd63310e4e438e",
+                "native-observations.jsonl": "45ee2f0b42d34dec211a698110757c8da1c8fb608acede75db1a564331fe281a",
+                "sql-final.log": "da0282cd08e7922fbd2f007ce4065b7feb7659708cfad6a82a413a73c6fb8eb5",
+                "history-ready.json": "c98497b4fed05b07ebbdfe8d5e6a35af8d98f14d47c5c44c5cb44ea79341f3d1",
+                "generation-issued.log": "b273e18de263a14e3077c0c137523ef8818510c56f1b45daf61c29cb0380db0c",
+                "cert.pem": "5b772a400770e7cb882b9a89a991648679bfe07b85e3ac8b8b3a61b436e2c629",
+                "history-frozen.json": "d2b0a1f1fa93298fc260310a1645c149ba5afaf09daf3b9518c2e4cf014a36e4",
+                "mode/spool/6ec80eb68fbc5ccb9302efaf660d64467af5ff08499e8bf7e5d1dd61c7f96741.usage.json": "88b168767662caa48f6a38495f86d9509dc89ab26ce64c1de6a36cd04ee1b4b0",
+                "mode/spool/.usage-session": "1a9e0d8b030e98fa72084fb3b36de2d0758e389bf956f62cbd3314071cc03946",
+                "mode/spool/.usage.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "mode/journal/49ad0b07d73c943c8351ac01f10f0920-00000000000000000001.json": "be50dfcffb8e79c94042c410f4c864458a2530c4b60466f4b875bef046f189ae",
+                "mode/journal/.interval-source": "d6a7e7198afbd0603ff062e58d2030e89600179a1372cbfeee026a1906b998e7"
+              },
+              "production_authorization": false,
+              "private_material_exported": false,
+              "test_exit_code": 0
+            }
+          },
+          "verified_sql_backup": {
+            "database": "txboard_live_revocation_test",
+            "state": "1\t1\t182\t0\t0",
+            "backup": "/opt/txboard-baseline/node-live-revocation-r24/vmess-generation-drift-evidence/verified-database-before-reset.sql",
+            "mode": "0600",
+            "sha256": "320c2277df946cfe4a8218e9c466aeb51b0faf8673dc3b6ac8571ddc6fcbabc6",
+            "result_sha256": "4d8fa96ad5cdba9388b0c98fbcd55c6b9407030fc5b5ad0e0177d2e21da0a3d5",
+            "purpose": "Preserve verified exclusive recovery DB before independent next case"
+          }
+        }
+      },
+      "instance-drift": {
+        "vless": {
+          "record": {
+            "mode": "vless",
+            "exit_code": 0,
+            "log_sha256": "d3b10847ffb1bc001e00ccc92452f221232396af750793fcacb24e0ed89ea1b3",
+            "snapshot": "/opt/txboard-baseline/node-live-revocation-r24",
+            "actual_result": {
+              "status": "verified-isolated-live-boundary",
+              "case": "instance-drift",
+              "protocol": "vless",
+              "actual_service_run": true,
+              "actual_singbox_kernel": true,
+              "native_mutation": null,
+              "historical_persisted_ack_sql": {
+                "persisted_ack_sql_verified": true,
+                "batch_rows": "1",
+                "entry_rows": "0",
+                "receipt_id": "receipt_8870a630-546a-4f15-b9f3-263174ffe959",
+                "scheduled_heartbeat_ack_verified": true,
+                "legacy_user_u": "0",
+                "legacy_user_d": "0",
+                "legacy_batch_rows": "0"
+              },
+              "historical_settlement": {
+                "status": "settled",
+                "sql_batch_rows": "1",
+                "sql_entry_rows": "1",
+                "raw_up_bytes": "43",
+                "raw_down_bytes": "79",
+                "billed_up_bytes": "64",
+                "billed_down_bytes": "118",
+                "billable_bytes": "182",
+                "receipt_id": "receipt_8870a630-546a-4f15-b9f3-263174ffe959",
+                "second_scan_empty": true,
+                "legacy_user_u": "0",
+                "legacy_user_d": "0"
+              },
+              "final_sql": {
+                "status": "settled",
+                "batch_rows": "1",
+                "entry_rows": "1",
+                "billable_bytes": "182",
+                "legacy_batch_rows": "0",
+                "legacy_user_u": "0",
+                "legacy_user_d": "0",
+                "historical_receipt": "receipt_8870a630-546a-4f15-b9f3-263174ffe959",
+                "unknown_tail_successful_batch": false
+              },
+              "boundary": {
+                "actual_service_run": true,
+                "case": "instance-drift",
+                "confirmed_receipt_missing_query_observed": false,
+                "kernel_started": false,
+                "kernel_started_observed": false,
+                "listener_closed": true,
+                "listener_started_observed": false,
+                "old_batch_id": "c79e834c95c5d76eb3f6fdbb7c20eb66",
+                "old_receipt_id": "receipt_8870a630-546a-4f15-b9f3-263174ffe959",
+                "old_source_epoch": "1",
+                "original_json_files_unchanged": true,
+                "protocol": "vless",
+                "service_error": "initial setup: USAGE_V2_NATIVE_HTTP_REQUIRED",
+                "startup_refused_before_kernel": true,
+                "usage_submit_after_restart": 0
+              },
+              "artifacts_sha256": {
+                "history-capture.json": "12dd4820ba071814eeacef0071d79c34398a8ef5bc3c671b8bc21ba9177239d3",
+                "sql-pending.log": "5bf89a57c8dc30718d006843b644c3d7cdfd59d8dcc4171db4ad33023fb3e69b",
+                "sql-settlement.log": "e20afdb6f4110c1e0caa0b35029e14f7cca9b108b145630311bfab4171ea175e",
+                "recovery-result.json": "5acb39d4ea13e805c7351d9d1e12a3eccff0d1c62ce0b636c65ac457f7bfcfc5",
+                "fixture.json": "ccb2ee4411adfa6eea7de7c795d5bcb2061886c57e3ce77ed7942b7bfca2df87",
+                "native-observations.jsonl": "398d2295e19eda1a0ed822658a29fa5fb7d912f2502bfd2cf2745d780e5d5ea1",
+                "sql-final.log": "0110ea408bf4fa5c197e435fd187d1fdca519f13158c9319531f63e843f4b110",
+                "history-ready.json": "d1e1c4794d6945a9c4b91ed7a818eec77eb80fbaa47424d1553282acac6b4076",
+                "cert.pem": "053d04d57063a92dda398557920249e4ea23a4ce997bc00c0da57de06b3b9718",
+                "history-frozen.json": "3f096b1db98087c28c6b732ad91126e98847a221cbafae183ee6f9760148c8f1",
+                "mode/spool/.usage-session": "004418e79022304d412091cffa20f122e2a1cbd99e86f84e87b28f2f1d6f2f1e",
+                "mode/spool/.usage.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "mode/spool/a96a8c1bcc10a3e9c0404e2250f8265e9380113b9e32514b1a67564b3a03b6e0.usage.json": "1d147f93cbb66b8ff2a020984f6b7e0b45b0fbf0a581d9e628e265e590070248",
+                "mode/journal/.interval-source": "1456db59e0500caebca06521eff494efb5a80ee0a42b1e12166830ccb5b67a28",
+                "mode/journal/e305434f30131777482dc84504d43659-00000000000000000001.json": "f1f4bdd0a130377c0d401aba828085c7d6ea2b3e51d3fbf6dda7154ee7fa89fd"
+              },
+              "production_authorization": false,
+              "private_material_exported": false,
+              "test_exit_code": 0
+            }
+          },
+          "verified_sql_backup": {
+            "database": "txboard_live_revocation_test",
+            "state": "1\t1\t182\t0\t0",
+            "backup": "/opt/txboard-baseline/node-live-revocation-r24/vless-instance-drift-evidence/verified-database-before-reset.sql",
+            "mode": "0600",
+            "sha256": "e6c6562d71b3d0b2e42f564c226fd301e9986d86dcfa902c5d937439de060c50",
+            "result_sha256": "0dfb49b55ca446cae9fd5b60ae0e6b9751e2ff7ceb015021a40aece9131c7b89",
+            "purpose": "Preserve verified exclusive recovery DB before independent next case"
+          }
+        },
+        "vmess": {
+          "record": {
+            "mode": "vmess",
+            "exit_code": 0,
+            "log_sha256": "da908db1b5a83289446e80060eb15a5dad362c4e3b30f1a7829f2dc3099e0dcc",
+            "snapshot": "/opt/txboard-baseline/node-live-revocation-r24",
+            "actual_result": {
+              "status": "verified-isolated-live-boundary",
+              "case": "instance-drift",
+              "protocol": "vmess",
+              "actual_service_run": true,
+              "actual_singbox_kernel": true,
+              "native_mutation": null,
+              "historical_persisted_ack_sql": {
+                "persisted_ack_sql_verified": true,
+                "batch_rows": "1",
+                "entry_rows": "0",
+                "receipt_id": "receipt_d9ee754a-18ef-49f3-a9d6-eb2bcc74281e",
+                "scheduled_heartbeat_ack_verified": true,
+                "legacy_user_u": "0",
+                "legacy_user_d": "0",
+                "legacy_batch_rows": "0"
+              },
+              "historical_settlement": {
+                "status": "settled",
+                "sql_batch_rows": "1",
+                "sql_entry_rows": "1",
+                "raw_up_bytes": "43",
+                "raw_down_bytes": "79",
+                "billed_up_bytes": "64",
+                "billed_down_bytes": "118",
+                "billable_bytes": "182",
+                "receipt_id": "receipt_d9ee754a-18ef-49f3-a9d6-eb2bcc74281e",
+                "second_scan_empty": true,
+                "legacy_user_u": "0",
+                "legacy_user_d": "0"
+              },
+              "final_sql": {
+                "status": "settled",
+                "batch_rows": "1",
+                "entry_rows": "1",
+                "billable_bytes": "182",
+                "legacy_batch_rows": "0",
+                "legacy_user_u": "0",
+                "legacy_user_d": "0",
+                "historical_receipt": "receipt_d9ee754a-18ef-49f3-a9d6-eb2bcc74281e",
+                "unknown_tail_successful_batch": false
+              },
+              "boundary": {
+                "actual_service_run": true,
+                "case": "instance-drift",
+                "confirmed_receipt_missing_query_observed": false,
+                "kernel_started": false,
+                "kernel_started_observed": false,
+                "listener_closed": true,
+                "listener_started_observed": false,
+                "old_batch_id": "6ab47414196a7eaf37962adc085c7cce",
+                "old_receipt_id": "receipt_d9ee754a-18ef-49f3-a9d6-eb2bcc74281e",
+                "old_source_epoch": "1",
+                "original_json_files_unchanged": true,
+                "protocol": "vmess",
+                "service_error": "initial setup: USAGE_V2_NATIVE_HTTP_REQUIRED",
+                "startup_refused_before_kernel": true,
+                "usage_submit_after_restart": 0
+              },
+              "artifacts_sha256": {
+                "history-capture.json": "445d87ea39fc034f81d746dce2574bb5097363a8f96e899202b61e6f06a1842b",
+                "sql-pending.log": "711d7bd6adffddc5efc6fa82dd73dd4447b26e24f05a5343ded07e48c708a74b",
+                "sql-settlement.log": "c3fa5a5ec6309e7ce357a0fd875258fa3a8a77345c6c659357bd345f7e085e29",
+                "recovery-result.json": "1330723b7966c7275471e2c4071945e6cf826f6440608fe59d010d0618ed7b1a",
+                "fixture.json": "63b63cd5e31b4c67ffd7e5cd5604e2ef5fa8a16d79740dcdce4011552258204b",
+                "native-observations.jsonl": "13641459fa18454802b51ea071ab7d794ac62d2e6c6ea3b3ee48bc9714651460",
+                "sql-final.log": "c07719d3ebd84f1ba3cb82a61df4d2d685e6549b440103c3b7f65bfd77aef2f5",
+                "history-ready.json": "dc850967d2c81e9bf8226c1c0f05d48ceff2a4b2793a18440d3a8a9b38a89713",
+                "cert.pem": "747338e1b75ee752a10b3f4d1b357507a8ec57b4ac8185c00a1cadbbaaef31a2",
+                "history-frozen.json": "6aa194e82356dee9f64a412c3f407172a64608e09193f113b624fc414dd148d2",
+                "mode/spool/.usage-session": "a4b37d8846ebb2f198069899d3d6103238a10dbe52066c41cb1c385d422ffecf",
+                "mode/spool/.usage.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "mode/spool/392722baea849111ff8cdeaf601661706a92767c0ee4612fc68ed9209f88fd83.usage.json": "f676b9b25b4b5eeaa29b1a6ba0480d54a69a49907ec96c398d34f03a2f09aef4",
+                "mode/journal/b965268b23c7a85b9c7a832a4ad75c50-00000000000000000001.json": "979e5603a2bc2214cffc9a4aaca7305196ecc322e8e125b78f978c0b89c8230a",
+                "mode/journal/.interval-source": "632e24230d9989ada8b213a8982a86297e69d571ffc1e3b24cfb07ac9ac6143f"
+              },
+              "production_authorization": false,
+              "private_material_exported": false,
+              "test_exit_code": 0
+            }
+          },
+          "verified_sql_backup": {
+            "database": "txboard_live_revocation_test",
+            "state": "1\t1\t182\t0\t0",
+            "backup": "/opt/txboard-baseline/node-live-revocation-r24/vmess-instance-drift-evidence/verified-database-before-reset.sql",
+            "mode": "0600",
+            "sha256": "44631821dc4bb842cf2bc4b49fdc24d09c254aa4d5634665aceca21e40c7737e",
+            "result_sha256": "ca6eb5c71c9a710a38729ff3496ca280c5a96d7967ce63b44af4df07e8a81501",
+            "purpose": "Preserve verified exclusive recovery DB before independent next case"
+          }
+        }
+      },
+      "receipt-missing": {
+        "vless": {
+          "record": {
+            "mode": "vless",
+            "exit_code": 0,
+            "log_sha256": "d5e7f9539589b1840fde01bd3e2cf04269d2c5f032ca48ee118ff8975d1fccad",
+            "snapshot": "/opt/txboard-baseline/node-live-revocation-r24",
+            "actual_result": {
+              "status": "verified-isolated-live-boundary",
+              "case": "receipt-missing",
+              "protocol": "vless",
+              "actual_service_run": true,
+              "actual_singbox_kernel": true,
+              "native_mutation": null,
+              "historical_persisted_ack_sql": {
+                "persisted_ack_sql_verified": true,
+                "batch_rows": "1",
+                "entry_rows": "0",
+                "receipt_id": "receipt_74d46d56-d269-4963-a04e-881cb234b68f",
+                "scheduled_heartbeat_ack_verified": true,
+                "legacy_user_u": "0",
+                "legacy_user_d": "0",
+                "legacy_batch_rows": "0"
+              },
+              "historical_settlement": {
+                "status": "settled",
+                "sql_batch_rows": "1",
+                "sql_entry_rows": "1",
+                "raw_up_bytes": "43",
+                "raw_down_bytes": "79",
+                "billed_up_bytes": "64",
+                "billed_down_bytes": "118",
+                "billable_bytes": "182",
+                "receipt_id": "receipt_74d46d56-d269-4963-a04e-881cb234b68f",
+                "second_scan_empty": true,
+                "legacy_user_u": "0",
+                "legacy_user_d": "0"
+              },
+              "final_sql": {
+                "batch_rows": "0",
+                "entry_rows": "0",
+                "outbox_rows": "0",
+                "billable_bytes": "0",
+                "legacy_user_u": "0",
+                "legacy_user_d": "0",
+                "missing_confirmed_receipt": true,
+                "implicit_resubmit": false
+              },
+              "boundary": {
+                "actual_service_run": true,
+                "case": "receipt-missing",
+                "confirmed_receipt_missing_query_observed": true,
+                "kernel_started": true,
+                "kernel_started_observed": true,
+                "listener_closed": true,
+                "listener_started_observed": true,
+                "old_batch_id": "d62ee384707b3e3257c3831e8b286d06",
+                "old_receipt_id": "receipt_74d46d56-d269-4963-a04e-881cb234b68f",
+                "old_source_epoch": "1",
+                "original_json_files_unchanged": true,
+                "protocol": "vless",
+                "service_error": "USAGE_V2_MODE_STOPPED",
+                "startup_refused_before_kernel": false,
+                "usage_submit_after_restart": 0
+              },
+              "artifacts_sha256": {
+                "history-capture.json": "40ebab0b2203f49fb0c7cd12d8d17414f73148556445a9accf16cbbc26b2f2d6",
+                "sql-pending.log": "f8ce5f8246346b517909ae3f7409c33a2f1f5ebf9c66de338aa56579dc0dd2c9",
+                "sql-settlement.log": "0d5dd7d9d6f781d0ca099c9f9a86e1c9678c50adad6abce3bd42d44263639cc3",
+                "recovery-result.json": "219a735da0eaa0b2585856bee9005a98bbd8b0a99985467b639be43e723f8306",
+                "fixture.json": "2d2f14131ea487cf7565973be9e735661c73448afdfb8aa514ba72a87037bb3b",
+                "database-restore-proof.json": "e4f8101286d3b289e7d6e2db00ae33fcd72c2c418ca25f5a8bd3870b766c25ac",
+                "native-observations.jsonl": "62d105b365207e04395ac9c361a59ef4048c2104295a9f88f1602faeebf0ac0e",
+                "sql-final.log": "f10a06079b7a661a78092f1e3b307c2ae9c3c1d4eb964ebf762c31568864d179",
+                "history-ready.json": "50731d23f360a89eb9f321e8f68a540a92487f134bb219db4cb8cc96d88bbf4d",
+                "sql-restored-before-restart.log": "f10a06079b7a661a78092f1e3b307c2ae9c3c1d4eb964ebf762c31568864d179",
+                "cert.pem": "1e529c1f93470483cd2b225c8cd202be8d2a719bec39320910e496e81fa69463",
+                "history-frozen.json": "081edfee9f42cbaeee8393b1cdbe3c2d3b8acd278fe45468d49919a11ab511ee",
+                "mode/spool/.usage-session": "d6a8bce9f5dacf727dc63a61d105f09a9d42bc2c3f83a7b48f569b329f461978",
+                "mode/spool/.usage.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "mode/spool/72d35489d171cb524f9b2d3447dfc6bb1ca524c6ddbc547a85940ad79f91c222.usage.json": "be23b053f07e1e8ab62f2844093b335a445fde266e1c106a6bcb29f6fe718c4e",
+                "mode/journal/fe5af37cfc8bacf5ead2cd582d70cf69-00000000000000000001.json": "70328b5d2bbe35d9d9b9ba29c87c07c2da8492275581aabc1083f6addd236e6d",
+                "mode/journal/.interval-source": "834479d880a4da37dd757b3dedc9e418991f61b47a9d520312e062342532c011"
+              },
+              "production_authorization": false,
+              "private_material_exported": false,
+              "test_exit_code": 0
+            }
+          },
+          "verified_sql_backup": {
+            "database": "txboard_live_revocation_test",
+            "state": "0\t0\t0\t0\t0",
+            "backup": "/opt/txboard-baseline/node-live-revocation-r24/vless-receipt-missing-evidence/verified-database-before-reset.sql",
+            "mode": "0600",
+            "sha256": "8d508bf3f63ddca24abff67da89c4ce775dbb106f8dcc8f13e1294dcfe6c4748",
+            "result_sha256": "b6d8f1a6916c85c662326f172a25642962054df139d8402a089f210e21fd93ff",
+            "purpose": "Preserve verified exclusive recovery DB before independent next case"
+          },
+          "actual_sql_restore": {
+            "before_history": {
+              "database": "txboard_live_revocation_test",
+              "path": "before-history-database.sql",
+              "mode": "0600",
+              "sha256": "f1d55b2361cfb5f169fd49a63c2293241cd70ddb8d22b04a5f61597f814e4c48"
+            },
+            "after_settlement": {
+              "database": "txboard_live_revocation_test",
+              "path": "after-settlement-database.sql",
+              "mode": "0600",
+              "sha256": "26d37852307fa00589b84955d29b92ace556051060eefd8405ab99043e855c06"
+            },
+            "restored_source_epoch": "2"
+          }
+        },
+        "vmess": {
+          "record": {
+            "mode": "vmess",
+            "exit_code": 0,
+            "log_sha256": "02dbcca87b6b685355b8e84ea8a957a83071d7a7197ce124eb90dfba4fe73ad5",
+            "snapshot": "/opt/txboard-baseline/node-live-revocation-r24",
+            "actual_result": {
+              "status": "verified-isolated-live-boundary",
+              "case": "receipt-missing",
+              "protocol": "vmess",
+              "actual_service_run": true,
+              "actual_singbox_kernel": true,
+              "native_mutation": null,
+              "historical_persisted_ack_sql": {
+                "persisted_ack_sql_verified": true,
+                "batch_rows": "1",
+                "entry_rows": "0",
+                "receipt_id": "receipt_e683c317-3814-42aa-9091-2b64032868f0",
+                "scheduled_heartbeat_ack_verified": true,
+                "legacy_user_u": "0",
+                "legacy_user_d": "0",
+                "legacy_batch_rows": "0"
+              },
+              "historical_settlement": {
+                "status": "settled",
+                "sql_batch_rows": "1",
+                "sql_entry_rows": "1",
+                "raw_up_bytes": "43",
+                "raw_down_bytes": "79",
+                "billed_up_bytes": "64",
+                "billed_down_bytes": "118",
+                "billable_bytes": "182",
+                "receipt_id": "receipt_e683c317-3814-42aa-9091-2b64032868f0",
+                "second_scan_empty": true,
+                "legacy_user_u": "0",
+                "legacy_user_d": "0"
+              },
+              "final_sql": {
+                "batch_rows": "0",
+                "entry_rows": "0",
+                "outbox_rows": "0",
+                "billable_bytes": "0",
+                "legacy_user_u": "0",
+                "legacy_user_d": "0",
+                "missing_confirmed_receipt": true,
+                "implicit_resubmit": false
+              },
+              "boundary": {
+                "actual_service_run": true,
+                "case": "receipt-missing",
+                "confirmed_receipt_missing_query_observed": true,
+                "kernel_started": true,
+                "kernel_started_observed": true,
+                "listener_closed": true,
+                "listener_started_observed": true,
+                "old_batch_id": "7aa649123fb428c8f033d65e9f474737",
+                "old_receipt_id": "receipt_e683c317-3814-42aa-9091-2b64032868f0",
+                "old_source_epoch": "1",
+                "original_json_files_unchanged": true,
+                "protocol": "vmess",
+                "service_error": "USAGE_V2_MODE_STOPPED",
+                "startup_refused_before_kernel": false,
+                "usage_submit_after_restart": 0
+              },
+              "artifacts_sha256": {
+                "history-capture.json": "21e0d3972eca97cae027f5bca4106b6a138eac6d2eaa3ae53a4774235574c3ab",
+                "sql-pending.log": "8f059118e7091908e0fe571255634aa3379ef46f8c5aa64e1e02d7fc27775150",
+                "sql-settlement.log": "298f6e639450cb2b369c1dc64fbc735fc42e6e76c0173be6621d45ff210d5bd0",
+                "recovery-result.json": "da92ab715d3582c437c01f4daedd49164a61ca123e6ef95bad18d72d738ed8fd",
+                "fixture.json": "4a49a541371b17b5179398263bc05caa339915b57c947c7eba483f2a1c5b5299",
+                "database-restore-proof.json": "2fcb1e3bbcc4b9587b1133785aeb2f1214f11baf5bc1b76e3baf13f3e5c0cf92",
+                "native-observations.jsonl": "b5cb1bb3cd34fc262892b0754db2d6809dbb8c9639391d69aa671f2560e741ab",
+                "sql-final.log": "f10a06079b7a661a78092f1e3b307c2ae9c3c1d4eb964ebf762c31568864d179",
+                "history-ready.json": "9b9c5ab5fd2ac87f55cd4076ba57d5cfcdfe039740c8868c96e546c90c205cdf",
+                "sql-restored-before-restart.log": "f10a06079b7a661a78092f1e3b307c2ae9c3c1d4eb964ebf762c31568864d179",
+                "cert.pem": "ef4ae942ec89d026c06ab451ed8ade2ab87b7ff57442a894cc861810a99eefd8",
+                "history-frozen.json": "112ef125f0442c474295318cdf0aafb55e8f54ef31b2297a44a6372a8c0464a0",
+                "mode/spool/.usage-session": "fe8a103e3854109196537921a243c850b226344923dcf0e9cbe9a3a89ac88706",
+                "mode/spool/.usage.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                "mode/spool/d2de778311cde08f7c40d5aac20f36734251c73d444c159b5e274833b3e488b0.usage.json": "ed544e9c19139238a978b765df8466e81772f7db75603fbbf19c9a3fef614aae",
+                "mode/journal/76601feb8e598bae7e30a10be788e7f3-00000000000000000001.json": "86c892462e707909f538a917d78db64fc0a6612c78a7f57caf9f0a8d79e29712",
+                "mode/journal/.interval-source": "f6c7c6cfe5075ac78f7c882453530838e8422f520c0badd6ba2920c627092fc3"
+              },
+              "production_authorization": false,
+              "private_material_exported": false,
+              "test_exit_code": 0
+            }
+          },
+          "verified_sql_backup": {
+            "database": "txboard_live_revocation_test",
+            "state": "0\t0\t0\t0\t0",
+            "backup": "/opt/txboard-baseline/node-live-revocation-r24/vmess-receipt-missing-evidence/verified-database-before-reset.sql",
+            "mode": "0600",
+            "sha256": "fca334fbf0972c6f3d0dd8ec3822c58cee2cb0be65a14e8cbd88329b6e77f07e",
+            "result_sha256": "3a8c076d40810c7c006f849c4b68b7367bdaaa7292852dbf0d3a8f0fc133aa33",
+            "purpose": "Preserve verified exclusive recovery DB before independent next case"
+          },
+          "actual_sql_restore": {
+            "before_history": {
+              "database": "txboard_live_revocation_test",
+              "path": "before-history-database.sql",
+              "mode": "0600",
+              "sha256": "b0e96f2a9f6522e9510219d6f6b7331d384b8c2cf5ce79208a704763e1ad0a5b"
+            },
+            "after_settlement": {
+              "database": "txboard_live_revocation_test",
+              "path": "after-settlement-database.sql",
+              "mode": "0600",
+              "sha256": "1f299c2555ab57128490637e62cf070b629cd91dde1514b9dc79b5342ebb9cc7"
+            },
+            "restored_source_epoch": "2"
+          }
+        }
+      }
+    }
+  },
+  "workflow": {
+    "path": ".github/workflows/ci-node-live-recovery.yml",
+    "sha256": "a2a410bb18d67fea88306b6b33a82861b61fcb4f675cfed78b75548c86a74b28",
+    "actionlint": "passed",
+    "matrix": "vless/vmess x source-continue/generation-drift/instance-drift/receipt-missing, exclusive Oracle MySQL8.4 databases",
+    "remote_status": "pending push"
+  },
+  "source_continuation_remote_ci": [
+    {
+      "conclusion": "success",
+      "databaseId": 38497794979,
+      "headSha": "64309e8303ff5a9516905ad18787cbf71d934b47",
+      "status": "completed",
+      "workflowName": "Documentation"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 38497794983,
+      "headSha": "64309e8303ff5a9516905ad18787cbf71d934b47",
+      "status": "completed",
+      "workflowName": "bounded-node-core-usage"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 38497794994,
+      "headSha": "64309e8303ff5a9516905ad18787cbf71d934b47",
+      "status": "completed",
+      "workflowName": "node-live-protocol-core-usage"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 38497795274,
+      "headSha": "64309e8303ff5a9516905ad18787cbf71d934b47",
+      "status": "completed",
+      "workflowName": "node-service-core-usage"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 38497795145,
+      "headSha": "64309e8303ff5a9516905ad18787cbf71d934b47",
+      "status": "completed",
+      "workflowName": "node-live-recovery-core-usage"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 38497795058,
+      "headSha": "64309e8303ff5a9516905ad18787cbf71d934b47",
+      "status": "completed",
+      "workflowName": "Node CI and images"
+    }
+  ],
+  "scope": {
+    "core_runtime_changes": false,
+    "node_runtime_changes": false,
+    "production_v2_opened": false,
+    "instance_drift_case": "existing database with mismatched Core HTTP process configuration, real Core capability rejection",
+    "missing_receipt_case": "actual earlier SQL dump restored; source2 provisioned through Core CLI; listener starts then worker fails closed on original404 without submit attempts"
+  },
+  "remaining_gates": [
+    "legitimate new Core instance with retained Node storage comparison",
+    "trusted time / full recovery coordination",
+    "production provider delivery and revocation",
+    "global writer coverage/drain and authority switch"
+  ]
+}

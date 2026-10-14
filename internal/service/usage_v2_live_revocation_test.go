@@ -124,7 +124,7 @@ func TestServiceUsageV2LiveRevocation(t *testing.T) {
 		liveProtocolWait(t, done, 12*time.Second, func() bool {
 			return revocationRecord(cfg.UsageV2.Directory, &record) && record.Receipt != nil && record.Receipt.SettlementStatus == "settled"
 		})
-		if caseName == "history" || caseName == "expiry" || caseName == "source-continue" {
+		if caseName == "history" || caseName == "expiry" || caseName == "source-continue" || caseName == "generation-drift" || caseName == "instance-drift" || caseName == "receipt-missing" {
 			cancel()
 			revocationStopped(t, done, false)
 			return

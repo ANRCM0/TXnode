@@ -263,7 +263,7 @@
     "path": ".github/workflows/ci-node-live-recovery.yml",
     "sha256": "b58433fde5044e14ee7efe2094121a018028bbb26b63bc40c9cefeea105ecbed",
     "actionlint": "passed",
-    "remote_status": "pending push and separate Oracle MySQL8.4 matrix"
+    "remote_status": "All six triggered workflows passed at64309e8, including Oracle MySQL8.4 source continuation and Node image compatibility build"
   },
   "invariants": {
     "prior_local_json_identical": true,
@@ -286,5 +286,49 @@
     "trusted time and production provider delivery/revocation",
     "global writer coverage/drain and authority switch"
   ],
-  "scope": "Test/fixture/contract/CI additions only; no production v2 opening or Core authority changes"
+  "scope": "Test/fixture/contract/CI additions only; no production v2 opening or Core authority changes",
+  "source_continuation_remote_ci": [
+    {
+      "conclusion": "success",
+      "databaseId": 38497794979,
+      "headSha": "64309e8303ff5a9516905ad18787cbf71d934b47",
+      "status": "completed",
+      "workflowName": "Documentation"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 38497794983,
+      "headSha": "64309e8303ff5a9516905ad18787cbf71d934b47",
+      "status": "completed",
+      "workflowName": "bounded-node-core-usage"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 38497794994,
+      "headSha": "64309e8303ff5a9516905ad18787cbf71d934b47",
+      "status": "completed",
+      "workflowName": "node-live-protocol-core-usage"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 38497795274,
+      "headSha": "64309e8303ff5a9516905ad18787cbf71d934b47",
+      "status": "completed",
+      "workflowName": "node-service-core-usage"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 38497795145,
+      "headSha": "64309e8303ff5a9516905ad18787cbf71d934b47",
+      "status": "completed",
+      "workflowName": "node-live-recovery-core-usage"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 38497795058,
+      "headSha": "64309e8303ff5a9516905ad18787cbf71d934b47",
+      "status": "completed",
+      "workflowName": "Node CI and images"
+    }
+  ]
 }
