@@ -51,12 +51,21 @@ func (p *TXBoardControlPlane) Metrics() APIMetrics {
 	a, b := p.client.Metrics()
 	return APIMetrics{Success: a, Failure: b}
 }
+
+// ResetSnapshotCache is an optional native hook for runtime reconnect/drop
+// reconciliation; it leaves other providers' transport contracts unchanged.
+func (p *TXBoardControlPlane) ResetSnapshotCache() {
+	if p != nil && p.client != nil {
+		p.client.ResetETags()
+	}
+}
+
 func (p *TXBoardControlPlane) snapshot(ctx context.Context) (Snapshot, error) {
-	cfg, err := p.client.GetConfig()
+	cfg, err := p.client.ConfigSnapshot()
 	if err != nil {
 		return Snapshot{}, err
 	}
-	users, err := p.client.GetUsers()
+	users, err := p.client.UsersSnapshot()
 	if err != nil {
 		return Snapshot{}, err
 	}

@@ -6,37 +6,35 @@ import (
 )
 
 func (h *Inbound) UpdateUsers(users []option.VMessUser) error {
+	h.usersMu.Lock()
+	defer h.usersMu.Unlock()
+	return h.updateUsersLocked(users)
+}
+
+func (h *Inbound) updateUsersLocked(users []option.VMessUser) error {
+	users = append([]option.VMessUser(nil), users...)
+	err := h.service.UpdateUsers(common.MapIndexed(users, func(index int, user option.VMessUser) authenticatedUser {
+		return authenticatedUser{Index: index, Name: user.Name, UUID: user.UUID}
+	}), common.Map(users, func(user option.VMessUser) string { return user.UUID }), common.Map(users, func(user option.VMessUser) int { return user.AlterId }))
+	if err != nil {
+		return err
+	}
 	h.users = users
-	return h.service.UpdateUsers(common.MapIndexed(h.users, func(index int, it option.VMessUser) int {
-		return index
-	}), common.Map(h.users, func(it option.VMessUser) string {
-		return it.UUID
-	}), common.Map(h.users, func(it option.VMessUser) int {
-		return it.AlterId
-	}))
+	return nil
 }
 
 func (h *Inbound) DelUsers(uuids []string) error {
-	toDelete := make(map[string]struct{})
+	h.usersMu.Lock()
+	defer h.usersMu.Unlock()
+	toDelete := make(map[string]struct{}, len(uuids))
 	for _, uuid := range uuids {
 		toDelete[uuid] = struct{}{}
 	}
-	remaining := make([]option.VMessUser, 0)
+	remaining := make([]option.VMessUser, 0, len(h.users))
 	for _, user := range h.users {
 		if _, found := toDelete[user.UUID]; !found {
 			remaining = append(remaining, user)
 		}
 	}
-	h.users = remaining
-	err := h.service.UpdateUsers(
-		common.MapIndexed(h.users, func(index int, it option.VMessUser) int {
-			return index
-		}),
-		common.Map(h.users, func(it option.VMessUser) string {
-			return it.UUID
-		}),
-		common.Map(h.users, func(it option.VMessUser) int {
-			return it.AlterId
-		}))
-	return err
+	return h.updateUsersLocked(remaining)
 }

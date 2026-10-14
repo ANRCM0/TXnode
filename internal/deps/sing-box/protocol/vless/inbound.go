@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"sync"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/inbound"
@@ -33,14 +34,23 @@ func RegisterInbound(registry *inbound.Registry) {
 
 var _ adapter.TCPInjectableInbound = (*Inbound)(nil)
 
+// authenticatedUser carries identity through the exact authentication
+// generation; an index is never resolved against a later user list.
+type authenticatedUser struct {
+	Index int
+	Name  string
+	UUID  string
+}
+
 type Inbound struct {
 	inbound.Adapter
 	ctx       context.Context
 	router    adapter.ConnectionRouterEx
 	logger    logger.ContextLogger
 	listener  *listener.Listener
+	usersMu   sync.Mutex
 	users     []option.VLESSUser
-	service   *vless.Service[int]
+	service   *vless.Service[authenticatedUser]
 	tlsConfig tls.ServerConfig
 	transport adapter.V2RayServerTransport
 }
@@ -51,16 +61,16 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		ctx:     ctx,
 		router:  uot.NewRouter(router, logger),
 		logger:  logger,
-		users:   options.Users,
+		users:   append([]option.VLESSUser(nil), options.Users...),
 	}
 	var err error
 	inbound.router, err = mux.NewRouterWithOptions(inbound.router, logger, common.PtrValueOrDefault(options.Multiplex))
 	if err != nil {
 		return nil, err
 	}
-	service := vless.NewService[int](logger, adapter.NewUpstreamContextHandlerEx(inbound.newConnectionEx, inbound.newPacketConnectionEx))
-	service.UpdateUsers(common.MapIndexed(inbound.users, func(index int, _ option.VLESSUser) int {
-		return index
+	service := vless.NewService[authenticatedUser](logger, adapter.NewUpstreamContextHandlerEx(inbound.newConnectionEx, inbound.newPacketConnectionEx))
+	service.UpdateUsers(common.MapIndexed(inbound.users, func(index int, user option.VLESSUser) authenticatedUser {
+		return authenticatedUser{Index: index, Name: user.Name, UUID: user.UUID}
 	}), common.Map(inbound.users, func(it option.VLESSUser) string {
 		return it.UUID
 	}), common.Map(inbound.users, func(it option.VLESSUser) string {
@@ -167,14 +177,14 @@ func (h *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, metadata a
 func (h *Inbound) newConnectionEx(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
 	metadata.Inbound = h.Tag()
 	metadata.InboundType = h.Type()
-	userIndex, loaded := auth.UserFromContext[int](ctx)
+	identity, loaded := auth.UserFromContext[authenticatedUser](ctx)
 	if !loaded {
 		N.CloseOnHandshakeFailure(conn, onClose, os.ErrInvalid)
 		return
 	}
-	user := h.users[userIndex].Name
+	user := identity.Name
 	if user == "" {
-		user = F.ToString(userIndex)
+		user = F.ToString(identity.Index)
 	} else {
 		metadata.User = user
 	}
@@ -185,14 +195,14 @@ func (h *Inbound) newConnectionEx(ctx context.Context, conn net.Conn, metadata a
 func (h *Inbound) newPacketConnectionEx(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
 	metadata.Inbound = h.Tag()
 	metadata.InboundType = h.Type()
-	userIndex, loaded := auth.UserFromContext[int](ctx)
+	identity, loaded := auth.UserFromContext[authenticatedUser](ctx)
 	if !loaded {
 		N.CloseOnHandshakeFailure(conn, onClose, os.ErrInvalid)
 		return
 	}
-	user := h.users[userIndex].Name
+	user := identity.Name
 	if user == "" {
-		user = F.ToString(userIndex)
+		user = F.ToString(identity.Index)
 	} else {
 		metadata.User = user
 	}

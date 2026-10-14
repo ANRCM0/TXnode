@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/nlog"
@@ -80,144 +79,106 @@ func (s *Service) logUserRemovalProbe(removed []int, src userStateSource) {
 	}
 }
 
-// applyUserUpdate replaces the complete desired user set and then applies that
-// state to the kernel. Desired state is prepared first so limiter lookups are
-// valid during kernel mutation; it is rolled back if the kernel cannot apply
-// the change or restart successfully.
-func (s *Service) applyUserUpdate(
-	ctx context.Context,
-	users []model.UserSpec,
-	newHash string,
-	src userStateSource,
-) {
+// Desired state stays authoritative after failed kernel mutation. Applied hashes
+// advance only after the entire operation succeeds; uncertain revocation stops.
+func (s *Service) applyUserUpdate(ctx context.Context, users []model.UserSpec, newHash string, src userStateSource) {
 	if s.usageMode() {
 		if computeUserHash(users) != s.users.Hash() {
 			s.failUsageV2()
 		}
 		return
 	}
-	_ = ctx
+	if s.authorityTerminal(ctx) {
+		return
+	}
 	s.observeBoundary("USER_UPDATE_BEGIN", true)
 	defer s.observeBoundary("USER_UPDATE_END", false)
-	previous := s.replaceUserState(users, newHash, src)
-
+	s.replaceUserState(users, newHash, src)
+	if len(users) == 0 {
+		s.applyDesiredState(ctx)
+		return
+	}
 	if !s.kernel.IsRunning() {
-		if len(users) == 0 || s.lastConfig == nil {
-			return
-		}
-		if !s.startKernel(s.lastConfig, users) {
-			s.restoreUserState(previous)
+		if s.lastConfig != nil && !s.startKernel(s.lastConfig, users) {
+			s.stopUncertainKernel()
+			s.markApplicationPending("USER_APPLICATION_FAILED")
 		}
 		return
 	}
-
-	added, removed, err := s.kernel.UpdateUsers(users)
-	if err != nil {
-		nlog.Core().Warn(fmt.Sprintf("UpdateUsers failed, restarting kernel: %v", err))
-		if !s.startKernel(s.lastConfig, users) {
-			s.restoreUserState(previous)
-		}
+	if s.appliedUserHash == s.users.Hash() && !s.desiredDirty {
 		return
 	}
-	if s.nodeLog != nil && (added > 0 || removed > 0) {
-		s.nodeLog.Info(fmt.Sprintf("users updated: +%d -%d", added, removed))
+	if _, _, err := s.kernel.UpdateUsers(users); err != nil {
+		s.rebuildDesiredUsers(ctx)
+		return
+	}
+	s.confirmAppliedUsers(users)
+}
+func (s *Service) rebuildDesiredUsers(ctx context.Context) {
+	s.stopUncertainKernel()
+	s.markApplicationPending("USER_APPLICATION_FAILED")
+	if s.lastConfig != nil && !s.authorityTerminal(ctx) {
+		if !s.startKernel(s.lastConfig, s.users.Users()) {
+			s.stopUncertainKernel()
+			s.markApplicationPending("USER_APPLICATION_FAILED")
+		}
 	}
 }
-
-// applyUserDelta applies an incremental user change through the existing atomic
-// kernel user API while userstate.Controller owns the desired snapshot.
-func (s *Service) applyUserDelta(
-	ctx context.Context,
-	action string,
-	deltaUsers []model.UserSpec,
-) {
+func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers []model.UserSpec) {
 	if s.usageMode() {
 		if len(deltaUsers) > 0 {
 			s.failUsageV2()
 		}
 		return
 	}
-	_ = ctx
-	if (action == "add" || action == "remove") && len(deltaUsers) > 0 {
-		s.observeBoundary("USER_DELTA_BEGIN", true)
-		defer s.observeBoundary("USER_DELTA_END", false)
+	if s.authorityTerminal(ctx) || len(deltaUsers) == 0 || (action != "add" && action != "remove") {
+		return
 	}
-	switch action {
-	case "add":
-		if len(deltaUsers) == 0 {
-			return
-		}
-
-		oldUsers := s.users.Users()
-		merged := s.users.Merge(deltaUsers)
-		newHash := computeUserHash(merged)
-
-		if !s.kernel.IsRunning() {
-			previous := s.replaceUserState(merged, newHash, srcDeltaAdd)
-			if s.lastConfig == nil {
-				return
-			}
-			if !s.startKernel(s.lastConfig, merged) {
-				s.restoreUserState(previous)
-			}
-			return
-		}
-
-		// Preserve the existing UUID-replacement behavior: remove the old kernel
-		// user before adding a delta for the same numeric ID with a new UUID.
+	s.observeBoundary("USER_DELTA_BEGIN", true)
+	defer s.observeBoundary("USER_DELTA_END", false)
+	oldUsers := s.users.Users()
+	var desired []model.UserSpec
+	src := srcDeltaAdd
+	if action == "add" {
+		desired = s.users.Merge(deltaUsers)
+	} else {
+		desired = s.users.Subtract(deltaUsers)
+		src = srcDeltaRm
+	}
+	s.replaceUserState(desired, computeUserHash(desired), src)
+	if len(desired) == 0 || !s.kernel.IsRunning() {
+		s.applyDesiredState(ctx)
+		return
+	}
+	if s.desiredDirty || s.pendingCertRenewal || (s.lastConfig != nil && s.appliedConfigHash != s.lastConfigHash) {
+		s.applyDesiredState(ctx)
+		return
+	}
+	var err error
+	if action == "add" {
 		for _, delta := range deltaUsers {
 			for _, old := range oldUsers {
 				if old.ID == delta.ID && old.UUID != delta.UUID {
-					s.kernel.RemoveUsers([]model.UserSpec{old})
-					break
+					if _, err = s.kernel.RemoveUsers([]model.UserSpec{old}); err != nil {
+						break
+					}
 				}
 			}
-		}
-
-		previous := s.replaceUserState(merged, newHash, srcDeltaAdd)
-		added, err := s.kernel.AddUsers(deltaUsers)
-		if err != nil {
-			nlog.Core().Warn(fmt.Sprintf("AddUsers failed: %v, falling back to UpdateUsers", err))
-			if _, _, err := s.kernel.UpdateUsers(merged); err != nil {
-				nlog.Core().Error(fmt.Sprintf("UpdateUsers fallback failed: %v", err))
-				s.restoreUserState(previous)
-				return
+			if err != nil {
+				break
 			}
 		}
-		if s.nodeLog != nil && added > 0 {
-			s.nodeLog.Info(fmt.Sprintf("users added: +%d", added))
+		if err == nil {
+			_, err = s.kernel.AddUsers(deltaUsers)
 		}
-
-	case "remove":
-		if len(deltaUsers) == 0 {
-			return
-		}
-
-		filtered := s.users.Subtract(deltaUsers)
-		newHash := computeUserHash(filtered)
-
-		// Keep desired state current even while the kernel is stopped; otherwise
-		// a later restart could resurrect users already removed by ControlPlane.
-		if !s.kernel.IsRunning() {
-			s.replaceUserState(filtered, newHash, srcDeltaRm)
-			return
-		}
-
-		previous := s.replaceUserState(filtered, newHash, srcDeltaRm)
-		removed, err := s.kernel.RemoveUsers(deltaUsers)
-		if err != nil {
-			nlog.Core().Warn(fmt.Sprintf("RemoveUsers failed: %v, falling back to UpdateUsers", err))
-			if _, _, err := s.kernel.UpdateUsers(filtered); err != nil {
-				nlog.Core().Error(fmt.Sprintf("UpdateUsers fallback failed: %v", err))
-				s.restoreUserState(previous)
-				return
-			}
-		}
-		if s.nodeLog != nil && removed > 0 {
-			s.nodeLog.Info(fmt.Sprintf("users removed: -%d", removed))
-		}
-
-	default:
-		nlog.Core().Warn(fmt.Sprintf("unknown user delta action: %s", action))
+	} else {
+		_, err = s.kernel.RemoveUsers(deltaUsers)
 	}
+	if err != nil {
+		if _, _, fallbackErr := s.kernel.UpdateUsers(desired); fallbackErr != nil {
+			s.rebuildDesiredUsers(ctx)
+			return
+		}
+	}
+	s.confirmAppliedUsers(desired)
 }

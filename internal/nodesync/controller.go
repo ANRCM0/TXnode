@@ -20,12 +20,14 @@ import (
 // Result is an immutable polling snapshot prepared by Controller for the
 // Service orchestration layer to validate/apply on its main goroutine.
 type Result struct {
-	Terminal    error
-	Config      *model.NodeSpec
-	Users       []model.UserSpec
-	ConfigHash  string
-	UserHash    string
-	CertChanged bool
+	Terminal      error
+	Generation    uint64
+	HasGeneration bool
+	Config        *model.NodeSpec
+	Users         []model.UserSpec
+	ConfigHash    string
+	UserHash      string
+	CertChanged   bool
 }
 
 // Controller owns asynchronous polling concerns that do not belong in the
@@ -63,6 +65,14 @@ func (c *Controller) Results() <-chan Result {
 // currentConfigHash and certChanged are runtime facts supplied by Service.
 // Controller may use them only to avoid returning an unchanged config.
 func (c *Controller) Poll(ctx context.Context, currentConfigHash string, certChanged bool) bool {
+	return c.poll(ctx, currentConfigHash, certChanged, 0, false)
+}
+
+// PollAt captures the Service desired generation before the asynchronous read.
+func (c *Controller) PollAt(ctx context.Context, currentConfigHash string, certChanged bool, generation uint64) bool {
+	return c.poll(ctx, currentConfigHash, certChanged, generation, true)
+}
+func (c *Controller) poll(ctx context.Context, currentConfigHash string, certChanged bool, generation uint64, hasGeneration bool) bool {
 	if c == nil || c.source == nil || !c.source.SupportsPolling() || c.terminal.Load() != nil {
 		return false
 	}
@@ -83,7 +93,7 @@ func (c *Controller) Poll(ctx context.Context, currentConfigHash string, certCha
 				c.terminal.CompareAndSwap(nil, denial)
 				c.pullActive.Store(false)
 				select {
-				case c.results <- Result{Terminal: denial}:
+				case c.results <- Result{Terminal: denial, Generation: generation, HasGeneration: hasGeneration}:
 				case <-ctx.Done():
 				}
 				return
@@ -95,7 +105,7 @@ func (c *Controller) Poll(ctx context.Context, currentConfigHash string, certCha
 		}
 		c.backoff.onSuccess()
 
-		result := Result{CertChanged: certChanged}
+		result := Result{CertChanged: certChanged, Generation: generation, HasGeneration: hasGeneration}
 		if snapshot.Config != nil {
 			result.Config = snapshot.Config
 			result.ConfigHash = ConfigHash(snapshot.Config)
@@ -126,18 +136,17 @@ func (c *Controller) Poll(ctx context.Context, currentConfigHash string, certCha
 // RequestResync coalesces repeated resync signals until Service confirms that
 // a poll result has been applied. This preserves the existing behavior while
 // keeping resync concurrency state out of Service.
-func (c *Controller) RequestResync(
-	ctx context.Context,
-	currentConfigHash string,
-	certChanged bool,
-) bool {
-	if c == nil {
+func (c *Controller) RequestResync(ctx context.Context, currentConfigHash string, certChanged bool) bool {
+	return c.requestResync(ctx, currentConfigHash, certChanged, 0, false)
+}
+func (c *Controller) RequestResyncAt(ctx context.Context, currentConfigHash string, certChanged bool, generation uint64) bool {
+	return c.requestResync(ctx, currentConfigHash, certChanged, generation, true)
+}
+func (c *Controller) requestResync(ctx context.Context, currentConfigHash string, certChanged bool, generation uint64, hasGeneration bool) bool {
+	if c == nil || !c.resyncPending.CompareAndSwap(false, true) {
 		return false
 	}
-	if !c.resyncPending.CompareAndSwap(false, true) {
-		return false
-	}
-	if !c.Poll(ctx, currentConfigHash, certChanged) {
+	if !c.poll(ctx, currentConfigHash, certChanged, generation, hasGeneration) {
 		c.resyncPending.Store(false)
 		return false
 	}

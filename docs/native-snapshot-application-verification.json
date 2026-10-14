@@ -1,0 +1,317 @@
+{
+  "phase": "P0.3",
+  "status": "native-snapshot-and-actual-kernel-application-isolated-verified",
+  "base_commit": "d27f738a29db20a1b8df660d40075552e65d8c74",
+  "snapshot": "/opt/txboard-baseline/native-snapshot-integrated-r4",
+  "source_sha256": {
+    ".github/workflows/ci-node.yml": "ab422626e7a861f384c94520e1390ce0da194c1be64239cd3d78f18c0e281102",
+    "contracts/node-protocol/native-snapshot-application-v1.md": "9311d67629e1c5fa024428964482f776f19365f65e71f1ee2cec5ca661480614",
+    "node/Dockerfile": "3a9c1f377a03aef423e92108a2eb7c417f3485e6ade8e1547abe2033d864d060",
+    "node/go.mod": "d3182ea1ce51ffac95c6b48432b77e8b9e05a31cc88666751c23e7c18d8018b0",
+    "node/go.sum": "284fae554b201c0972272c2f19d08def1fe2748b98384b81cddbd05df48ee55e",
+    "node/internal/controlplane/txboard.go": "9cb1ae237358879116d66ed8ec144eccd99bf162ed1c2293002a57b21a16ed84",
+    "node/internal/controlplane/txboard_snapshot_retry_test.go": "f6df07732f21aeef303c592229f1d64526e54304cb8ad1b09f2b8c782ab39b9f",
+    "node/internal/deps/sing-box/TXNODE-PATCH.md": "3ad746333868274bf270939da0436d643d33ab36117355c9a359b80813dc9d80",
+    "node/internal/deps/sing-box/protocol/vless/inbound.go": "24e2461d833994017b229e192da07cf5766dd2e8151ff88a4d6d2dca31c09cb5",
+    "node/internal/deps/sing-box/protocol/vless/user.go": "04f9921b249cf7588f62b2a019086316df2a28b04cca420b2e14887bfc97c4e4",
+    "node/internal/deps/sing-box/protocol/vmess/inbound.go": "493021c2caab7cd75d7186a248a4505e66a53add2731b3967eb303a61272666c",
+    "node/internal/deps/sing-box/protocol/vmess/user.go": "be5175eece5134617f26bc34f75be7080a82d550c074e7c88927dc63901d160f",
+    "node/internal/deps/sing-vmess/.github/renovate.json": "93a1651c9727c22d2301f0934605a2235bc9a4126038a4585cfdf923e121d4ea",
+    "node/internal/deps/sing-vmess/.github/update_dependencies.sh": "c4c5f89f2fd7bfcbb33ed0bd674d23f6b06a3d0f7ade26f9f7601174c4bf1c0f",
+    "node/internal/deps/sing-vmess/.github/workflows/lint.yml": "d7c7b085849abb14ac9329d1b9d99800e320a932d8e8b6a9882b870402b9f918",
+    "node/internal/deps/sing-vmess/.github/workflows/test.yml": "202d7fa6130fc083493b017dc92a003d7a2e8e36f921b708b06078812837f900",
+    "node/internal/deps/sing-vmess/.gitignore": "619a754b37b7bf159791d2f3af67800e2654d2c211a4706842604b0cbbf15a48",
+    "node/internal/deps/sing-vmess/.golangci.yml": "6a2b6fe0867c925adf34fc14ca6f39d6eed459ed6161a8c1d259aa005b07e146",
+    "node/internal/deps/sing-vmess/LICENSE": "2f02b7486bcfa90d115c71a20437f3906b6fd5bef81c5dc0efd341399e89d0fd",
+    "node/internal/deps/sing-vmess/Makefile": "7bb06130de435e7bcb71c2ce2f56003f7a6fee8e6197573c114ee58c80475385",
+    "node/internal/deps/sing-vmess/README.md": "c6f7cf4e328c662379465617fbd3fa2326827e02ce24b62f446545c5fee49139",
+    "node/internal/deps/sing-vmess/TXNODE-PATCH.md": "61bcf426b325b7dc98a76f0031fd538adbb5dd964cc2e6fa8ccfa78be7ba0f01",
+    "node/internal/deps/sing-vmess/authentication_snapshot_test.go": "96e20ef32ec6c9cee7a74e0cbca839a09ae94c10a19701129216446db169aa3f",
+    "node/internal/deps/sing-vmess/chunk_aead.go": "3fc8f03d391ce7f2ad1ee5f2b103d1a52171862c24997492a97415d1f994ba1f",
+    "node/internal/deps/sing-vmess/chunk_length_aead.go": "c106029ba6bb0a304713b7a7b66b27e792e3717ff114f8963e993b6d0bf18e66",
+    "node/internal/deps/sing-vmess/chunk_length_stream.go": "de6d2412041e7e75af8a995532dc71fcb0222ae87c080fb121a613411211432a",
+    "node/internal/deps/sing-vmess/chunk_stream.go": "1bd41234e826e7d55cd175e6da0a3010e5d3f0118fcf5e39e31aebb76ba31223",
+    "node/internal/deps/sing-vmess/chunk_stream_checksum.go": "1be91d425da231a8a4cb71ab9cdb69fc3d04f1d227071ea882113b8d3d2ff031",
+    "node/internal/deps/sing-vmess/client.go": "747a93608f091221114552309d0388b53c6b0aa30219d51ff82c60ec3e7f8218",
+    "node/internal/deps/sing-vmess/client_option.go": "628ead967d72de587034a7129c9b38bfdb1940a1b240f905ba754758bfeb5033",
+    "node/internal/deps/sing-vmess/go.mod": "9c678f70449c52c57b1bf6dc40ac5bf55c0a61e3336a8dd0d082aa352e510471",
+    "node/internal/deps/sing-vmess/go.sum": "df22b93446930c1e2de0f45a30736aba069ba0a0c9b745042463dbb54cd0f2bf",
+    "node/internal/deps/sing-vmess/kdf.go": "9703b679a50e609223ac46c15723eea987e1188e370dcce1ecd237d597c1be2a",
+    "node/internal/deps/sing-vmess/mux.go": "7061ce5af54ea04c212fb9184733a0f80d7bbcd541d25d097df2611bd02d4e9c",
+    "node/internal/deps/sing-vmess/mux_wrapper.go": "bfb94507941940e19c8b232b00a535dcf07c313e3a4f84059eb37565791cf25b",
+    "node/internal/deps/sing-vmess/packetaddr/conn.go": "6d7f6bc659a8cab8c4023aa8aef89420fe4eb9aebad66517f8d128f21d43c7a4",
+    "node/internal/deps/sing-vmess/packetaddr/packetaddr.go": "8f0b7b31c692a1a257e607785b50b1191c3b6fd8211ad946805aa3136d3b770c",
+    "node/internal/deps/sing-vmess/protocol.go": "d2d41075d1f1d4e5e3206395d877138bc665b09a39c1fab42670fee45fae9224",
+    "node/internal/deps/sing-vmess/service.go": "7c6b23021f4f4e3dbbd1d3df93c5abb73bef62be7132e16922838fdb628f6e82",
+    "node/internal/deps/sing-vmess/service_option.go": "4f4508e8f50842c9df55c95a76dc4bdbf11f0014ae59cdb2f43ff59a61b72b59",
+    "node/internal/deps/sing-vmess/vless/authentication_snapshot_test.go": "da6ac8de1476929add069ecc48dc18f13cf61627e225f8d799a8d6498ab79794",
+    "node/internal/deps/sing-vmess/vless/client.go": "51a99417d9d93f58e66f7b79eca3cb3f3242cd68b35ca86efc14a3c10f40c5ea",
+    "node/internal/deps/sing-vmess/vless/constant.go": "64517f068c6f54cab70c857890cc2cfd4ce1386e3ef5963efdb4081343e58316",
+    "node/internal/deps/sing-vmess/vless/protocol.go": "dbf70def9e368cef3d1aeaba9186a6c862697eebac71f3e47ca405695da03304",
+    "node/internal/deps/sing-vmess/vless/service.go": "ac8e08b8fb2504dd1434432386ee2b459240373648cbd7217033f7d7bb738922",
+    "node/internal/deps/sing-vmess/vless/vision.go": "15d46cbec83d0408487d64f762f5e41b6032da0246e0f3510396289a689034d9",
+    "node/internal/deps/sing-vmess/vless/vision_utls.go": "23747cbe4fb6887a20d32f23bd7d4768a12d8d6a2bc4165a50885e3351d35545",
+    "node/internal/deps/sing-vmess/xudp.go": "11497d190defff25ed8fcc8a5d8123cd9fcb1cfbce07d068664164468d118cfa",
+    "node/internal/kernel/singbox/singbox.go": "a2c4c1067729af087d1da6346b2a3663eab5a965663ed80e4198b73dc930756f",
+    "node/internal/kernellifecycle/controller.go": "265fa500c8e5e72056a337313209acd699562994578cabaac8024b8ff81cbe5c",
+    "node/internal/nodesync/controller.go": "da70c31d28795c1213bd2e57abb71b2f330cbd9ab55549d822791ea6294f8772",
+    "node/internal/nodesync/snapshot_generation_test.go": "5640ef5dd699c972a3cf73ad7fcbf4d1a53ab8f6ee4178936e6c99487ff28832",
+    "node/internal/service/kernel_adapter.go": "d54a297e6487223b652aa2599fefcbef152ccc976285a36ea74e9c72d172e5cc",
+    "node/internal/service/native_snapshot_application_test.go": "3fd30625ca9ea0760f969823712614e0cae60c754b57e267c7561024d3ee7fa8",
+    "node/internal/service/native_snapshot_live_test.go": "e7e68d73005d7226f6d3b79c29dda999f18414a20bf7eb9c99ae3cbdd205f780",
+    "node/internal/service/push_adapter.go": "3cae09a07ec1e71f6772f04909f1caeba93dfd8a3d33603c23938ca51d18224b",
+    "node/internal/service/service.go": "e11db47c475b429f10bf22d13e911d0ee02e60443da1559f24e7d5e735b9abef",
+    "node/internal/service/service_test.go": "3900ed837809d19c4c2a02dfae401af7dd823c27502274d9e2a5982804c2b3fb",
+    "node/internal/service/sync_adapter.go": "22c7627642e1c24f5f7a70ee2280691e806ddb9eef6652078a6ee8161bb664b1",
+    "node/internal/service/user_adapter.go": "ee4b41e2f40bdb5a50a5acd9a254731c64e419db8f114781f2c81fa0c84c624e",
+    "node/internal/txboard/client.go": "e6942df7e2d9fdcca79cc0b33907ce384f14a73e3779b396de1ae50e540d87ba",
+    "node/internal/txboard/native_snapshot_cache_test.go": "bf540f05dbac02b085d88e88cf3c5ae668de7a1619d746a69ed886333624f6b1"
+  },
+  "dependencies": {
+    "go_mod_sha256": "d3182ea1ce51ffac95c6b48432b77e8b9e05a31cc88666751c23e7c18d8018b0",
+    "go_sum_sha256": "284fae554b201c0972272c2f19d08def1fe2748b98384b81cddbd05df48ee55e"
+  },
+  "acceptance": {
+    "race": {
+      "mode": "race",
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "-count=1",
+        "-json",
+        "./..."
+      ],
+      "exit_code": 0,
+      "snapshot": "/opt/txboard-baseline/native-snapshot-integrated-r4",
+      "log_sha256": "99d98b07eb47c129950928c0bf8e09c533b9bab6ec8f4a7bfe750da69a290c39",
+      "main_passed": 536,
+      "subtests_passed": 420,
+      "skipped": 6,
+      "failures": []
+    },
+    "leaf": {
+      "mode": "leaf",
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "-count=1",
+        "-json",
+        "github.com/sagernet/sing-vmess",
+        "github.com/sagernet/sing-vmess/vless"
+      ],
+      "exit_code": 0,
+      "snapshot": "/opt/txboard-baseline/native-snapshot-integrated-r4",
+      "log_sha256": "fcef7b0c17a199041dc43fdc9b7982a0e07832296ad8e6b44ac1b687e3e0e686",
+      "main_passed": 5,
+      "subtests_passed": 0,
+      "skipped": 0,
+      "failures": []
+    },
+    "tidy": {
+      "mode": "tidy",
+      "command": [
+        "go",
+        "mod",
+        "tidy",
+        "-diff"
+      ],
+      "exit_code": 0,
+      "snapshot": "/opt/txboard-baseline/native-snapshot-integrated-r4",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "verify": {
+      "mode": "verify",
+      "command": [
+        "go",
+        "mod",
+        "verify"
+      ],
+      "exit_code": 0,
+      "snapshot": "/opt/txboard-baseline/native-snapshot-integrated-r4",
+      "log_sha256": "b4537ed75f533f993f371954de47e42a793b8e5b0587577de7e27fb3e50696bd"
+    },
+    "vet": {
+      "mode": "vet",
+      "command": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "exit_code": 0,
+      "snapshot": "/opt/txboard-baseline/native-snapshot-integrated-r4",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "build": {
+      "mode": "build",
+      "command": [
+        "go",
+        "build",
+        "-trimpath",
+        "-tags",
+        "with_quic with_utls with_wireguard with_clash_api",
+        "-o",
+        "/opt/txboard-baseline/native-snapshot-integrated-r4/tx-node-release",
+        "./cmd/tx-node"
+      ],
+      "exit_code": 0,
+      "snapshot": "/opt/txboard-baseline/native-snapshot-integrated-r4",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "ordinary_Core_native_interop": {
+    "vless": {
+      "mode": "vless",
+      "exit_code": 0,
+      "snapshot": "/opt/txboard-baseline/native-snapshot-integrated-r4",
+      "log_sha256": "44bc61f44a295a39b81e5e1a8939478fa485b54c8378dcc7324cc9a434431860",
+      "actual_result": {
+        "actual_admin_http": true,
+        "actual_service": true,
+        "actual_singbox": true,
+        "actual_sql_disabled": true,
+        "artifact_sha256": {
+          "core-live-result.json": "d1a3cd99723a069d13a05672a2fa0438e4748e7e1954a0f854ce7c8ec891ac16",
+          "mutation.json": "80d2ae1837e58119f530d3a3a3c56ca459c7820f3279ffd29bd4f8ea7909e19d",
+          "native-observations.jsonl": "a1536bb835f01d1127c966396d9c5c5a214381185291bca58f50675fd48e9be1"
+        },
+        "core_restart_refusal_observed": true,
+        "core_snapshot_refusal_observed": true,
+        "decoded_down_bytes": 79,
+        "decoded_up_bytes": 43,
+        "denial_code": "NODE_NOT_FOUND",
+        "denial_http_status": 404,
+        "established_stream_closed": true,
+        "listener_closed": true,
+        "machine_all_node_shutdown_proven": false,
+        "native_v1": true,
+        "node_id": 1,
+        "production_authority_complete": false,
+        "protocol": "vless",
+        "rejected_restart_before_listener": true,
+        "scope": "single-native-node-disable-v1",
+        "tail_sha256": "4ac6c6c4928b281e3f910b61ab43852fccd821d96d63a7781ee7e666b93b649c",
+        "tail_unchanged_after_rejected_restart": true,
+        "terminal_batch_id": "82e39b9b55cb8981f9c65c7e1ab48743",
+        "terminal_down_bytes": 79,
+        "terminal_up_bytes": 43,
+        "usage_v2_enabled": false,
+        "user_id": 1,
+        "verified_tls": true,
+        "workerman_ws_proven": false
+      },
+      "private_database_backup": {
+        "database": "txboard_native_control_test",
+        "mode": "0600",
+        "backup_sha256": "0f1b3115070e4a5f7360009c0ea94c9478f8bda12f2f6ff754ee890cae4751e0",
+        "reset_tables": 102,
+        "protocol": "vless"
+      }
+    },
+    "vmess": {
+      "mode": "vmess",
+      "exit_code": 0,
+      "snapshot": "/opt/txboard-baseline/native-snapshot-integrated-r4",
+      "log_sha256": "fcaae3190c0b0240ae9ce40e1dfcd5865f4cf18c4c716bc955e6cb0e2dbd33e0",
+      "actual_result": {
+        "actual_admin_http": true,
+        "actual_service": true,
+        "actual_singbox": true,
+        "actual_sql_disabled": true,
+        "artifact_sha256": {
+          "core-live-result.json": "138d138fe460b3f71d1bff3f1a90107f9443a02151273c0173db1350f32596e7",
+          "mutation.json": "80d2ae1837e58119f530d3a3a3c56ca459c7820f3279ffd29bd4f8ea7909e19d",
+          "native-observations.jsonl": "6cfa87a8a53b7cf7eae43358e821c8f1b0789b987cf322c88e0e68b42de884d0"
+        },
+        "core_restart_refusal_observed": true,
+        "core_snapshot_refusal_observed": true,
+        "decoded_down_bytes": 79,
+        "decoded_up_bytes": 43,
+        "denial_code": "NODE_NOT_FOUND",
+        "denial_http_status": 404,
+        "established_stream_closed": true,
+        "listener_closed": true,
+        "machine_all_node_shutdown_proven": false,
+        "native_v1": true,
+        "node_id": 1,
+        "production_authority_complete": false,
+        "protocol": "vmess",
+        "rejected_restart_before_listener": true,
+        "scope": "single-native-node-disable-v1",
+        "tail_sha256": "009c66bcba3cdd95f3b289c4fd0e0a336441a89f18a1facedde7c16e82a29a39",
+        "tail_unchanged_after_rejected_restart": true,
+        "terminal_batch_id": "22132df6adef7e481a702d94124e63cc",
+        "terminal_down_bytes": 79,
+        "terminal_up_bytes": 43,
+        "usage_v2_enabled": false,
+        "user_id": 1,
+        "verified_tls": true,
+        "workerman_ws_proven": false
+      },
+      "private_database_backup": {
+        "database": "txboard_native_control_test",
+        "mode": "0600",
+        "backup_sha256": "d0a0ed28583a4e9894e3a252b56842964a55c8f8a68693efd17d04e8f2f27d68",
+        "reset_tables": 102,
+        "protocol": "vmess"
+      }
+    }
+  },
+  "locked_Core_dependencies": {
+    "composer_lock_sha256": "f47b212c2fc530a7820e370eab7c6d624d13962e7d26e4f2ddf57a11848257c0",
+    "installed_json_sha256": "8e668e456c9772ae428a038ab003fba5752ab2591980fc8396d9122851145b80"
+  },
+  "behavior": {
+    "complete200body_cached_with_ETag": true,
+    "304_reuses_independent_body_not_fake_empty_users": true,
+    "config_received_before_users_failure_is_not_lost": true,
+    "no_cache304_retries_once": true,
+    "cache_identity_scoped_and_reset_generation_protected": true,
+    "applied_hashes_advance_only_after_success": true,
+    "identical_snapshot_retries_after_failed_application": true,
+    "partial_user_failure_stops_uncertain_kernel_and_retains_desired_revocation": true,
+    "stale_ordinary_poll_cannot_supersede_newer_local_push": true,
+    "terminal_denial_is_not_discarded_by_local_generation": true,
+    "pending_certificate_not_lost_on_failure": true,
+    "immutable_authentication_indexes_preserve_VMess_replay_filter": true,
+    "user_identity_never_indexes_newer_user_list": true,
+    "meter_tracker_registered_before_listener": true
+  },
+  "reproduced_defects": [
+    {
+      "case": "native user update concurrent real authentication",
+      "evidence_sha256": "6ffbd553c0e4d90f5cc51386e45ab92bae35cced3b510c65602b26f44bffbaf3",
+      "fixed": true
+    },
+    {
+      "case": "tracker AppendTracker after listener Start",
+      "evidence_sha256": "3232ac2f1c1d3c01b78f1c8ce75ae5bacc330393ebad5baf64099c9da80176b3",
+      "fixed": true
+    },
+    {
+      "case": "tidy local replacement checksum and LF consistency",
+      "retained_logs": [
+        "r1/tidy.log",
+        "r2/tidy.log"
+      ],
+      "fixed": true
+    }
+  ],
+  "coverage_limits": [
+    "Live push ordering tests enter the real Service queue but do not attest a deployed Workerman websocket server.",
+    "Local generation is not a global Core revision or a shared atomic config/users snapshot.",
+    "Custom outbound/rule reload correctness and Xray strong established-session revocation remain mandatory next P0 work.",
+    "Machine-wide live Core/WS integration, finite offline authorization, Provider production delivery, formal SC-v2 and global migration/drain gates remain incomplete."
+  ],
+  "remote_CI": {
+    "status": "pending-after-push",
+    "workflows": [
+      "Node CI and images",
+      "node-native-authority-control",
+      "node-live-recovery-core-usage",
+      "node-live-protocol-core-usage",
+      "node-service-core-usage"
+    ]
+  }
+}

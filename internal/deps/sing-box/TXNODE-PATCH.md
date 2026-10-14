@@ -12,3 +12,10 @@ connection before their unsupported transport is rejected.
 
 Upstream source and license notices are retained. Keep this patch narrow and
 review it whenever the pinned upstream module changes.
+
+P0 native snapshot application also makes VLESS and VMess inbound authentication
+identities immutable across user-list updates. The pinned local sing-vmess module
+preserves the VMess replay filter while atomically publishing authentication
+indexes. Concurrent handshakes keep one coherent user identity and never index
+into a later user list. Keep protocol bytes, cryptographic derivation and replay
+windows unchanged; verify real concurrent clients whenever this patch changes.

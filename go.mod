@@ -265,4 +265,7 @@ require (
 // Retain the required Mieru and Xray per-user bandwidth patches.
 replace github.com/sagernet/sing-box => ./internal/deps/sing-box
 
+// Preserve the pinned protocol while publishing immutable authentication indexes.
+replace github.com/sagernet/sing-vmess => ./internal/deps/sing-vmess
+
 replace github.com/xtls/xray-core => github.com/ANRCM0/Xray-core v0.0.0-20261008033525-867967fac148

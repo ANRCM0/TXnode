@@ -9,6 +9,7 @@ WORKDIR /build
 
 COPY go.mod go.sum ./
 COPY internal/deps/sing-box ./internal/deps/sing-box
+COPY internal/deps/sing-vmess ./internal/deps/sing-vmess
 RUN go mod download
 
 COPY . .

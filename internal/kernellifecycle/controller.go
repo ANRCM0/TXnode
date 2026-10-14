@@ -97,3 +97,13 @@ func (c *Controller) setApplied(config *model.NodeSpec, users []model.UserSpec) 
 	}
 	c.mu.Unlock()
 }
+
+// RecordUsers follows only a successfully completed atomic user mutation.
+func (c *Controller) RecordUsers(users []model.UserSpec) {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.applied.Users = append([]model.UserSpec(nil), users...)
+	c.mu.Unlock()
+}

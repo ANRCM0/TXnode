@@ -16,6 +16,9 @@ func (s *Service) handlePushStatus(ctx context.Context, status controlplane.Stat
 		return
 	}
 
+	// Invalidate an in-flight pre-reconnect response as well as transport caches.
+	s.desiredGeneration++
+	s.resetSnapshotCache()
 	observation := s.push.ObserveStatus(status)
 	if observation.NeedsResync {
 		s.requestWSResync(ctx, "drop_detected")
@@ -60,6 +63,8 @@ func (s *Service) discoverPush(ctx context.Context) {
 	}
 
 	if result.NeedsPoll {
+		s.desiredGeneration++
+		s.resetSnapshotCache()
 		s.schedulePoll(ctx)
 	}
 

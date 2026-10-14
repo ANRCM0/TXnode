@@ -53,13 +53,20 @@ type Service struct {
 	pushInterval int // seconds
 	pullInterval int // seconds
 
-	lastConfigHash    string // hash of full config for change detection
-	syncer            *nodesync.Controller
-	reporter          *reporting.Controller
-	reporterInitErr   error
-	legacyPendingPath string
-	usageV2           *isolatedUsageRuntime
-	usageOwner        *usagebucket.ProcessOwner
+	lastConfigHash     string // desired full configuration hash
+	desiredGeneration  uint64 // main Service goroutine only
+	appliedConfigHash  string
+	appliedUserHash    string
+	desiredDirty       bool
+	pendingCertRenewal bool
+	applicationFailure string
+	configRejected     bool
+	syncer             *nodesync.Controller
+	reporter           *reporting.Controller
+	reporterInitErr    error
+	legacyPendingPath  string
+	usageV2            *isolatedUsageRuntime
+	usageOwner         *usagebucket.ProcessOwner
 
 	push             *pushsync.Controller
 	machineMailbox   *controlplane.NodeMailbox
@@ -338,8 +345,8 @@ func (s *Service) initialSetup(ctx context.Context) error {
 	}
 	s.metricsMu.Lock()
 	s.lastConfig = bootstrap.Config
-	s.metricsMu.Unlock()
 	s.lastConfigHash = computeConfigHash(bootstrap.Config)
+	s.metricsMu.Unlock()
 	s.updateUserState(bootstrap.Users, srcBootstrap)
 
 	nlog.Core().Info("initial snapshot ready",
@@ -349,6 +356,7 @@ func (s *Service) initialSetup(ctx context.Context) error {
 	)
 
 	if len(bootstrap.Users) == 0 {
+		s.applyDesiredState(ctx)
 		nlog.Core().Warn("no users, kernel will not start until users are available")
 		s.markMailboxReadyAndDrain(ctx)
 		return nil
@@ -356,7 +364,11 @@ func (s *Service) initialSetup(ctx context.Context) error {
 
 	s.applyRemoteOverrides(ctx, bootstrap.Config)
 	if !s.startKernel(bootstrap.Config, bootstrap.Users) {
-		return fmt.Errorf("start kernel")
+		s.markApplicationPending("KERNEL_START_FAILED")
+		// Native complete snapshots will retry this desired state on the next poll.
+		if s.cfg.Panel.Provider != "txboard" {
+			return fmt.Errorf("start kernel")
+		}
 	}
 	s.markMailboxReadyAndDrain(ctx)
 	return nil
@@ -424,61 +436,45 @@ func (s *Service) handleWSEvent(ctx context.Context, event controlplane.Event) {
 			}
 		}
 	}
+	if s.usageMode() {
+		return
+	}
+	if s.authorityTerminal(ctx) {
+		return
+	}
 	switch event.Type {
 	case controlplane.EventSyncConfig:
 		if event.Config == nil {
 			return
 		}
-		newConfigHash := computeConfigHash(event.Config)
-		if newConfigHash == s.lastConfigHash {
-			return
-		}
 		if err := validateNodeRuntime(s.cfg, s.kernel.Protocols(), event.Config, s.certs.TLSCert()); err != nil {
-			nlog.Core().Warn("ws config validation failed, ignoring update", "error", err)
+			s.metricsMu.Lock()
+			s.configRejected = true
+			s.metricsMu.Unlock()
+			s.markApplicationPending("CONFIG_VALIDATION_FAILED")
 			return
 		}
-		// Initialize nodeLog on first config
-		if s.nodeLog == nil {
-			s.nodeLog = nlog.ForNode(event.Config.Protocol, event.Config.ServerPort)
-		}
-		s.nodeLog.Info(fmt.Sprintf("config updated, %d users", len(event.Users)))
-		s.metricsMu.Lock()
-		s.lastConfig = event.Config
-		s.metricsMu.Unlock()
-		s.lastConfigHash = newConfigHash
-		s.applyRemoteOverrides(ctx, event.Config)
-		s.applyChanges(ctx, true, false)
-
+		s.desiredGeneration++
+		s.acceptDesiredConfig(ctx, event.Config)
+		s.applyDesiredState(ctx)
 	case controlplane.EventSyncUsers:
 		if event.Users == nil {
 			return
 		}
-		newHash := computeUserHash(event.Users)
-		if newHash == s.users.Hash() {
-			return
-		}
-		if s.nodeLog != nil {
-			s.nodeLog.Info(fmt.Sprintf("users updated, %d users", len(event.Users)))
-		}
-		s.applyUserUpdate(ctx, event.Users, newHash, srcWSFull)
-
+		s.desiredGeneration++
+		s.applyUserUpdate(ctx, event.Users, computeUserHash(event.Users), srcWSFull)
 	case controlplane.EventSyncUserDelta:
-		if len(event.DeltaUsers) == 0 {
+		if len(event.DeltaUsers) == 0 || (event.DeltaAction != "add" && event.DeltaAction != "remove") {
 			return
 		}
-		if s.nodeLog != nil {
-			s.nodeLog.Info(fmt.Sprintf("users delta: %s, %d users", event.DeltaAction, len(event.DeltaUsers)))
-		}
+		s.desiredGeneration++
 		s.applyUserDelta(ctx, event.DeltaAction, event.DeltaUsers)
-
 	case controlplane.EventSyncDevices:
-		// Sync global device state
 		if event.DeviceUsers != nil {
 			s.kernel.UpdateGlobalDevices(event.DeviceUsers)
 		}
-
 	default:
-		nlog.Core().Debug(fmt.Sprintf("unknown ws event: %v", event.Type))
+		nlog.Core().Debug("unknown ws event", "type", event.Type)
 	}
 }
 
@@ -546,6 +542,19 @@ func (s *Service) buildMetrics(status monitor.Status) map[string]interface{} {
 	m["total_connections"] = s.tracker.TotalConnections()
 	m["active_users"] = len(online)
 	m["total_users"] = totalUsers
+	s.metricsMu.RLock()
+	desiredUsersHash := ""
+	if s.users != nil {
+		desiredUsersHash = s.users.Hash()
+	}
+	m["control_application"] = map[string]interface{}{
+		"desired_config_hash": s.lastConfigHash, "applied_config_hash": s.appliedConfigHash,
+		"desired_users_hash": desiredUsersHash, "applied_users_hash": s.appliedUserHash,
+		"pending_retry": s.desiredDirty || s.pendingCertRenewal, "certificate_pending": s.pendingCertRenewal,
+		"failure_code": s.applicationFailure, "configuration_applied": !s.configRejected && s.lastConfigHash != "" && s.lastConfigHash == s.appliedConfigHash,
+		"users_applied": desiredUsersHash != "" && desiredUsersHash == s.appliedUserHash,
+	}
+	s.metricsMu.RUnlock()
 
 	// Speed
 	m["inbound_speed"] = s.tracker.InboundSpeed()

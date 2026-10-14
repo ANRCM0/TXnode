@@ -8,6 +8,7 @@ import (
 
 	"github.com/ANRCM0/TX-Node/internal/certcoord"
 	"github.com/ANRCM0/TX-Node/internal/config"
+	"github.com/ANRCM0/TX-Node/internal/controlplane"
 	"github.com/ANRCM0/TX-Node/internal/kernel"
 	"github.com/ANRCM0/TX-Node/internal/kernellifecycle"
 	"github.com/ANRCM0/TX-Node/internal/limiter"
@@ -24,10 +25,10 @@ type fakeKernel struct {
 	updateErr error
 	addErr    error
 
-	startCalls  int
-	reloadCalls int
-	updateCalls int
-	addCalls    int
+	startCalls        int
+	reloadCalls       int
+	updateCalls       int
+	addCalls          int
 	removeCalls       int
 	clearDevicesCalls int
 
@@ -103,8 +104,8 @@ func (f *fakeKernel) CloseUserConnections(ctx context.Context, uuid string) erro
 }
 func (f *fakeKernel) SetSpeedLimitFunc(fn func(uuid string) *rate.Limiter) { f.speedLimitFunc = fn }
 func (f *fakeKernel) SetDeviceLimitFunc(fn func(uuid string) (int, bool))  { f.deviceLimitFunc = fn }
-func (f *fakeKernel) UpdateGlobalDevices(users map[int][]string) { _ = users }
-func (f *fakeKernel) ClearGlobalDevices()                    { f.clearDevicesCalls++ }
+func (f *fakeKernel) UpdateGlobalDevices(users map[int][]string)           { _ = users }
+func (f *fakeKernel) ClearGlobalDevices()                                  { f.clearDevicesCalls++ }
 
 func newTestService(k *fakeKernel) *Service {
 	sharedLimiter := limiter.New()
@@ -152,35 +153,42 @@ func TestApplyUserUpdatePreparesLimiterBeforeKernelUpdate(t *testing.T) {
 	}
 }
 
-func TestApplyUserUpdateRestoresStateWhenKernelAndRestartFail(t *testing.T) {
-	k := &fakeKernel{
-		running:   true,
-		updateErr: errors.New("update failed"),
-		startErr:  errors.New("restart failed"),
-	}
+func TestApplyUserUpdateRetainsRevocationAndStopsUncertainKernelWhenRestartFails(t *testing.T) {
+	k := &fakeKernel{}
 	s := newTestService(k)
+	s.cfg = &config.Config{Panel: config.PanelConfig{Provider: "txboard"}, Kernel: config.KernelConfig{Type: "singbox"}}
 	s.lastConfig = &model.NodeSpec{Protocol: "vless"}
+	s.lastConfigHash = computeConfigHash(s.lastConfig)
 	oldUsers := []model.UserSpec{{ID: 1, UUID: "uuid-old", SpeedLimit: 4}}
 	s.updateUserState(oldUsers, srcBootstrap)
-	oldHash := s.users.Hash()
-
+	if !s.startKernel(s.lastConfig, oldUsers) {
+		t.Fatal("initial confirmed start failed")
+	}
+	oldApplied := s.appliedUserHash
+	k.updateErr = errors.New("partial update failed")
+	k.startErr = errors.New("restart failed")
 	newUsers := []model.UserSpec{{ID: 2, UUID: "uuid-new", SpeedLimit: 8}}
 	s.applyUserUpdate(context.Background(), newUsers, computeUserHash(newUsers), srcWSFull)
-
-	if got := k.startCalls; got != 1 {
-		t.Fatalf("Start call count = %d, want 1", got)
+	if k.startCalls != 2 || k.running {
+		t.Fatal("failed revocation kept uncertain kernel serving")
 	}
-	if len(s.users.Users()) != 1 || s.users.Users()[0].UUID != "uuid-old" {
-		t.Fatalf("lastUsers = %#v, want restored old users", s.users.Users())
+	if len(s.users.Users()) != 1 || s.users.Users()[0].UUID != "uuid-new" || s.users.Hash() != computeUserHash(newUsers) {
+		t.Fatal("pending desired revocation was forgotten")
 	}
-	if s.users.Hash() != oldHash {
-		t.Fatalf("lastUserHash = %q, want %q", s.users.Hash(), oldHash)
+	if s.appliedUserHash != oldApplied || !s.desiredDirty {
+		t.Fatal("failed mutation falsely recorded as applied")
 	}
-	if s.speedTracker.GetLimiter("uuid-old") == nil {
-		t.Fatal("expected old limiter to be restored after rollback")
+	if s.speedTracker.GetLimiter("uuid-old") != nil || s.speedTracker.GetLimiter("uuid-new") == nil {
+		t.Fatal("pending desired limiter state rolled back")
 	}
-	if s.speedTracker.GetLimiter("uuid-new") != nil {
-		t.Fatal("expected new limiter to be removed after rollback")
+	k.updateErr = nil
+	k.startErr = nil
+	s.handleWSEvent(context.Background(), controlplane.Event{Type: controlplane.EventSyncUsers, Users: newUsers})
+	if !k.running || s.desiredDirty || s.appliedUserHash != computeUserHash(newUsers) {
+		t.Fatal("identical pending revocation did not retry and apply")
+	}
+	if applied := s.kernelLife.Applied(); len(applied.Users) != 1 || applied.Users[0].ID != 2 {
+		t.Fatal("successful retry did not update confirmed users")
 	}
 }
 

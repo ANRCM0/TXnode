@@ -142,23 +142,38 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 		return fmt.Errorf("create sing-box instance: %w", err)
 	}
 
+	// Router trackers must be complete before any inbound starts accepting.
+	// Installing one after Start races routed connections and can leave the
+	// earliest authenticated stream unmetered for its entire lifetime.
+	router := service.FromContext[adapter.Router](ctx)
+	if router == nil {
+		instance.Close()
+		cancel()
+		return fmt.Errorf("KERNEL_ROUTER_UNAVAILABLE")
+	}
+	tracker := s.boundedPrepared
+	if tracker == nil {
+		tracker = newRuntimeConnTracker(s.localEventConsumer)
+	}
+	tracker.SetUserMap(buildUserMap(users))
+	if s.auditor != nil {
+		tracker.SetAuditor(s.auditor)
+	}
+	if s.speedLimitFunc != nil {
+		tracker.SetSpeedLimitFunc(s.speedLimitFunc)
+	}
+	if s.deviceLimitFunc != nil {
+		tracker.SetDeviceLimitFunc(s.deviceLimitFunc)
+	}
 	if s.boundedPrepared != nil {
-		// Install the frozen producer before any listener can accept traffic.
-		router := service.FromContext[adapter.Router](ctx)
-		if router == nil {
-			instance.Close()
-			cancel()
-			return fmt.Errorf("USAGE_V2_ROUTER_UNAVAILABLE")
-		}
-		s.boundedPrepared.SetUserMap(buildUserMap(users))
-		if err := s.boundedPrepared.CheckBoundedUsage(); err != nil {
+		if err := tracker.CheckBoundedUsage(); err != nil {
 			instance.Close()
 			cancel()
 			return err
 		}
-		router.AppendTracker(s.boundedPrepared)
 		s.boundedStarted = true
 	}
+	router.AppendTracker(tracker)
 	if err := instance.Start(); err != nil {
 		instance.Close()
 		cancel()
@@ -173,25 +188,10 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 	s.nodeConfig = nodeConfig
 	s.tls = tls
 
-	// Fresh tracker on full restart.
-	if s.boundedPrepared != nil {
-		s.connTracker = s.boundedPrepared
-	} else {
-		s.connTracker = newRuntimeConnTracker(s.localEventConsumer)
-	}
-	s.connTracker.SetUserMap(buildUserMap(users))
-	if s.auditor != nil {
-		s.connTracker.SetAuditor(s.auditor)
-	}
-	if s.speedLimitFunc != nil {
-		s.connTracker.SetSpeedLimitFunc(s.speedLimitFunc)
-	}
-	if s.deviceLimitFunc != nil {
-		s.connTracker.SetDeviceLimitFunc(s.deviceLimitFunc)
-	}
-
-	s.trackerRegistered = s.boundedPrepared != nil
-	s.registerTracker(ctx)
+	// Publish the initialized tracker only after this instance starts. A failed
+	// replacement cannot overwrite the running instance's meter.
+	s.connTracker = tracker
+	s.trackerRegistered = true
 
 	// Recycle old instance in background — drain then close.
 	if oldBox != nil {

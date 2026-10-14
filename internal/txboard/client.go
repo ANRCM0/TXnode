@@ -45,12 +45,16 @@ type NodeList struct {
 	BaseConfig panel.MachineBaseConfig `json:"base_config"`
 }
 type Client struct {
-	baseURL, token        string
-	nodeID, machineID     int
-	http                  *http.Client
-	mu                    sync.Mutex
-	configETag, usersETag string
-	success, failure      atomic.Uint64
+	baseURL, token                    string
+	nodeID, machineID                 int
+	http                              *http.Client
+	mu                                sync.Mutex
+	configETag, usersETag             string
+	cachedConfig                      *panel.NodeConfig
+	cachedUsers                       []panel.User
+	configGeneration, usersGeneration uint64
+	configReadMu, usersReadMu         sync.Mutex
+	success, failure                  atomic.Uint64
 }
 
 func NewClient(cfg config.PanelConfig) *Client {
@@ -60,8 +64,24 @@ func NewClient(cfg config.PanelConfig) *Client {
 func (c *Client) ForNode(id int) *Client {
 	return &Client{baseURL: c.baseURL, token: c.token, nodeID: id, machineID: c.machineID, http: c.http}
 }
-func (c *Client) ResetConfigETag()          { c.mu.Lock(); c.configETag = ""; c.mu.Unlock() }
-func (c *Client) ResetETags()               { c.mu.Lock(); c.configETag = ""; c.usersETag = ""; c.mu.Unlock() }
+
+// ResetConfigETag also removes its matching body; an in-flight read cannot
+// repopulate the invalidated generation after a reconnect/reset.
+func (c *Client) ResetConfigETag() {
+	c.mu.Lock()
+	c.configETag = ""
+	c.cachedConfig = nil
+	c.configGeneration++
+	c.mu.Unlock()
+}
+func (c *Client) ResetETags() {
+	c.mu.Lock()
+	c.configETag, c.usersETag = "", ""
+	c.cachedConfig, c.cachedUsers = nil, nil
+	c.configGeneration++
+	c.usersGeneration++
+	c.mu.Unlock()
+}
 func (c *Client) Metrics() (uint64, uint64) { return c.success.Load(), c.failure.Load() }
 func (c *Client) NodeID() int               { return c.nodeID }
 func (c *Client) MachineID() int            { return c.machineID }
@@ -322,66 +342,156 @@ func (c *Client) Handshake() (*Handshake, error) {
 	}
 	return &hs, nil
 }
-func (c *Client) GetConfig() (*panel.NodeConfig, error) {
-	c.mu.Lock()
-	etag := c.configETag
-	c.mu.Unlock()
-	resp, err := c.request("GET", "/config", nil, etag)
-	if err != nil {
-		return nil, err
+
+// GetConfig preserves the original nil=304 transport interface.
+func (c *Client) GetConfig() (*panel.NodeConfig, error) { return c.readConfig(false) }
+
+// ConfigSnapshot returns an independent complete desired body, including on304.
+// An uncached304 forces one unconditional request and then fails explicitly.
+func (c *Client) ConfigSnapshot() (*panel.NodeConfig, error) { return c.readConfig(true) }
+
+func (c *Client) readConfig(complete bool) (*panel.NodeConfig, error) {
+	c.configReadMu.Lock()
+	defer c.configReadMu.Unlock()
+	for attempt := 0; attempt < 2; attempt++ {
+		c.mu.Lock()
+		etag, generation := c.configETag, c.configGeneration
+		c.mu.Unlock()
+		resp, err := c.request("GET", "/config", nil, etag)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode == http.StatusNotModified {
+			resp.Body.Close()
+			c.mu.Lock()
+			if generation != c.configGeneration {
+				c.mu.Unlock()
+				return nil, errors.New("TXBoard config cache invalidated during read")
+			}
+			if !complete {
+				c.mu.Unlock()
+				return nil, nil
+			}
+			if c.cachedConfig != nil {
+				cached, err := cloneConfigSnapshot(c.cachedConfig)
+				c.mu.Unlock()
+				return cached, err
+			}
+			c.configETag = ""
+			c.mu.Unlock()
+			if attempt == 0 {
+				continue
+			}
+			return nil, errors.New("TXBoard config304 without matching snapshot")
+		}
+		var data struct {
+			ProtocolVersion int              `json:"protocol_version"`
+			NodeID          int              `json:"node_id"`
+			Config          panel.NodeConfig `json:"config"`
+		}
+		if err := decode(resp, &data, 200); err != nil {
+			return nil, err
+		}
+		if data.ProtocolVersion != 1 || data.NodeID != c.nodeID || data.Config.Protocol == "" {
+			return nil, errors.New("invalid TXBoard config snapshot")
+		}
+		cached, err := cloneConfigSnapshot(&data.Config)
+		if err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+		if generation != c.configGeneration {
+			c.mu.Unlock()
+			return nil, errors.New("TXBoard config cache invalidated during read")
+		}
+		c.cachedConfig, c.configETag = cached, resp.Header.Get("ETag")
+		c.mu.Unlock()
+		return &data.Config, nil
 	}
-	if resp.StatusCode == 304 {
-		resp.Body.Close()
-		return nil, nil
-	}
-	var data struct {
-		ProtocolVersion int              `json:"protocol_version"`
-		NodeID          int              `json:"node_id"`
-		Config          panel.NodeConfig `json:"config"`
-	}
-	if err := decode(resp, &data, 200); err != nil {
-		return nil, err
-	}
-	if data.ProtocolVersion != 1 || data.NodeID != c.nodeID || data.Config.Protocol == "" {
-		return nil, errors.New("invalid TXBoard config snapshot")
-	}
-	c.mu.Lock()
-	c.configETag = resp.Header.Get("ETag")
-	c.mu.Unlock()
-	return &data.Config, nil
+	return nil, errors.New("TXBoard config snapshot unavailable")
 }
 
-// A nil slice means 304; an allocated empty slice means a valid empty user set.
-func (c *Client) GetUsers() ([]panel.User, error) {
-	c.mu.Lock()
-	etag := c.usersETag
-	c.mu.Unlock()
-	resp, err := c.request("GET", "/users", nil, etag)
+func cloneConfigSnapshot(cfg *panel.NodeConfig) (*panel.NodeConfig, error) {
+	body, err := json.Marshal(cfg)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("cannot clone TXBoard config snapshot")
 	}
-	if resp.StatusCode == 304 {
-		resp.Body.Close()
-		return nil, nil
+	var cloned panel.NodeConfig
+	if err := json.Unmarshal(body, &cloned); err != nil {
+		return nil, errors.New("cannot clone TXBoard config snapshot")
 	}
-	var data struct {
-		ProtocolVersion int          `json:"protocol_version"`
-		NodeID          int          `json:"node_id"`
-		Users           []panel.User `json:"users"`
+	return &cloned, nil
+}
+
+// A nil slice means304; an allocated empty slice means a valid empty user set.
+func (c *Client) GetUsers() ([]panel.User, error) { return c.readUsers(false) }
+
+// UsersSnapshot returns an independent complete desired user set. A legitimate
+// empty set remains allocated; missing cached content is never invented empty.
+func (c *Client) UsersSnapshot() ([]panel.User, error) { return c.readUsers(true) }
+
+func (c *Client) readUsers(complete bool) ([]panel.User, error) {
+	c.usersReadMu.Lock()
+	defer c.usersReadMu.Unlock()
+	for attempt := 0; attempt < 2; attempt++ {
+		c.mu.Lock()
+		etag, generation := c.usersETag, c.usersGeneration
+		c.mu.Unlock()
+		resp, err := c.request("GET", "/users", nil, etag)
+		if err != nil {
+			return nil, err
+		}
+		if resp.StatusCode == http.StatusNotModified {
+			resp.Body.Close()
+			c.mu.Lock()
+			if generation != c.usersGeneration {
+				c.mu.Unlock()
+				return nil, errors.New("TXBoard users cache invalidated during read")
+			}
+			if !complete {
+				c.mu.Unlock()
+				return nil, nil
+			}
+			if c.cachedUsers != nil {
+				users := cloneUsersSnapshot(c.cachedUsers)
+				c.mu.Unlock()
+				return users, nil
+			}
+			c.usersETag = ""
+			c.mu.Unlock()
+			if attempt == 0 {
+				continue
+			}
+			return nil, errors.New("TXBoard users304 without matching snapshot")
+		}
+		var data struct {
+			ProtocolVersion int          `json:"protocol_version"`
+			NodeID          int          `json:"node_id"`
+			Users           []panel.User `json:"users"`
+		}
+		if err := decode(resp, &data, 200); err != nil {
+			return nil, err
+		}
+		if data.ProtocolVersion != 1 || data.NodeID != c.nodeID || data.Users == nil {
+			return nil, errors.New("invalid TXBoard users snapshot")
+		}
+		cached := cloneUsersSnapshot(data.Users)
+		c.mu.Lock()
+		if generation != c.usersGeneration {
+			c.mu.Unlock()
+			return nil, errors.New("TXBoard users cache invalidated during read")
+		}
+		c.cachedUsers, c.usersETag = cached, resp.Header.Get("ETag")
+		c.mu.Unlock()
+		return data.Users, nil
 	}
-	if err := decode(resp, &data, 200); err != nil {
-		return nil, err
-	}
-	if data.ProtocolVersion != 1 || data.NodeID != c.nodeID {
-		return nil, errors.New("invalid TXBoard users snapshot")
-	}
-	c.mu.Lock()
-	c.usersETag = resp.Header.Get("ETag")
-	c.mu.Unlock()
-	if data.Users == nil {
-		data.Users = make([]panel.User, 0)
-	}
-	return data.Users, nil
+	return nil, errors.New("TXBoard users snapshot unavailable")
+}
+
+func cloneUsersSnapshot(users []panel.User) []panel.User {
+	cloned := make([]panel.User, len(users))
+	copy(cloned, users)
+	return cloned
 }
 func (c *Client) GetMachineNodes() (*NodeList, error) {
 	resp, err := c.request("GET", "/machine/nodes", nil, "")
