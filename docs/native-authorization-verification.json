@@ -365,8 +365,8 @@
                                                             "result":  "success"
                                                         }
                                                     ],
-                              "final_node_documentation_commit":  "ab0760d6b4c88403d9b694ba2a195332d1b91666",
-                              "final_node_ci_run":  38632434862,
+                              "final_node_documentation_commit":  "2c4283638a7f5de800b90b0daa8dce2ad625d809",
+                              "final_node_ci_run":  38634087147,
                               "final_node_ci_result":  "success",
                               "review_branch":  "feat/installer-node-authorization-preflight",
                               "pull_request":  "not created: GitHub API returned must be a collaborator",
