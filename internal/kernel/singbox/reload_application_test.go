@@ -328,10 +328,7 @@ func TestReloadUserOnlyKeepsListenerReplayOwnerAndNativeCumulativeMeters(t *test
 			conn := reloadDial(t, protocol, port, reloadUUID, origin.listener.Addr())
 			defer conn.Close()
 			reloadExchange(t, conn, "O:", "before")
-			before, _, _, err := runtime.GetUserTraffic(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
+			before := reloadWaitTraffic(t, runtime, 7, [2]int64{int64(len("before")), int64(len("O:before"))})
 			originalBox, originalTracker := runtime.box, runtime.connTracker
 			next := []model.UserSpec{{ID: 7, UUID: reloadUUID, SpeedLimit: 2}, {ID: 8, UUID: "550e8400-e29b-41d4-a716-446655440001"}}
 			if err := runtime.Reload(spec, next, kernel.TLSCert{}); err != nil {
@@ -341,19 +338,16 @@ func TestReloadUserOnlyKeepsListenerReplayOwnerAndNativeCumulativeMeters(t *test
 				t.Fatal("user-only update reconstructed runtime/replay owner")
 			}
 			reloadExchange(t, conn, "O:", "after")
-			after, _, _, err := runtime.GetUserTraffic(context.Background())
-			if err != nil {
-				t.Fatal(err)
-			}
+			after := reloadWaitTraffic(t, runtime, 7, [2]int64{int64(len("before") + len("after")), int64(len("O:before") + len("O:after"))})
 			if after[7][0]-before[7][0] != int64(len("after")) || after[7][1]-before[7][1] != int64(len("O:after")) {
 				t.Fatalf("user-only update lost/doubled meters before=%v after=%v", before, after)
 			}
 			added := reloadDial(t, protocol, port, next[1].UUID, origin.listener.Addr())
 			defer added.Close()
 			reloadExchange(t, added, "O:", "added")
-			meters, _, _, err := runtime.GetUserTraffic(context.Background())
-			if err != nil || meters[8] != [2]int64{5, 7} {
-				t.Fatalf("new identity meters=%v err=%v", meters, err)
+			meters := reloadWaitTraffic(t, runtime, 8, [2]int64{5, 7})
+			if meters[8] != [2]int64{5, 7} {
+				t.Fatalf("new identity meters=%v", meters)
 			}
 		})
 	}
@@ -618,5 +612,26 @@ func TestGeneratedConstructionOutboundReferenceBoundary(t *testing.T) {
 				t.Fatalf("reference accepted=%v wanted=%v err=%v", err == nil, tc.valid, err)
 			}
 		})
+	}
+}
+
+// Peer receipt can precede the post-write meter callback. Observe the actual
+// counter completion before taking the baseline; still require exact bytes.
+func reloadWaitTraffic(t *testing.T, runtime *SingBox, userID int, expected [2]int64) map[int][2]int64 {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		traffic, _, _, err := runtime.GetUserTraffic(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := traffic[userID]
+		if got == expected {
+			return traffic
+		}
+		if got[0] > expected[0] || got[1] > expected[1] || time.Now().After(deadline) {
+			t.Fatalf("actual meter completion: got=%v expected=%v", got, expected)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }

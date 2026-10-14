@@ -5441,5 +5441,22 @@
       "base_TestCase_sha256": "1f822e064e5004684438daa594588f703f3d2e2a15f44e28c1190a01072c81cb",
       "environment_override_absent": true
     }
+  },
+  "CI_meter_test_correction": {
+    "original_head": "4c425b60ab2ed0a3dafcf92a61f9fc212492d7ba",
+    "run_id": 38553182563,
+    "test": "TestReloadUserOnlyKeepsListenerReplayOwnerAndNativeCumulativeMeters/vmess",
+    "observed": "Client had received bytes while the old baseline still read6upload/0download; the completed meter read11/15 after the second exchange.",
+    "fix": "Observe exact actual counter completion before baseline and post-reload comparisons; byte equality and same runtime/replay owner assertions remain. No production code changed.",
+    "verification": {
+      "exit_code": 0,
+      "repetitions": 25,
+      "actual_protocols": [
+        "vless",
+        "vmess"
+      ],
+      "source_sha256": "b2322a005d7ee3572cb5f62e4d31e81d418a84e58edf673cc740677d18fc9a28",
+      "log_sha256": "668ca5b48131a3c1e54bf51ba9de9e3de4232a8561ec76e4ce20ea1927eb00d2"
+    }
   }
 }
