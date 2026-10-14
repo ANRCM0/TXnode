@@ -857,7 +857,269 @@
     "Global migration authority and producer/queue drain are not activated."
   ],
   "remote_CI": {
-    "status": "pending-push"
+    "status": "all-triggered-workflows-succeeded",
+    "head_commit": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+    "workflows": [
+      {
+        "conclusion": "success",
+        "databaseId": 38544418417,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "internal-session-consumer"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418743,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "basic-account-authority"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418683,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "internal-admin-sessions"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418213,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "bootstrap-creation-shadow"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418170,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "internal-admin-order-list"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418678,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "registration-shadow-transport"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418482,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "Documentation"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418717,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "internal-admin-identity"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418198,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "legacy-subscription-links-shadow"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418655,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "provider-offline-proof"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418339,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "bounded-node-core-usage"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418789,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "internal-order-cancel"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418705,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "internal-admin-users"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418232,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "node-service-core-usage"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418716,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "authority-finance-fence"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418762,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "internal-admin-login"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418755,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "authority-ticket-writers"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418835,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "internal-admin-network-groups"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418388,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "lifecycle-reconcile-shadow"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418843,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "internal-admin-dashboard"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418368,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "node-live-recovery-core-usage"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418435,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "internal-admin-consumer"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418886,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "authority-native-writers"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418733,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "authority-inventory-expand"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418868,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "authority-writer-fence"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418668,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "registration-creation-shadow"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418866,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "admin-creation-shadow"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418845,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "internal-admin-plan-list"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418774,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "node-live-protocol-core-usage"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418664,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "admin-deletion-shadow"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418887,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "node-native-machine-control"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418695,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "api-ci"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418229,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "node-native-authority-control"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418862,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "api-mysql-ci"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418918,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "authority-identity-writers"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418675,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "Node CI and images"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38544418870,
+        "headSha": "52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645",
+        "status": "completed",
+        "workflowName": "txboard-core-image"
+      }
+    ]
   },
   "tracked_source_sha256": {
     "api/tests/Feature/Server/NativeMachineSuccessorAtomicTest.php": "70a961f8989af37383d145995759ecd6e1a7bdc3c4c6371a4d1d569f627e193c",
