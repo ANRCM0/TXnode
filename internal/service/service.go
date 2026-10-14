@@ -214,14 +214,14 @@ func (s *Service) Run(ctx context.Context) error {
 			return s.stopForAuthorityDenial(err)
 		}
 		if cause := context.Cause(ctx); cause != nil {
-			if _, ok := controlerror.AsAuthorityDenial(cause); ok {
+			if controlerror.IsAuthoritativeStopCause(cause) {
 				return s.stopForAuthorityDenial(cause)
 			}
 		}
 		select {
 		case <-ctx.Done():
 			if cause := context.Cause(ctx); cause != nil {
-				if _, ok := controlerror.AsAuthorityDenial(cause); ok {
+				if controlerror.IsAuthoritativeStopCause(cause) {
 					return s.stopForAuthorityDenial(cause)
 				}
 			}
@@ -238,15 +238,27 @@ func (s *Service) Run(ctx context.Context) error {
 			s.failUsageV2()
 			return errUsageV2
 		case <-trackTicker.C:
+			if cause := context.Cause(ctx); controlerror.IsAuthoritativeStopCause(cause) {
+				return s.stopForAuthorityDenial(cause)
+			}
 			s.trackAndEnforce(ctx)
 
 		case <-reportTicker.C:
+			if cause := context.Cause(ctx); controlerror.IsAuthoritativeStopCause(cause) {
+				return s.stopForAuthorityDenial(cause)
+			}
 			s.pushReportAsync()
 
 		case <-deviceReportTicker.C:
+			if cause := context.Cause(ctx); controlerror.IsAuthoritativeStopCause(cause) {
+				return s.stopForAuthorityDenial(cause)
+			}
 			s.reportDevices()
 
 		case <-pullTicker.C:
+			if cause := context.Cause(ctx); controlerror.IsAuthoritativeStopCause(cause) {
+				return s.stopForAuthorityDenial(cause)
+			}
 			// WebSocket provides low-latency updates, while periodic REST polling
 			// provides eventual consistency if a push event is missed. Panel API
 			// ETags keep this reconciliation cheap when nothing changed.
@@ -258,23 +270,38 @@ func (s *Service) Run(ctx context.Context) error {
 			s.schedulePoll(ctx)
 
 		case result := <-s.syncer.Results():
+			if cause := context.Cause(ctx); controlerror.IsAuthoritativeStopCause(cause) {
+				return s.stopForAuthorityDenial(cause)
+			}
 			if result.Terminal != nil {
 				return s.stopForAuthorityDenial(result.Terminal)
 			}
 			s.applySyncResult(ctx, result)
 
 		case <-wsDiscoveryTicker.C:
+			if cause := context.Cause(ctx); controlerror.IsAuthoritativeStopCause(cause) {
+				return s.stopForAuthorityDenial(cause)
+			}
 			if !s.usageMode() {
 				s.discoverPush(ctx)
 			}
 
 		case status := <-s.push.Statuses():
+			if cause := context.Cause(ctx); controlerror.IsAuthoritativeStopCause(cause) {
+				return s.stopForAuthorityDenial(cause)
+			}
 			s.handlePushStatus(ctx, status)
 
 		case <-s.machineMailboxCh:
+			if cause := context.Cause(ctx); controlerror.IsAuthoritativeStopCause(cause) {
+				return s.stopForAuthorityDenial(cause)
+			}
 			s.drainMachineMailbox(ctx)
 
 		case event := <-s.push.Events():
+			if cause := context.Cause(ctx); controlerror.IsAuthoritativeStopCause(cause) {
+				return s.stopForAuthorityDenial(cause)
+			}
 			s.handleWSEvent(ctx, event)
 		}
 	}

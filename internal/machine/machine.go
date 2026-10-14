@@ -22,9 +22,10 @@ import (
 
 // nodeHandle tracks a running node service.
 type nodeHandle struct {
-	cancel  context.CancelFunc
-	done    chan struct{}
-	mailbox *controlplane.NodeMailbox
+	cancel      context.CancelFunc
+	cancelCause context.CancelCauseFunc
+	done        chan struct{}
+	mailbox     *controlplane.NodeMailbox
 }
 
 // Orchestrator manages all nodes bound to a panel machine. It:
@@ -229,10 +230,11 @@ func (o *Orchestrator) startNode(ctx context.Context, mn machineNode) {
 		return
 	}
 
-	nodeCtx, cancel := context.WithCancel(ctx)
+	nodeCtx, cancelCause := context.WithCancelCause(ctx)
+	cancel := func() { cancelCause(nil) }
 	done := make(chan struct{})
 	mb := controlplane.NewNodeMailbox()
-	o.nodes[mn.ID] = &nodeHandle{cancel: cancel, done: done, mailbox: mb}
+	o.nodes[mn.ID] = &nodeHandle{cancel: cancel, cancelCause: cancelCause, done: done, mailbox: mb}
 	o.mu.Unlock()
 
 	o.eventsMu.Lock()
@@ -374,6 +376,9 @@ func (o *Orchestrator) setWanted(n int) {
 }
 
 func (o *Orchestrator) stopNode(nodeID int) {
+	o.stopNodeCause(nodeID, nil)
+}
+func (o *Orchestrator) stopNodeCause(nodeID int, cause error) {
 	o.mu.Lock()
 	h, ok := o.nodes[nodeID]
 	if !ok {
@@ -388,7 +393,11 @@ func (o *Orchestrator) stopNode(nodeID int) {
 	o.eventsMu.Unlock()
 
 	nlog.Core().Info(fmt.Sprintf("machine: stopping node %d", nodeID))
-	h.cancel()
+	if h.cancelCause != nil {
+		h.cancelCause(cause)
+	} else if h.cancel != nil {
+		h.cancel()
+	}
 	<-h.done
 }
 
@@ -402,7 +411,11 @@ func (o *Orchestrator) stopAll() {
 
 	for id, h := range handles {
 		nlog.Core().Info(fmt.Sprintf("machine: stopping node %d", id))
-		h.cancel()
+		if h.cancelCause != nil {
+			h.cancelCause(nil)
+		} else if h.cancel != nil {
+			h.cancel()
+		}
 	}
 	for _, h := range handles {
 		<-h.done
@@ -457,8 +470,12 @@ func (o *Orchestrator) rediscover(ctx context.Context) {
 	o.mu.Unlock()
 
 	for _, id := range toRemove {
-		o.stopNode(id)     // no-op when only backoff state remains
-		o.clearFailure(id) // node is gone from the panel; drop its backoff too
+		var cause error
+		if o.cfg != nil && o.cfg.Panel.Provider == "txboard" && o.machineIDForLog() > 0 {
+			cause = &controlerror.NodeMembershipWithdrawal{NodeID: id, MachineID: o.machineIDForLog()}
+		}
+		o.stopNodeCause(id, cause) // no-op when only backoff state remains
+		o.clearFailure(id)         // node is gone from the panel; drop its backoff too
 	}
 
 	for _, n := range nodesResp.Nodes {

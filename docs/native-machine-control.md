@@ -1,0 +1,9 @@
+# Actual native Machine control
+
+The [contract](../../contracts/node-protocol/native-machine-control-v1.md) keeps the existing Core, Workerman, Node HTTP/WSS and kernel implementation. Server events freeze relevant IDs and changes before commit callbacks; rollback never publishes an uncommitted desired state.
+
+Current authenticated Machine membership governs the shared socket. A node removal stops and checkpoints only that child, while a completed Machine credential denial stops and joins all children. A valid empty list is distinct from malformed or missing membership; transport failures never withdraw membership. Current credentials replay immutable original pending/terminal IDs before opening listeners.
+
+Registry replacement installs the successor Machine and all current node mappings before old close, retaining shared member devices. Cache-cleanup faults are logged without skipping safe registry transition. Redis publications identify changed domains only: Workerman rereads current enabled/ownership/credentials and builds current config/users/device state. This prevents delayed old frames from disclosing reassigned credentials or undoing a later user regrant. Empty device maps retain object encoding.
+
+The [verification report](native-machine-control-verification.json) records true PHP Core/Workerman, Redis, dedicated SQL, transparent trusted TLS and two real VLESS/VMess streams. Gates block REST snapshots while changing the actual admin configuration to prove WS delivery, disconnect the actual socket and inject temporary gateway503 to prove retry, replace actual sessions, exercise foreign Machine scope, remove and reenable one child, rotate Machine credentials and recover original terminal batches. Local transaction/registry tests supplement this actual network gate. No production PKI, all-protocol, HA, finite offline lease or global authority cutover is claimed.

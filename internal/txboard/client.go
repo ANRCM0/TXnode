@@ -506,8 +506,18 @@ func (c *Client) GetMachineNodes() (*NodeList, error) {
 	if err := decode(resp, &data, 200); err != nil {
 		return nil, err
 	}
-	if data.ProtocolVersion != 1 {
-		return nil, errors.New("invalid machine node list version")
+	if data.ProtocolVersion != 1 || data.Nodes == nil {
+		return nil, errors.New("invalid machine node list")
+	}
+	seen := make(map[int]struct{}, len(data.Nodes))
+	for _, node := range data.Nodes {
+		if node.ID <= 0 {
+			return nil, errors.New("invalid machine node list")
+		}
+		if _, duplicate := seen[node.ID]; duplicate {
+			return nil, errors.New("invalid machine node list")
+		}
+		seen[node.ID] = struct{}{}
 	}
 	return &NodeList{Nodes: data.Nodes, BaseConfig: data.BaseConfig}, nil
 }

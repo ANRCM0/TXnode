@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"github.com/ANRCM0/TX-Node/internal/controlerror"
 	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/nlog"
 	"github.com/ANRCM0/TX-Node/internal/nodesync"
@@ -46,13 +45,7 @@ func (s *Service) requestWSResync(ctx context.Context, reason string) {
 	}
 	nlog.Core().Warn("ws state may be stale, scheduling REST reconciliation", "reason", reason)
 }
-func (s *Service) authorityTerminal(ctx context.Context) bool {
-	if s.syncer != nil && s.syncer.Terminal() != nil {
-		return true
-	}
-	_, ok := controlerror.AsAuthorityDenial(context.Cause(ctx))
-	return ok
-}
+
 func (s *Service) acceptDesiredConfig(ctx context.Context, node *model.NodeSpec) {
 	hash := computeConfigHash(node)
 	s.metricsMu.Lock()
