@@ -1,6 +1,6 @@
 {
   "phase": "P0.3",
-  "status": "native-snapshot-and-actual-kernel-application-isolated-verified",
+  "status": "verified-full-race-and-all-eight-remote-workflows-success",
   "base_commit": "d27f738a29db20a1b8df660d40075552e65d8c74",
   "snapshot": "/opt/txboard-baseline/native-snapshot-integrated-r4",
   "source_sha256": {
@@ -305,13 +305,65 @@
     "Machine-wide live Core/WS integration, finite offline authorization, Provider production delivery, formal SC-v2 and global migration/drain gates remain incomplete."
   ],
   "remote_CI": {
-    "status": "pending-after-push",
+    "status": "success",
+    "head_commit": "0b86c795ca66875157b7796e4a43be93743c5840",
     "workflows": [
-      "Node CI and images",
-      "node-native-authority-control",
-      "node-live-recovery-core-usage",
-      "node-live-protocol-core-usage",
-      "node-service-core-usage"
+      {
+        "conclusion": "success",
+        "databaseId": 38529235018,
+        "headSha": "0b86c795ca66875157b7796e4a43be93743c5840",
+        "status": "completed",
+        "workflowName": "Documentation"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38529235113,
+        "headSha": "0b86c795ca66875157b7796e4a43be93743c5840",
+        "status": "completed",
+        "workflowName": "provider-offline-proof"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38529234961,
+        "headSha": "0b86c795ca66875157b7796e4a43be93743c5840",
+        "status": "completed",
+        "workflowName": "node-service-core-usage"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38529235002,
+        "headSha": "0b86c795ca66875157b7796e4a43be93743c5840",
+        "status": "completed",
+        "workflowName": "node-live-protocol-core-usage"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38529234942,
+        "headSha": "0b86c795ca66875157b7796e4a43be93743c5840",
+        "status": "completed",
+        "workflowName": "Node CI and images"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38529235210,
+        "headSha": "0b86c795ca66875157b7796e4a43be93743c5840",
+        "status": "completed",
+        "workflowName": "bounded-node-core-usage"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38529235061,
+        "headSha": "0b86c795ca66875157b7796e4a43be93743c5840",
+        "status": "completed",
+        "workflowName": "node-native-authority-control"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38529235075,
+        "headSha": "0b86c795ca66875157b7796e4a43be93743c5840",
+        "status": "completed",
+        "workflowName": "node-live-recovery-core-usage"
+      }
     ]
   }
 }
