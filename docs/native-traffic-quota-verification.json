@@ -5419,5 +5419,27 @@
       "scripts/tests/node-native-traffic/tls_proxy.py"
     ],
     "scope": "Only CRLF to LF; exact tested snapshot bytes compared after newline normalization."
+  },
+  "CI_fixture_correction": {
+    "original_head": "a2350653814f5f2607e43e8508a4a826f83d9568",
+    "failures": [
+      {
+        "workflow": "node-native-machine-control",
+        "run_id": 38552538463,
+        "cause": "Legacy rollback fixture loaded default durable config before PHPUnit environment override."
+      },
+      {
+        "workflow": "api-mysql-ci",
+        "run_id": 38552538577,
+        "cause": "CorePurchaseTrafficJourney rollback fixture expected queued-only202 but durable standalone receive correctly refused503."
+      }
+    ],
+    "fix": "Base test application explicitly selects the documented legacy rollback mode; durable independent-commit fixtures opt in after setup. Production and true HTTP/worker runners remain durable by default. CI rollback steps set the flag before bootstrap.",
+    "local_verification": {
+      "exit_code": 0,
+      "log_sha256": "11d6d0080586b7b74b6cff815fce8a358b748f405632d0fc516f96a2569b413c",
+      "base_TestCase_sha256": "1f822e064e5004684438daa594588f703f3d2e2a15f44e28c1190a01072c81cb",
+      "environment_override_absent": true
+    }
   }
 }
