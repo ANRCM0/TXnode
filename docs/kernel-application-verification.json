@@ -221,6 +221,58 @@
     "Finite offline authorization, persisted Core application revision, all-protocol/Cluster/HA and global migration/drain remain incomplete."
   ],
   "remote_CI": {
-    "status": "pending-push"
+    "status": "all-triggered-workflows-succeeded",
+    "head_commit": "88679485b74c119c9c35c756ec5d575c3c94b132",
+    "workflows": [
+      {
+        "conclusion": "success",
+        "databaseId": 38535080375,
+        "headSha": "88679485b74c119c9c35c756ec5d575c3c94b132",
+        "status": "completed",
+        "workflowName": "Node CI and images"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38535080711,
+        "headSha": "88679485b74c119c9c35c756ec5d575c3c94b132",
+        "status": "completed",
+        "workflowName": "Documentation"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38535080690,
+        "headSha": "88679485b74c119c9c35c756ec5d575c3c94b132",
+        "status": "completed",
+        "workflowName": "bounded-node-core-usage"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38535080485,
+        "headSha": "88679485b74c119c9c35c756ec5d575c3c94b132",
+        "status": "completed",
+        "workflowName": "node-native-authority-control"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38535080357,
+        "headSha": "88679485b74c119c9c35c756ec5d575c3c94b132",
+        "status": "completed",
+        "workflowName": "node-service-core-usage"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38535080251,
+        "headSha": "88679485b74c119c9c35c756ec5d575c3c94b132",
+        "status": "completed",
+        "workflowName": "node-live-protocol-core-usage"
+      },
+      {
+        "conclusion": "success",
+        "databaseId": 38535080461,
+        "headSha": "88679485b74c119c9c35c756ec5d575c3c94b132",
+        "status": "completed",
+        "workflowName": "node-live-recovery-core-usage"
+      }
+    ]
   }
 }
