@@ -329,7 +329,46 @@
                                    "reason":  "parallel Workerman startup in shared source directory rejected; rerun serialized in fresh real-r5 and lab-r5"
                                }
                            ],
-    "precise_commit_ci":  null,
+    "precise_commit_ci":  {
+                              "commit":  "b480f9f560b605da8e25ef6f20bf660a18d8d22f",
+                              "branch":  "feat/installer-node-authorization-preflight",
+                              "status":  "success",
+                              "workflows":  [
+                                                {
+                                                    "name":  "API regression",
+                                                    "run_id":  38629196566,
+                                                    "conclusion":  "success"
+                                                },
+                                                {
+                                                    "name":  "Node full tests, vet, stability and built-image capability smoke",
+                                                    "run_id":  38629196434,
+                                                    "conclusion":  "success",
+                                                    "image_publish":  "skipped for review branch"
+                                                },
+                                                {
+                                                    "name":  "finite authorization Core/Machine live runner",
+                                                    "run_id":  38629196396,
+                                                    "conclusion":  "success"
+                                                },
+                                                {
+                                                    "name":  "native Machine control live runner",
+                                                    "run_id":  38629196369,
+                                                    "conclusion":  "success"
+                                                },
+                                                {
+                                                    "name":  "native traffic VLESS/VMess",
+                                                    "run_id":  38629196455,
+                                                    "conclusion":  "success"
+                                                },
+                                                {
+                                                    "name":  "Core image build, Sodium roundtrip, Octane smoke, recovery",
+                                                    "run_id":  38629196471,
+                                                    "conclusion":  "success",
+                                                    "image_publish":  "skipped for review branch"
+                                                }
+                                            ],
+                              "default_branch_merge":  "not performed; review branch only"
+                          },
     "excluded_release_gates":  [
                                    "production-provider-secret-delivery",
                                    "installer-key-provisioning",
