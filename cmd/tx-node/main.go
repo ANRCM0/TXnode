@@ -21,7 +21,6 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/service"
 )
 
-
 const (
 	canonicalContainerConfigPath = "/etc/txnode/config.yml"
 	legacyContainerConfigPath    = "/etc/xboard-node/config.yml"
@@ -30,7 +29,14 @@ const (
 func main() {
 	requestedConfigPath := flag.String("c", "config.yml", "config file path")
 	showVersion := flag.Bool("v", false, "show version")
+	showCapabilities := flag.Bool("capabilities", false, "print runtime capabilities without starting services")
 	flag.Parse()
+	if *showCapabilities {
+		if err := writeRuntimeCapabilities(os.Stdout); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 
 	if *showVersion {
 		fmt.Printf("tx-node %s (built %s)\n", buildinfo.Version, buildinfo.BuildTime)
@@ -199,7 +205,10 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 				if instanceCfg.IsMachineMode() {
 					nlog.Core().Info("starting machine instance", "instance", instanceCfg.InstanceID, "machine_id", instanceCfg.Machine.MachineID, "panel_url", instanceCfg.Panel.URL)
 					orch, createErr := machine.NewChecked(instanceCfg)
-                    if createErr != nil { cancelOnServiceError(errCh, cancel, createErr); return }
+					if createErr != nil {
+						cancelOnServiceError(errCh, cancel, createErr)
+						return
+					}
 					if err := orch.Run(ctx); err != nil {
 						nlog.Core().Error("machine instance exited with error", "instance", instanceCfg.InstanceID, "error", err)
 						cancelOnServiceError(errCh, cancel, err)
@@ -226,7 +235,10 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 							}
 						}
 						svc, createErr := service.NewChecked(nodeCfg)
-                        if createErr != nil { cancelOnServiceError(errCh, cancel, createErr); return }
+						if createErr != nil {
+							cancelOnServiceError(errCh, cancel, createErr)
+							return
+						}
 						if err := svc.Run(ctx); err != nil {
 							nlog.Core().Error("node service exited with error", "instance", nodeCfg.InstanceID, "node_id", nodeCfg.Panel.NodeID, "error", err)
 							cancelOnServiceError(errCh, cancel, err)

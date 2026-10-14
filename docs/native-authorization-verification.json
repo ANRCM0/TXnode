@@ -338,5 +338,5 @@
                                    "ha-or-disk-anti-rollback",
                                    "full-protocol-matrix"
                                ],
-    "post_acceptance_guard_note":  "Linux final snapshot native-authorization-final-r1: go test -race -count=1 -json ./... passed 613 main + 577 subtests, 8 skips; includes authorization and config root-with-instances guard tests. Additional Linux guard evidence: .tmp/native-authorization-final-r1/focused-result.json; full source SHA-256 archived in .tmp/native-authorization-final-r1/manifest.json."
+    "post_acceptance_guard_note":  "Linux final snapshot native-authorization-final-r1 focused race run passed 184 main tests and 224 subtests across authorization/config/txboard/controlplane/nodesync/service, including the root-with-instances guard. The earlier full Node run in native-authorization-integrated-r2 passed 613 main and 577 subtests. Exact focused evidence: .tmp/native-authorization-final-r1/focused-result.json; source SHA-256: .tmp/native-authorization-final-r1/manifest.json."
 }
