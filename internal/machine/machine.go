@@ -11,6 +11,7 @@ import (
 
 	"github.com/ANRCM0/TX-Node/internal/buildinfo"
 	"github.com/ANRCM0/TX-Node/internal/config"
+	"github.com/ANRCM0/TX-Node/internal/controlerror"
 	"github.com/ANRCM0/TX-Node/internal/controlplane"
 	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/monitor"
@@ -55,7 +56,10 @@ type Orchestrator struct {
 
 	// runCtx is stored from Run() so that onMachineEvent can trigger rediscover
 	// for sync.nodes events without blocking the main loop.
-	runCtx context.Context
+	runCtx      context.Context
+	runCancel   context.CancelCauseFunc
+	terminal    chan error
+	terminalErr error
 
 	// wantedNodes is the number of nodes the panel last told us to run. It is
 	// the denominator for the health snapshot.
@@ -144,7 +148,13 @@ func New(cfg *config.Config) *Orchestrator {
 
 // Run is the main loop. It blocks until ctx is cancelled.
 func (o *Orchestrator) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	o.mu.Lock()
 	o.runCtx = ctx
+	o.runCancel = cancel
+	o.terminal = make(chan error, 1)
+	o.mu.Unlock()
 	nodesResp, err := o.client.GetMachineNodes()
 	if err != nil {
 		return fmt.Errorf("initial node discovery: %w", err)
@@ -178,7 +188,14 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			o.stopAll()
+			if d, ok := controlerror.AsAuthorityDenial(context.Cause(ctx)); ok {
+				return d
+			}
 			return nil
+		case err := <-o.terminal:
+			cancel(err)
+			o.stopAll()
+			return err
 
 		case <-discoveryTicker.C:
 			o.rediscover(ctx)
@@ -196,6 +213,10 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 
 func (o *Orchestrator) startNode(ctx context.Context, mn machineNode) {
 	o.mu.Lock()
+	if o.terminalErr != nil || ctx.Err() != nil {
+		o.mu.Unlock()
+		return
+	}
 	if _, exists := o.nodes[mn.ID]; exists {
 		o.mu.Unlock()
 		return
@@ -225,7 +246,15 @@ func (o *Orchestrator) startNode(ctx context.Context, mn machineNode) {
 	// Pre-fetch node config to detect transport-based kernel requirements.
 	// If the transport (e.g. xhttp) is incompatible with the configured kernel
 	// (e.g. singbox), auto-switch to the required kernel for this node.
-	if cfgSnapshot, err := perNodeClient.GetConfig(); err == nil && cfgSnapshot != nil {
+	cfgSnapshot, prefetchErr := perNodeClient.GetConfig()
+	if _, ok := controlerror.AsAuthorityDenial(prefetchErr); ok {
+		o.signalAuthorityDenial(prefetchErr)
+		cancel()
+		o.unregisterNode(mn.ID)
+		close(done)
+		return
+	}
+	if prefetchErr == nil && cfgSnapshot != nil {
 		if resolved := model.ResolveKernelForTransport(cfgSnapshot.Network, nodeCfg.Kernel.Type); resolved != nodeCfg.Kernel.Type {
 			nlog.Core().Info(fmt.Sprintf("machine: auto-switching kernel for node %d (%s→%s, transport=%s)",
 				mn.ID, nodeCfg.Kernel.Type, resolved, cfgSnapshot.Network))
@@ -258,6 +287,7 @@ func (o *Orchestrator) startNode(ctx context.Context, mn machineNode) {
 		defer close(done)
 		defer o.unregisterNode(mn.ID)
 		if err := svc.Run(nodeCtx); err != nil {
+			o.signalAuthorityDenial(err)
 			o.recordFailure(mn.ID, err, startedAt)
 			return
 		}
@@ -390,6 +420,7 @@ func (o *Orchestrator) rediscover(ctx context.Context) {
 	defer o.rediscoverMu.Unlock()
 	nodesResp, err := o.client.GetMachineNodes()
 	if err != nil {
+		o.signalAuthorityDenial(err)
 		nlog.Core().Warn("machine node discovery failed", "error", err)
 		return
 	}
@@ -488,6 +519,7 @@ func (o *Orchestrator) tryStartWS(ctx context.Context) {
 	}
 	hs, err := o.client.Handshake()
 	if err != nil {
+		o.signalAuthorityDenial(err)
 		nlog.Core().Warn("machine ws handshake failed, REST only", "error", err)
 		return
 	}
@@ -661,4 +693,31 @@ func (p *machineNodePush) SendDeviceReport(devices map[int][]string) {
 	payload["devices"] = strDevices
 	data, _ := json.Marshal(payload)
 	ws.SendDeviceReport(data)
+}
+
+// Only the main Run loop joins child services; a rejecting child signals once.
+func (o *Orchestrator) signalAuthorityDenial(err error) bool {
+	d, ok := controlerror.AsAuthorityDenial(err)
+	if !ok || d.Scope != controlerror.MachineScope {
+		return false
+	}
+	o.mu.Lock()
+	if o.terminalErr != nil {
+		o.mu.Unlock()
+		return true
+	}
+	o.terminalErr = err
+	signal := o.terminal
+	cancel := o.runCancel
+	o.mu.Unlock()
+	if signal != nil {
+		select {
+		case signal <- err:
+		default:
+		}
+	}
+	if cancel != nil {
+		cancel(err)
+	}
+	return true
 }

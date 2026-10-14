@@ -14,6 +14,7 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/auditcoord"
 	"github.com/ANRCM0/TX-Node/internal/certcoord"
 	"github.com/ANRCM0/TX-Node/internal/config"
+	"github.com/ANRCM0/TX-Node/internal/controlerror"
 	"github.com/ANRCM0/TX-Node/internal/controlplane"
 	"github.com/ANRCM0/TX-Node/internal/kernel"
 	"github.com/ANRCM0/TX-Node/internal/kernel/singbox"
@@ -202,8 +203,21 @@ func (s *Service) Run(ctx context.Context) error {
 	defer s.push.Stop()
 
 	for {
+		if err := s.syncer.Terminal(); err != nil {
+			return s.stopForAuthorityDenial(err)
+		}
+		if cause := context.Cause(ctx); cause != nil {
+			if _, ok := controlerror.AsAuthorityDenial(cause); ok {
+				return s.stopForAuthorityDenial(cause)
+			}
+		}
 		select {
 		case <-ctx.Done():
+			if cause := context.Cause(ctx); cause != nil {
+				if _, ok := controlerror.AsAuthorityDenial(cause); ok {
+					return s.stopForAuthorityDenial(cause)
+				}
+			}
 			if s.usageMode() {
 				s.usageV2.tracker.StopBoundedUsageTraffic()
 			}
@@ -237,6 +251,9 @@ func (s *Service) Run(ctx context.Context) error {
 			s.schedulePoll(ctx)
 
 		case result := <-s.syncer.Results():
+			if result.Terminal != nil {
+				return s.stopForAuthorityDenial(result.Terminal)
+			}
 			s.applySyncResult(ctx, result)
 
 		case <-wsDiscoveryTicker.C:
@@ -291,7 +308,13 @@ func (s *Service) initialSetup(ctx context.Context) error {
 	if s.machineMailbox != nil {
 		s.machineMailboxCh = s.machineMailbox.NotifyCh()
 	}
+	if cause := context.Cause(ctx); cause != nil {
+		return cause
+	}
 	if bootstrap.Config == nil {
+		if s.reporter.HasTerminalTail() {
+			return fmt.Errorf("NATIVE_AUTHORITY_RECOVERY_CONFIG_REQUIRED")
+		}
 		if bootstrap.Push != nil {
 			// In machine mode a shared WS client may be available before the first
 			// per-node snapshot arrives. In that case we wait for subsequent WS/REST
@@ -302,6 +325,12 @@ func (s *Service) initialSetup(ctx context.Context) error {
 	}
 	if err := validateNodeRuntime(s.cfg, s.kernel.Protocols(), bootstrap.Config, s.certs.TLSCert()); err != nil {
 		return err
+	}
+
+	if !s.cfg.UsageV2.Enabled && s.reporter.HasTerminalTail() {
+		if err := s.reporter.ReplayRecovery(); err != nil {
+			return fmt.Errorf("NATIVE_AUTHORITY_RECOVERY_FAILED: %w", err)
+		}
 	}
 
 	if err := s.initUsageV2(ctx, bootstrap); err != nil {

@@ -1,0 +1,55 @@
+{
+  "phase": "P0.2",
+  "status": "node-native-authority-denial-and-terminal-tail-isolated-verified",
+  "base_commit": "f203f18d726eb75c9a7994bb7d574d6fcde29e0b",
+  "source_sha256": {
+    "contracts/node-protocol/native-authority-denial-v1.md": "f05cca05044326600744bfdfc6ef9bb2041cde91e57971efb1a31882d1b037c7",
+    "node/internal/controlerror/authority.go": "5b4617f657a6a8fb181ce191abe650d6336c04a29be9eb9b909866ffaf6a6310",
+    "node/internal/controlerror/authority_test.go": "152f1bfdc4c9ae177a3727e244a6308816475535ee881049386085f55222c62c",
+    "node/internal/machine/authority_denial_test.go": "6129e7bf04be9c0be52753cd12713530d77ee631e04a755a9fc1edfca0920df9",
+    "node/internal/machine/machine.go": "9833eb6b79837d0dff94649a582c477f6253a623b3b8281962b0652f748ba815",
+    "node/internal/nodesync/authority_denial_test.go": "04fdfc324fef0d7775679db8e579870356834aae4d27147cb71518378b72c8cb",
+    "node/internal/nodesync/controller.go": "af106af9551081218d29bde1ad9ebe918f57189cc59eba287eb073fe2d372e1e",
+    "node/internal/reporting/controller.go": "d4deae95790e001c05368600d1e560f73afcae1798e1a5172b714d78a0d75107",
+    "node/internal/reporting/spool.go": "e6b0bc77a8ff1f6659831e833bfbc21164d9d417732f46a5448fd96858944b86",
+    "node/internal/reporting/terminal_checkpoint_test.go": "a7654dd1272c0ef1738cf6f3369cd796b8a767aa299df453402fd70ba5b1fd9d",
+    "node/internal/service/native_authority_denial_test.go": "039b11522e0593db49ac50c16cdde85b4b3e242f1ac7513d4a9b2436df730e89",
+    "node/internal/service/native_authority_stop.go": "3bafa6c1ea18414cb9f5c4dff3e87b148d059da12e7d64bf617ce0c20defa1a3",
+    "node/internal/service/service.go": "b70ec09fae80e70d5afe828df67e88eb8a208d84da45bf3c8ad6ed83675f41ef",
+    "node/internal/txboard/client.go": "c7dc461b6a4fcea38a869baaed01159dd2b7c340200ca8265ed5b17ddfce8068",
+    "node/internal/txboard/native_authority_error_test.go": "3d1f1f37f23b29f0d27c65d5979b7972d7f70d33d090b1ff0f4603daf3ab5d2d"
+  },
+  "test_evidence": {
+    "full_race": {
+      "command": "GOTOOLCHAIN=local CGO_ENABLED=1 go test -race ./...",
+      "exit_code": 0,
+      "log_sha256": "711718adb34c1d4eb50bf8e59458e4a084095078798add741ed2c83695a7c09d"
+    },
+    "full_nonrace": "CGO_ENABLED=0 go test ./... passed",
+    "targeted_vet": "go vet ./internal/controlerror ./internal/txboard ./internal/nodesync ./internal/service ./internal/machine ./internal/reporting passed",
+    "linux_build": "CGO_ENABLED=1 go build ./cmd/tx-node passed",
+    "authority_transport": "14 tests/55 subtests race passed in frozen r2 evidence",
+    "authority_runtime": "nodesync/service/machine race and real VLESS listener/tail stop r2 passed",
+    "terminal_reporting": "30 reporting tests race passed in frozen r5 evidence"
+  },
+  "behavior": {
+    "authority_denial_codes": [
+      "401 NODE_UNAUTHORIZED",
+      "404 NODE_NOT_FOUND"
+    ],
+    "network_5xx_html_wrong_code_redirect_not_terminal": true,
+    "node_scope_404_does_not_stop_machine": true,
+    "machine_denial_stops_managed_services_without_self_join": true,
+    "listener_stops_before_terminal_tail_persistence_complete": true,
+    "pending_batch_immutable": true,
+    "terminal_tail_separate_batch_and_fsync": true,
+    "recovery_replays_pending_then_terminal_before_listener": true,
+    "isolated_usage_v2_unchanged_fail_stop": true
+  },
+  "limits": [
+    "Ordinary Core/Workerman native-v1 live protocol denial was not added to the existing isolated usage-v2 live scripts in this slice.",
+    "ETag complete snapshot retry and desired/applied hash separation remain the next Node slice.",
+    "Finite offline authorization, custom outbound reload, Xray strong revocation and durable applied confirmation remain incomplete.",
+    "Production Provider credential delivery, SC-v2 consumers and global writer/drain gates remain incomplete."
+  ]
+}

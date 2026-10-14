@@ -1,9 +1,11 @@
 package reporting
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 )
@@ -33,21 +35,59 @@ func openBatchSpool(path string) (*batchSpool, *Batch, error) {
 	_ = os.Remove(name)
 
 	s := &batchSpool{path: path}
-	payload, err := os.ReadFile(path)
+	batch, err := s.load()
+	if err != nil {
+		return nil, nil, err
+	}
+	return s, batch, nil
+}
+
+func (s *batchSpool) load() (*Batch, error) {
+	info, err := os.Lstat(s.path)
 	if errors.Is(err, os.ErrNotExist) {
-		return s, nil, nil
+		return nil, nil
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 64<<20 {
+		return nil, errors.New("invalid pending batch spool file")
+	}
+	payload, err := os.ReadFile(s.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
 	}
 	if err != nil {
-		return nil, nil, fmt.Errorf("load pending batch: %w", err)
+		return nil, fmt.Errorf("load pending batch: %w", err)
 	}
 	var batch Batch
-	if err := json.Unmarshal(payload, &batch); err != nil {
-		return nil, nil, fmt.Errorf("corrupt pending batch spool: %w", err)
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	if err := decoder.Decode(&batch); err != nil {
+		return nil, fmt.Errorf("corrupt pending batch spool: %w", err)
 	}
-	if batch.Payload.BatchID == "" || len(batch.Payload.Traffic) == 0 {
-		return nil, nil, errors.New("invalid pending batch spool (missing ID/traffic)")
+	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
+		return nil, errors.New("invalid pending batch spool trailing data")
 	}
-	return s, &batch, nil
+	if batch.Payload.BatchID == "" || len(batch.Payload.BatchID) > 128 || len(batch.Payload.Traffic) == 0 {
+		return nil, errors.New("invalid pending batch spool (missing ID/traffic)")
+	}
+	for userID, traffic := range batch.Payload.Traffic {
+		if userID <= 0 || traffic[0] < 0 || traffic[1] < 0 {
+			return nil, errors.New("invalid pending batch spool traffic")
+		}
+	}
+	return &batch, nil
+}
+
+func (s *batchSpool) matches(expected Batch) error {
+	actual, err := s.load()
+	if err != nil || actual == nil {
+		return errors.New("pending batch spool changed or missing")
+	}
+	actualJSON, actualErr := json.Marshal(actual)
+	expectedJSON, expectedErr := json.Marshal(expected)
+	if actualErr != nil || expectedErr != nil || !bytes.Equal(actualJSON, expectedJSON) {
+		return errors.New("pending batch spool changed or missing")
+	}
+	return nil
 }
 
 func (s *batchSpool) save(batch Batch) error {
@@ -77,7 +117,8 @@ func (s *batchSpool) save(batch Batch) error {
 	if err = tmp.Close(); err != nil {
 		return err
 	}
-	if err = os.Rename(name, s.path); err != nil {
+	// Exclusive publication refuses to overwrite an older ambiguous batch.
+	if err = os.Link(name, s.path); err != nil {
 		return err
 	}
 	if err = syncDirectory(dir); err != nil {
@@ -89,8 +130,41 @@ func (s *batchSpool) save(batch Batch) error {
 	return nil
 }
 
-func (s *batchSpool) clear() error {
-	if err := os.Remove(s.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+func (s *batchSpool) clear(expected Batch) error {
+	if err := s.matches(expected); err != nil {
+		return err
+	}
+	// Preserve the exact bytes, including the representation of legacy spools.
+	encoded, err := os.ReadFile(s.path)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(s.path); err != nil {
+		return err
+	}
+	if err := syncDirectory(filepath.Dir(s.path)); err != nil {
+		// Restore the original record without deleting it again on a repeated
+		// directory fsync failure. The failure remains visible: persistent I/O
+		// failure cannot certify durability, but a readable record can replay.
+		_ = s.restoreAfterClearFailure(encoded)
+		return err
+	}
+	return nil
+}
+
+func (s *batchSpool) restoreAfterClearFailure(encoded []byte) error {
+	file, err := os.OpenFile(s.path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	if _, err := file.Write(encoded); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
 		return err
 	}
 	return syncDirectory(filepath.Dir(s.path))

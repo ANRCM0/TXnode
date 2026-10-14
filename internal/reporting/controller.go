@@ -3,6 +3,7 @@ package reporting
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -36,10 +37,24 @@ type Controller struct {
 	active  atomic.Bool
 	backoff backoff
 
-	pendingMu sync.Mutex
-	pending   *Batch
-	spool     *batchSpool
+	pendingMu       sync.Mutex
+	pending         *Batch
+	spool           *batchSpool
+	terminal        *Batch
+	terminalSpool   *batchSpool
+	admissionClosed bool
+	stopped         bool
+	checkpointed    bool
 }
+
+// Terminal errors are fixed diagnostics; they never include a storage path or payload.
+var (
+	ErrReportingClosed          = errors.New("REPORTING_ADMISSION_CLOSED")
+	ErrTerminalCheckpointExists = errors.New("REPORTING_TERMINAL_CHECKPOINT_EXISTS")
+	ErrTerminalCheckpointFailed = errors.New("REPORTING_TERMINAL_CHECKPOINT_FAILED")
+	ErrRecoveryFailed           = errors.New("REPORTING_RECOVERY_FAILED")
+	ErrRecoveryActive           = errors.New("REPORTING_RECOVERY_ACTIVE")
+)
 
 var fallbackNonce atomic.Uint64
 
@@ -58,8 +73,14 @@ func newReportBatchID() string {
 func (c *Controller) nextBatch(prepare PrepareFunc) (Batch, error) {
 	c.pendingMu.Lock()
 	defer c.pendingMu.Unlock()
+	if c.admissionClosed {
+		return Batch{}, ErrReportingClosed
+	}
 	if c.pending != nil {
-		return *c.pending, nil
+		return c.checkedSlot(c.pending, c.spool)
+	}
+	if c.terminal != nil {
+		return c.checkedSlot(c.terminal, c.terminalSpool)
 	}
 
 	batch := prepare()
@@ -88,13 +109,31 @@ func (c *Controller) acknowledge(batch Batch) error {
 	if c.pending != nil && c.pending.Payload.BatchID == batch.Payload.BatchID {
 		// A failed unlink leaves the same batch available for replay.
 		if c.spool != nil {
-			if err := c.spool.clear(); err != nil {
+			if err := c.spool.clear(batch); err != nil {
 				return fmt.Errorf("clear acknowledged batch: %w", err)
 			}
 		}
 		c.pending = nil
+	} else if c.terminal != nil && c.terminal.Payload.BatchID == batch.Payload.BatchID {
+		if c.terminalSpool != nil {
+			if err := c.terminalSpool.clear(batch); err != nil {
+				return ErrRecoveryFailed
+			}
+		}
+		c.terminal = nil
 	}
 	return nil
+}
+
+// checkedSlot rejects missing or changed files before any HTTP delivery.
+// pendingMu is held by the caller.
+func (c *Controller) checkedSlot(batch *Batch, spool *batchSpool) (Batch, error) {
+	if spool != nil {
+		if err := spool.matches(*batch); err != nil {
+			return Batch{}, ErrRecoveryFailed
+		}
+	}
+	return *batch, nil
 }
 
 func New(sink controlplane.Sink) *Controller {
@@ -109,7 +148,16 @@ func NewDurable(sink controlplane.Sink, path string) (*Controller, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Controller{sink: sink, spool: spool, pending: pending}, nil
+	terminalSpool, terminal, err := openBatchSpool(path + ".terminal.json")
+	if err != nil {
+		return nil, ErrRecoveryFailed
+	}
+	if pending != nil && terminal != nil && pending.Payload.BatchID == terminal.Payload.BatchID {
+		return nil, ErrRecoveryFailed
+	}
+	return &Controller{sink: sink, spool: spool, pending: pending,
+		terminalSpool: terminalSpool, terminal: terminal,
+		admissionClosed: terminal != nil}, nil
 }
 
 func (c *Controller) SupportsReporting() bool {
@@ -128,9 +176,12 @@ func (c *Controller) PushAsync(
 	if !c.SupportsReporting() || prepare == nil {
 		return false
 	}
-	if !c.active.CompareAndSwap(false, true) {
+	c.pendingMu.Lock()
+	if c.admissionClosed || !c.active.CompareAndSwap(false, true) {
+		c.pendingMu.Unlock()
 		return false
 	}
+	c.pendingMu.Unlock()
 	if c.backoff.shouldSkip() {
 		c.active.Store(false)
 		return false
@@ -188,7 +239,11 @@ func (c *Controller) PushSync(prepare PrepareFunc) error {
 	// On shutdown, attempt the ambiguous in-flight batch first and only
 	// then flush new counters; do not roll them into the old batch identity.
 	c.pendingMu.Lock()
-	hadPending := c.pending != nil
+	if c.admissionClosed {
+		c.pendingMu.Unlock()
+		return ErrReportingClosed
+	}
+	hadPending := c.pending != nil || c.terminal != nil
 	c.pendingMu.Unlock()
 	batch, err := c.nextBatch(prepare)
 	if err != nil {
@@ -258,5 +313,106 @@ func (c *Controller) EmptyForUsageHandoff() bool {
 	}
 	c.pendingMu.Lock()
 	defer c.pendingMu.Unlock()
-	return c.pending == nil && !c.active.Load()
+	return c.pending == nil && c.terminal == nil && !c.admissionClosed && !c.active.Load()
+}
+
+// CheckpointTerminal closes new report admission before preparing final counters.
+// It never sends HTTP, never overwrites pending, and reserves at most one tail.
+// Even a failed/empty checkpoint permanently closes this controller instance.
+func (c *Controller) CheckpointTerminal(prepare PrepareFunc, onFailure FailureFunc) error {
+	if c == nil {
+		return ErrTerminalCheckpointFailed
+	}
+	c.pendingMu.Lock()
+	c.admissionClosed = true
+	c.stopped = true
+	if c.checkpointed || c.terminal != nil {
+		c.pendingMu.Unlock()
+		return ErrTerminalCheckpointExists
+	}
+	c.checkpointed = true
+	// Refuse an unexpectedly existing/corrupt terminal file before flushing.
+	if c.terminalSpool != nil {
+		if _, err := os.Lstat(c.terminalSpool.path); !errors.Is(err, os.ErrNotExist) {
+			c.pendingMu.Unlock()
+			return ErrTerminalCheckpointExists
+		}
+	}
+	if prepare == nil {
+		c.pendingMu.Unlock()
+		return ErrTerminalCheckpointFailed
+	}
+	c.pendingMu.Unlock()
+	batch := prepare()
+	if len(batch.Payload.Traffic) == 0 {
+		return nil
+	}
+	batch.Payload.BatchID = newReportBatchID()
+	if c.terminalSpool != nil {
+		if err := c.terminalSpool.save(batch); err != nil {
+			batch.Payload.BatchID = ""
+			if onFailure != nil {
+				onFailure(batch, ErrTerminalCheckpointFailed)
+			}
+			return ErrTerminalCheckpointFailed
+		}
+	}
+	c.pendingMu.Lock()
+	c.terminal = &batch
+	c.pendingMu.Unlock()
+	return nil
+}
+
+// HasTerminalTail never interprets a removed/corrupt on-disk tail as empty.
+func (c *Controller) HasTerminalTail() bool {
+	if c == nil {
+		return false
+	}
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	return c.terminal != nil
+}
+
+// ReplayRecovery only drains already-prepared immutable slots, in FIFO order.
+// The caller must obtain fresh authority before invoking it and must not open
+// any listener until it succeeds. No fresh metric collection occurs here.
+func (c *Controller) ReplayRecovery() error {
+	if !c.SupportsReporting() {
+		return ErrRecoveryFailed
+	}
+	c.pendingMu.Lock()
+	if !c.active.CompareAndSwap(false, true) {
+		c.pendingMu.Unlock()
+		return ErrRecoveryActive
+	}
+	c.pendingMu.Unlock()
+	defer c.active.Store(false)
+	for {
+		c.pendingMu.Lock()
+		var slot *Batch
+		var spool *batchSpool
+		if c.pending != nil {
+			slot, spool = c.pending, c.spool
+		} else if c.terminal != nil {
+			slot, spool = c.terminal, c.terminalSpool
+		}
+		if slot == nil {
+			if !c.stopped {
+				c.admissionClosed = false
+			}
+			c.pendingMu.Unlock()
+			return nil
+		}
+		batch, err := c.checkedSlot(slot, spool)
+		c.pendingMu.Unlock()
+		if err != nil {
+			return ErrRecoveryFailed
+		}
+		if err := c.sink.Report(batch.Payload); err != nil {
+			return ErrRecoveryFailed
+		}
+		if err := c.acknowledge(batch); err != nil {
+			return ErrRecoveryFailed
+		}
+	}
 }

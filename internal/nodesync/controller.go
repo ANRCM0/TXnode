@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/ANRCM0/TX-Node/internal/controlerror"
 	"github.com/ANRCM0/TX-Node/internal/controlplane"
 	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/nlog"
@@ -19,6 +20,7 @@ import (
 // Result is an immutable polling snapshot prepared by Controller for the
 // Service orchestration layer to validate/apply on its main goroutine.
 type Result struct {
+	Terminal    error
 	Config      *model.NodeSpec
 	Users       []model.UserSpec
 	ConfigHash  string
@@ -38,6 +40,7 @@ type Controller struct {
 	resyncPending atomic.Bool
 	backoff       backoff
 	results       chan Result
+	terminal      atomic.Pointer[controlerror.AuthorityDenial]
 }
 
 func New(source controlplane.Source) *Controller {
@@ -60,7 +63,7 @@ func (c *Controller) Results() <-chan Result {
 // currentConfigHash and certChanged are runtime facts supplied by Service.
 // Controller may use them only to avoid returning an unchanged config.
 func (c *Controller) Poll(ctx context.Context, currentConfigHash string, certChanged bool) bool {
-	if c == nil || c.source == nil || !c.source.SupportsPolling() {
+	if c == nil || c.source == nil || !c.source.SupportsPolling() || c.terminal.Load() != nil {
 		return false
 	}
 	if !c.pullActive.CompareAndSwap(false, true) {
@@ -76,6 +79,15 @@ func (c *Controller) Poll(ctx context.Context, currentConfigHash string, certCha
 	go func() {
 		snapshot, err := c.source.Poll(ctx)
 		if err != nil {
+			if denial, ok := controlerror.AsAuthorityDenial(err); ok {
+				c.terminal.CompareAndSwap(nil, denial)
+				c.pullActive.Store(false)
+				select {
+				case c.results <- Result{Terminal: denial}:
+				case <-ctx.Done():
+				}
+				return
+			}
 			nlog.Core().Error("poll control plane failed", "error", err)
 			c.backoff.onFailure()
 			c.pullActive.Store(false)
@@ -199,4 +211,15 @@ func (b *backoff) onFailure() {
 	} else if b.skipRemaining < 8 {
 		b.skipRemaining *= 2
 	}
+}
+
+// Terminal is sticky once a completed native authority rejection is observed.
+func (c *Controller) Terminal() error {
+	if c == nil {
+		return nil
+	}
+	if d := c.terminal.Load(); d != nil {
+		return d
+	}
+	return nil
 }
