@@ -56,6 +56,7 @@ type Config struct {
 	// Service per process owns its consumer; no billing protocol is activated.
 	UsageEventStore UsageEventStoreConfig `yaml:"usage_event_store,omitempty"`
 	UsageV2         UsageV2Config         `yaml:"usage_v2,omitempty"`
+	Authorization   AuthorizationConfig   `yaml:"authorization,omitempty"`
 }
 
 type UsageEventStoreConfig struct {
@@ -358,6 +359,9 @@ func configBaseDir(configPath string) string {
 }
 
 func (rc *RootConfig) validateRoot() error {
+	if len(rc.Instances) > 0 && rc.Config.Authorization.Enabled {
+		return fmt.Errorf("NODE_AUTHORIZATION_EXPLICIT_INSTANCE_REQUIRED")
+	}
 	if len(rc.Instances) > 0 && rc.Config.UsageV2.Enabled {
 		return fmt.Errorf("USAGE_V2_EXPLICIT_INSTANCE_REQUIRED")
 	}
@@ -387,6 +391,9 @@ func (rc *RootConfig) validateRoot() error {
 }
 
 func (rc *RootConfig) NormalizeInstances() ([]*Config, error) {
+	if len(rc.Instances) > 0 && rc.Config.Authorization.Enabled {
+		return nil, fmt.Errorf("NODE_AUTHORIZATION_EXPLICIT_INSTANCE_REQUIRED")
+	}
 	if len(rc.Instances) == 0 {
 		id, err := rc.Config.AutoInstanceID()
 		if err != nil {
@@ -634,6 +641,7 @@ func (c *Config) setDefaultsFrom(baseDir string) {
 	if c.Log.Output == "" {
 		c.Log.Output = "stdout"
 	}
+	c.Authorization.applyDefaults(c.Kernel.ConfigDir)
 	if c.Cert.CertDir == "" {
 		c.Cert.CertDir = filepath.Join(c.Kernel.ConfigDir, "certs")
 	}
@@ -751,6 +759,9 @@ func normalizeBaseURL(raw string) (string, string, error) {
 
 func (c *Config) validate() error {
 	if err := c.ValidateUsageV2(); err != nil {
+		return err
+	}
+	if err := c.ValidateAuthorization(); err != nil {
 		return err
 	}
 	if c.Panel.Provider != "" && c.Panel.Provider != "xboard" && c.Panel.Provider != "txboard" {

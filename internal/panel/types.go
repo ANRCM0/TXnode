@@ -24,10 +24,27 @@ func (s *StringOrArray) UnmarshalJSON(data []byte) error {
 	return fmt.Errorf("StringOrArray: expected string or []string, got %s", string(data))
 }
 
-// HandshakeResponse is the response from POST /api/v2/server/handshake
+// AuthorizationTrust is the public Ed25519 trust advertised by Core.
+type AuthorizationTrust struct {
+	ProtocolVersion int    `json:"protocol_version"`
+	CoreInstanceID  string `json:"core_instance_id"`
+	KeyID           string `json:"key_id"`
+	KeyEpoch        string `json:"key_epoch"`
+	Algorithm       string `json:"algorithm"`
+	PublicKey       string `json:"public_key"`
+}
+
+// SignedAuthorizationEnvelope is the finite authorization snapshot.
+type SignedAuthorizationEnvelope struct {
+	Payload   string `json:"payload"`
+	Signature string `json:"signature"`
+}
+
+// HandshakeResponse is the response from the native handshake.
 type HandshakeResponse struct {
-	WebSocket WSConfig `json:"websocket"`
-	Settings  Settings `json:"settings"`
+	WebSocket          WSConfig            `json:"websocket"`
+	AuthorizationTrust *AuthorizationTrust `json:"authorization_trust,omitempty"`
+	Settings           Settings            `json:"settings"`
 }
 
 func (h *HandshakeResponse) UnmarshalJSON(data []byte) error {
@@ -35,13 +52,10 @@ func (h *HandshakeResponse) UnmarshalJSON(data []byte) error {
 	aux := &struct {
 		Settings json.RawMessage `json:"settings"`
 		*Alias
-	}{
-		Alias: (*Alias)(h),
-	}
+	}{Alias: (*Alias)(h)}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
-	// If settings is an empty array [], skip unmarshaling it into the struct
 	if len(aux.Settings) > 0 && string(aux.Settings) != "[]" {
 		if err := json.Unmarshal(aux.Settings, &h.Settings); err != nil {
 			return err

@@ -132,8 +132,15 @@ func (s *Service) usageObserverMetrics() map[string]interface{} {
 }
 
 func (s *Service) reloadKernelObserved(config *model.NodeSpec, users []model.UserSpec) error {
+	if !s.signedUsersAllowed(users) {
+		return fmt.Errorf("NODE_AUTHORIZATION_EXPIRED")
+	}
 	s.observeBoundary("KERNEL_RELOAD_BEGIN", true)
 	err := s.kernelLife.Reload(config, users, s.certs.TLSCert())
+	if err == nil && !s.signedUsersAllowed(users) {
+		s.stopKernelObserved(false)
+		err = fmt.Errorf("NODE_AUTHORIZATION_EXPIRED")
+	}
 	event := "KERNEL_RELOAD_OK"
 	if err != nil {
 		event = "KERNEL_RELOAD_FAILED"

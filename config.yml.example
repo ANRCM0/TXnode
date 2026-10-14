@@ -67,3 +67,23 @@ audit:
 #
 # 运行时待确认流量批次和证书等数据位于 kernel.config_dir（默认配置文件目录）。
 # Docker 部署请使用 Installer 提供的 /etc/txnode 持久化目录，避免重建容器丢数据。
+
+# 可选有限授权：仅在 Core 启用独立 Ed25519 签名后启用。
+# 公钥、Key/Core 身份须在受信配置中预先固定，不自动接受握手新密钥。
+# 每个 Node/Machine 子节点分别持久保存授权版本，重启必须在线获取新快照。
+# authorization:
+#   enabled: true
+#   state_dir: /etc/txnode/authorization
+#   core_instance_id: REPLACE_WITH_PINNED_CORE_ID
+#   key_id: REPLACE_WITH_PINNED_KEY_ID
+#   key_epoch: "1"
+#   public_key: REPLACE_WITH_BASE64URL_ED25519_PUBLIC_KEY
+#   policy_version: native-node-authorization/v1
+#   refresh_interval: 30   # 独立于面板 pull_interval，最大 30 秒
+#   max_clock_skew: 5
+# 密钥轮换须先更新受信配置；本阶段不自动接受密钥重叠或恢复旧状态。
+# state_dir 与 kernel.config_dir 均须为 Linux 持久目录，不能随容器重建丢失。
+# 离线最多运行至签名期限（最大 120 秒），到期关闭监听及已有连接。
+# 本模式不能与隔离 Usage v2 同时启用；流量周期与授权期限分别处理。
+# ?? instances: ??????????? instance ????? authorization:?
+# ?? authorization.enabled: true ? instances: ?????????????????????

@@ -76,7 +76,22 @@ type Xray struct {
 
 	// running is set after a successful Start and cleared before shutdown.
 	// Atomic so IsRunning / GetConnections never block.
-	running atomic.Bool
+	running              atomic.Bool
+	authorizationExpired atomic.Bool
+	authorizationIO      sync.Map               // *authorizationIOHandle -> struct{}, independent of operationMu/mu
+	authorizationHandle  *authorizationIOHandle // mu protected
+}
+
+type authorizationIOHandle struct {
+	instance *xrayCore.Instance
+	cancel   context.CancelFunc
+}
+
+func (h *authorizationIOHandle) close() {
+	h.cancel()
+	if manager, ok := h.instance.GetFeature(inbound.ManagerType()).(inbound.Manager); ok {
+		_ = manager.Close()
+	}
 }
 
 func New(cfg config.KernelConfig) *Xray {
@@ -113,11 +128,17 @@ func (x *Xray) Protocols() []string {
 // This deliberate reconstruction can disrupt unaffected streams; per-user strong
 // closure is not available and Capabilities does not claim it.
 func (x *Xray) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
+	if x.authorizationExpired.Load() {
+		return errors.New("NODE_AUTHORIZATION_EXPIRED")
+	}
 	x.operationMu.Lock()
 	defer x.operationMu.Unlock()
 	return x.start(nodeConfig, users, tls)
 }
 func (x *Xray) start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
+	if x.authorizationExpired.Load() {
+		return errors.New("NODE_AUTHORIZATION_EXPIRED")
+	}
 	// A replacement must release the old listener and revoke all old sessions.
 	x.stop()
 	if nodeConfig == nil {
@@ -151,12 +172,30 @@ func (x *Xray) start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls ker
 		instanceCancel()
 		return errors.New("XRAY_CREATE_FAILED")
 	}
+	handle := &authorizationIOHandle{instance: inst, cancel: instanceCancel}
+	x.authorizationIO.Store(handle, struct{}{})
+	started := false
+	defer func() {
+		if !started {
+			x.authorizationIO.Delete(handle)
+		}
+	}()
+	if x.authorizationExpired.Load() {
+		handle.close()
+		_ = inst.Close()
+		return errors.New("NODE_AUTHORIZATION_EXPIRED")
+	}
 
 	// ── Phase 3: Start new (no lock, potentially slow) ──────────────────
 	if err := startWithTimeout(inst, startTimeout); err != nil {
 		instanceCancel()
 		inst.Close()
 		return errors.New("XRAY_START_FAILED")
+	}
+	if x.authorizationExpired.Load() {
+		handle.close()
+		_ = inst.Close()
+		return errors.New("NODE_AUTHORIZATION_EXPIRED")
 	}
 
 	// ── Phase 4: Swap old → new (brief kernel lock) ─────────────────────
@@ -171,6 +210,8 @@ func (x *Xray) start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls ker
 	x.inboundTag = nodeConfig.Protocol + "-in"
 	x.lastKernelHash = kernel.ComputeHash(nodeConfig, users)
 	x.running.Store(true)
+	x.authorizationHandle = handle
+	started = true
 	x.mu.Unlock()
 
 	// ── Phase 5: Recycle old (background, non-blocking) ─────────────────
@@ -189,8 +230,14 @@ func (x *Xray) start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls ker
 // Reload applies unchanged identities/limits in place. Structural changes
 // return an explicit reconstruction requirement for the Service caller.
 func (x *Xray) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
+	if x.authorizationExpired.Load() {
+		return errors.New("NODE_AUTHORIZATION_EXPIRED")
+	}
 	x.operationMu.Lock()
 	defer x.operationMu.Unlock()
+	if x.authorizationExpired.Load() {
+		return errors.New("NODE_AUTHORIZATION_EXPIRED")
+	}
 	if nodeConfig == nil {
 		return errors.New("XRAY_CONFIG_INVALID")
 	}
@@ -217,12 +264,20 @@ func (x *Xray) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls ke
 // Stop synchronously revokes the instance context, closes listeners and retains
 // final cumulative counters. It does not wait minutes with old streams alive.
 func (x *Xray) Stop() { x.operationMu.Lock(); defer x.operationMu.Unlock(); x.stop() }
+
+// Authorization expiry uses instance cancellation before graceful accounting
+// drain, so existing connections cannot spend an expired lease during shutdown.
+func (x *Xray) StopAuthorization() {
+	x.authorizationExpired.Store(true)
+	x.authorizationIO.Range(func(key, _ any) bool { key.(*authorizationIOHandle).close(); return true })
+}
 func (x *Xray) stop() {
 	x.running.Store(false)
 	x.mu.Lock()
 	inst := x.instance
 	ld := x.limitDispatcher
 	cancel := x.instanceCancel
+	handle := x.authorizationHandle
 	if inst == nil {
 		x.mu.Unlock()
 		return
@@ -242,13 +297,15 @@ func (x *Xray) stop() {
 	x.instance = nil
 	x.limitDispatcher = nil
 	x.instanceCancel = nil
+	x.authorizationHandle = nil
 	x.mu.Unlock()
+	x.authorizationIO.Delete(handle)
 	if ld != nil {
 		ld.ResetConns()
 	}
 }
 
-func (x *Xray) IsRunning() bool { return x.running.Load() }
+func (x *Xray) IsRunning() bool { return x.running.Load() && !x.authorizationExpired.Load() }
 
 func tlsEqual(a, b kernel.TLSCert) bool {
 	return bytes.Equal(a.CertPEM, b.CertPEM) && bytes.Equal(a.KeyPEM, b.KeyPEM)

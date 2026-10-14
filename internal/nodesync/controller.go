@@ -11,6 +11,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/ANRCM0/TX-Node/internal/authorization"
 	"github.com/ANRCM0/TX-Node/internal/controlerror"
 	"github.com/ANRCM0/TX-Node/internal/controlplane"
 	"github.com/ANRCM0/TX-Node/internal/model"
@@ -21,6 +22,7 @@ import (
 // Service orchestration layer to validate/apply on its main goroutine.
 type Result struct {
 	Terminal      error
+	Authorization *authorization.Snapshot
 	Generation    uint64
 	HasGeneration bool
 	Config        *model.NodeSpec
@@ -35,6 +37,8 @@ type Result struct {
 // deduplication, snapshot hashing and delivery back to the main goroutine.
 //
 // It deliberately does not apply node config/users or touch kernel/cert state.
+type terminalCause struct{ err error }
+
 type Controller struct {
 	source controlplane.Source
 
@@ -42,7 +46,7 @@ type Controller struct {
 	resyncPending atomic.Bool
 	backoff       backoff
 	results       chan Result
-	terminal      atomic.Pointer[controlerror.AuthorityDenial]
+	terminal      atomic.Pointer[terminalCause]
 }
 
 func New(source controlplane.Source) *Controller {
@@ -90,10 +94,19 @@ func (c *Controller) poll(ctx context.Context, currentConfigHash string, certCha
 		snapshot, err := c.source.Poll(ctx)
 		if err != nil {
 			if denial, ok := controlerror.AsAuthorityDenial(err); ok {
-				c.terminal.CompareAndSwap(nil, denial)
+				c.terminal.CompareAndSwap(nil, &terminalCause{err: denial})
 				c.pullActive.Store(false)
 				select {
 				case c.results <- Result{Terminal: denial, Generation: generation, HasGeneration: hasGeneration}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			if authorization.IsRefusal(err) {
+				c.terminal.CompareAndSwap(nil, &terminalCause{err: err})
+				c.pullActive.Store(false)
+				select {
+				case c.results <- Result{Terminal: err, Generation: generation, HasGeneration: hasGeneration}:
 				case <-ctx.Done():
 				}
 				return
@@ -105,7 +118,7 @@ func (c *Controller) poll(ctx context.Context, currentConfigHash string, certCha
 		}
 		c.backoff.onSuccess()
 
-		result := Result{CertChanged: certChanged, Generation: generation, HasGeneration: hasGeneration}
+		result := Result{CertChanged: certChanged, Generation: generation, HasGeneration: hasGeneration, Authorization: snapshot.Authorization}
 		if snapshot.Config != nil {
 			result.Config = snapshot.Config
 			result.ConfigHash = ConfigHash(snapshot.Config)
@@ -231,7 +244,7 @@ func (c *Controller) Terminal() error {
 		return nil
 	}
 	if d := c.terminal.Load(); d != nil {
-		return d
+		return d.err
 	}
 	return nil
 }

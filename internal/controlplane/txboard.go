@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/ANRCM0/TX-Node/internal/authorization"
 	"github.com/ANRCM0/TX-Node/internal/config"
 	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/nlog"
@@ -23,6 +24,7 @@ type TXBoardControlPlane struct {
 	sharedPush      PushClient
 	register        func(chan<- StatusChange) *NodeMailbox
 	isolatedUsageV2 bool
+	authorization   *authorization.Manager
 }
 
 func NewTXBoardControlPlane(p config.PanelConfig, ws config.WSConfig, kernel config.KernelConfig) *TXBoardControlPlane {
@@ -65,7 +67,13 @@ func (p *TXBoardControlPlane) snapshot(ctx context.Context) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	users, err := p.client.UsersSnapshot()
+	var users []panel.User
+	var auth *authorization.Snapshot
+	if p.authorization != nil {
+		users, auth, err = p.client.AuthorizedUsersSnapshot(p.authorization)
+	} else {
+		users, err = p.client.UsersSnapshot()
+	}
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -79,13 +87,22 @@ func (p *TXBoardControlPlane) snapshot(ctx context.Context) (Snapshot, error) {
 			return Snapshot{}, err
 		}
 	}
-	return Snapshot{Config: spec, Users: model.UserSpecsFromPanel(users)}, nil
+	return Snapshot{Config: spec, Users: model.UserSpecsFromPanel(users), Authorization: auth}, nil
 }
 func (p *TXBoardControlPlane) Initial(ctx context.Context, metricsFn func() map[string]interface{}, events chan<- Event, statuses chan<- StatusChange) (Bootstrap, error) {
 	p.client.ResetETags()
 	hs, err := p.client.Handshake()
 	if err != nil {
 		return Bootstrap{}, err
+	}
+	if p.authorization != nil {
+		if hs.AuthorizationTrust == nil {
+			return Bootstrap{}, errors.New("NODE_AUTHORIZATION_TRUST_UNAVAILABLE")
+		}
+		t := hs.AuthorizationTrust
+		if err := p.authorization.SetTrust(authorization.Trust{ProtocolVersion: t.ProtocolVersion, CoreInstanceID: t.CoreInstanceID, KeyID: t.KeyID, KeyEpoch: t.KeyEpoch, Algorithm: t.Algorithm, PublicKey: t.PublicKey}); err != nil {
+			return Bootstrap{}, err
+		}
 	}
 	snapshot, err := p.snapshot(ctx)
 	if err != nil {
@@ -94,7 +111,7 @@ func (p *TXBoardControlPlane) Initial(ctx context.Context, metricsFn func() map[
 	if snapshot.Config == nil {
 		return Bootstrap{}, errors.New("TXBoard initial config not available")
 	}
-	b := Bootstrap{PushInterval: hs.Settings.PushInterval, PullInterval: hs.Settings.PullInterval, Config: snapshot.Config, Users: snapshot.Users}
+	b := Bootstrap{PushInterval: hs.Settings.PushInterval, PullInterval: hs.Settings.PullInterval, Config: snapshot.Config, Users: snapshot.Users, Authorization: snapshot.Authorization}
 	if p.isolatedUsageV2 {
 		session, transport, err := p.client.ServiceUsageV2(hs)
 		if err != nil {
@@ -275,4 +292,26 @@ func (p *TXBoardControlPlane) PrepareIsolatedUsageV2(caFile string) error {
 	}
 	p.isolatedUsageV2 = true
 	return nil
+}
+
+// ConfigureAuthorization supplies per-child durable authority after Machine expansion.
+func (p *TXBoardControlPlane) ConfigureAuthorization(m *authorization.Manager) error {
+	if m == nil {
+		return errors.New("NODE_AUTHORIZATION_MANAGER_REQUIRED")
+	}
+	p.authorization = m
+	return nil
+}
+func (p *TXBoardControlPlane) RefreshAuthorization(ctx context.Context) (Snapshot, error) {
+	if p.authorization == nil {
+		return Snapshot{}, errors.New("NODE_AUTHORIZATION_MANAGER_REQUIRED")
+	}
+	users, auth, err := p.client.AuthorizedUsersSnapshot(p.authorization)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return Snapshot{}, err
+	}
+	return Snapshot{Users: model.UserSpecsFromPanel(users), Authorization: auth}, nil
 }

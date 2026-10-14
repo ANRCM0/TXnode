@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/ANRCM0/TX-Node/internal/authorization"
 	"github.com/ANRCM0/TX-Node/internal/config"
 	"github.com/ANRCM0/TX-Node/internal/controlerror"
 	"github.com/ANRCM0/TX-Node/internal/panel"
@@ -38,7 +39,8 @@ type Handshake struct {
 		Path    string `json:"path"`
 	} `json:"websocket"`
 	// Optional capability; the explicit v2 reporter validates it. Service remains v1.
-	UsageV2 json.RawMessage `json:"usage_v2,omitempty"`
+	UsageV2            json.RawMessage           `json:"usage_v2,omitempty"`
+	AuthorizationTrust *panel.AuthorizationTrust `json:"authorization_trust,omitempty"`
 }
 type NodeList struct {
 	Nodes      []panel.MachineNode     `json:"nodes"`
@@ -429,6 +431,60 @@ func (c *Client) GetUsers() ([]panel.User, error) { return c.readUsers(false) }
 // UsersSnapshot returns an independent complete desired user set. A legitimate
 // empty set remains allocated; missing cached content is never invented empty.
 func (c *Client) UsersSnapshot() ([]panel.User, error) { return c.readUsers(true) }
+
+// AuthorizedUsersSnapshot fetches a complete signed users snapshot. It never
+// uses ETag/304 because a cached unsigned body cannot renew finite authority.
+func (c *Client) AuthorizedUsersSnapshot(m *authorization.Manager) ([]panel.User, *authorization.Snapshot, error) {
+	if m == nil {
+		return nil, nil, errors.New("NODE_AUTHORIZATION_MANAGER_REQUIRED")
+	}
+	endpoint, err := url.Parse(c.baseURL)
+	if err != nil || endpoint.Scheme != "https" || endpoint.User != nil {
+		return nil, nil, errors.New("NODE_AUTHORIZATION_HTTPS_REQUIRED")
+	}
+	resp, err := c.request("GET", "/users", nil, "")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusNotModified {
+			return nil, nil, errors.New("NODE_AUTHORIZATION_304_NOT_RENEWAL")
+		}
+		return nil, nil, fmt.Errorf("TXBoard HTTP %d", resp.StatusCode)
+	}
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
+	if err != nil {
+		return nil, nil, errors.New("read TXAPI authorized response failed")
+	}
+	if len(raw) > maxResponse {
+		return nil, nil, errors.New("NODE_AUTHORIZATION_RESPONSE_TOO_LARGE")
+	}
+	var response struct {
+		Data      json.RawMessage `json:"data"`
+		RequestID json.RawMessage `json:"request_id,omitempty"`
+	}
+	if err := authorization.ValidateJSON(raw, &response); err != nil {
+		return nil, nil, errors.New("NODE_AUTHORIZATION_RESPONSE_INVALID")
+	}
+	var data struct {
+		ProtocolVersion int                               `json:"protocol_version"`
+		NodeID          int                               `json:"node_id"`
+		Users           []panel.User                      `json:"users"`
+		Authorization   panel.SignedAuthorizationEnvelope `json:"authorization"`
+	}
+	if err := authorization.ValidateJSON(response.Data, &data); err != nil {
+		return nil, nil, errors.New("NODE_AUTHORIZATION_RESPONSE_INVALID")
+	}
+	if data.ProtocolVersion != 1 || data.NodeID != c.nodeID || data.Users == nil {
+		return nil, nil, errors.New("NODE_AUTHORIZATION_RESPONSE_INVALID")
+	}
+	snap, err := m.Verify(authorization.Envelope{Payload: data.Authorization.Payload, Signature: data.Authorization.Signature}, data.Users, time.Now())
+	if err != nil {
+		return nil, nil, err
+	}
+	return cloneUsersSnapshot(snap.Users), snap, nil
+}
 
 func (c *Client) readUsers(complete bool) ([]panel.User, error) {
 	c.usersReadMu.Lock()

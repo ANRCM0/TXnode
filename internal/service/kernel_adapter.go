@@ -16,6 +16,9 @@ func (s *Service) startKernel(config *model.NodeSpec, users []model.UserSpec) bo
 	if s == nil || s.kernelLife == nil || (s.syncer != nil && s.syncer.Terminal() != nil) {
 		return false
 	}
+	if !s.signedUsersAllowed(users) {
+		return false
+	}
 	if !s.usageMode() && s.kernel.IsRunning() {
 		s.stopUncertainKernel()
 	}
@@ -53,6 +56,10 @@ func (s *Service) startKernel(config *model.NodeSpec, users []model.UserSpec) bo
 		s.markApplicationPending("KERNEL_START_FAILED")
 		s.observeBoundary("KERNEL_START_FAILED", false)
 		nlog.Core().Error("failed to start kernel", "error", err)
+		return false
+	}
+	if !s.signedUsersAllowed(users) {
+		s.stopUncertainKernel()
 		return false
 	}
 	if !s.usageMode() && s.tracker != nil {
@@ -130,6 +137,10 @@ func (s *Service) stopUncertainKernel() {
 }
 func (s *Service) applyDesiredState(ctx context.Context) {
 	if s == nil || s.kernelLife == nil || s.authorityTerminal(ctx) {
+		return
+	}
+	if !s.authorizationValid() {
+		s.stopUncertainKernel()
 		return
 	}
 	if s.usageMode() {

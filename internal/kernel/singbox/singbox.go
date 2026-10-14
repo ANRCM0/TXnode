@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	box "github.com/sagernet/sing-box"
@@ -42,6 +43,11 @@ type SingBox struct {
 	box    *box.Box
 	ctx    context.Context
 	cancel context.CancelFunc
+	// Published I/O handles have their own lifetime; finite authorization stop
+	// never acquires the structural kernel mutex held by Start/Reload.
+	authorizationExpired atomic.Bool
+	authorizationIO      sync.Map               // *authorizationIOHandle -> struct{}
+	authorizationHandle  *authorizationIOHandle // mu protected
 
 	users                 []model.UserSpec
 	nodeConfig            *model.NodeSpec
@@ -74,6 +80,20 @@ type SingBox struct {
 	trackerRegistered bool
 }
 
+type authorizationIOHandle struct {
+	cancel   context.CancelFunc
+	inbounds adapter.InboundManager
+	tracker  *ConnTracker
+}
+
+func (h *authorizationIOHandle) close() {
+	h.cancel()
+	h.tracker.StopAuthorization()
+	if h.inbounds != nil {
+		_ = h.inbounds.Close()
+	}
+}
+
 func New(cfg config.KernelConfig) *SingBox {
 	return &SingBox{cfg: cfg}
 }
@@ -101,8 +121,14 @@ func (s *SingBox) Protocols() []string {
 }
 
 func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
+	if s.authorizationExpired.Load() {
+		return errors.New("NODE_AUTHORIZATION_EXPIRED")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.authorizationExpired.Load() {
+		return errors.New("NODE_AUTHORIZATION_EXPIRED")
+	}
 	if s.boundedPrepared != nil && s.boundedStarted {
 		return fmt.Errorf("USAGE_V2_KERNEL_RESTART_REFUSED")
 	}
@@ -141,6 +167,7 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 	oldCancel := s.cancel
 	oldCtx := s.ctx
 	oldTracker := s.connTracker
+	oldAuthorizationHandle := s.authorizationHandle
 
 	instance, err := box.New(box.Options{
 		Context: ctx,
@@ -183,10 +210,28 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 		s.boundedStarted = true
 	}
 	router.AppendTracker(tracker)
+	handle := &authorizationIOHandle{cancel: cancel, inbounds: service.FromContext[adapter.InboundManager](ctx), tracker: tracker}
+	s.authorizationIO.Store(handle, struct{}{})
+	started := false
+	defer func() {
+		if !started {
+			s.authorizationIO.Delete(handle)
+		}
+	}()
+	if s.authorizationExpired.Load() {
+		handle.close()
+		_ = instance.Close()
+		return errors.New("NODE_AUTHORIZATION_EXPIRED")
+	}
 	if err := instance.Start(); err != nil {
 		instance.Close()
 		cancel()
 		return fmt.Errorf("start sing-box: %w", err)
+	}
+	if s.authorizationExpired.Load() {
+		handle.close()
+		_ = instance.Close()
+		return errors.New("NODE_AUTHORIZATION_EXPIRED")
 	}
 
 	// New instance started successfully — swap state.
@@ -203,10 +248,16 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 	// replacement cannot overwrite the running instance's meter.
 	s.connTracker = tracker
 	s.trackerRegistered = true
+	s.authorizationHandle = handle
+	started = true
 
 	// Recycle old instance in background — drain then close.
 	if oldBox != nil {
-		go recycleOldBox(oldBox, oldCancel, oldCtx, oldTracker, s.localEventConsumer)
+		consumer := s.localEventConsumer
+		go func() {
+			defer s.authorizationIO.Delete(oldAuthorizationHandle)
+			recycleOldBox(oldBox, oldCancel, oldCtx, oldTracker, consumer)
+		}()
 	}
 
 	nlog.Core().Debug("sing-box started", "users", len(users))
@@ -246,8 +297,14 @@ func recycleOldBox(oldBox *box.Box, oldCancel context.CancelFunc, oldCtx context
 // unchanged. Routes/outbounds/listeners/DNS/TLS require stop + reconstruction;
 // mutating route state in place is unsafe for concurrent routed connections.
 func (s *SingBox) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
+	if s.authorizationExpired.Load() {
+		return errors.New("NODE_AUTHORIZATION_EXPIRED")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.authorizationExpired.Load() {
+		return errors.New("NODE_AUTHORIZATION_EXPIRED")
+	}
 	if s.box == nil {
 		return errors.New("KERNEL_NOT_RUNNING")
 	}
@@ -303,6 +360,13 @@ func (s *SingBox) Stop() {
 	s.stop()
 }
 
+// StopAuthorization closes admission and established sessions immediately.
+// Finite authorization expiry must not grant the normal graceful drain window.
+func (s *SingBox) StopAuthorization() {
+	s.authorizationExpired.Store(true)
+	s.authorizationIO.Range(func(key, _ any) bool { key.(*authorizationIOHandle).close(); return true })
+}
+
 func (s *SingBox) stop() {
 	if s.box == nil {
 		return
@@ -336,9 +400,14 @@ func (s *SingBox) stop() {
 	}
 	retireLocalTracker(s.localEventConsumer, s.connTracker)
 	s.ctx = nil
+	s.authorizationIO.Delete(s.authorizationHandle)
+	s.authorizationHandle = nil
 }
 
 func (s *SingBox) IsRunning() bool {
+	if s.authorizationExpired.Load() {
+		return false
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.box != nil

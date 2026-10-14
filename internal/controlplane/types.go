@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 
+	"github.com/ANRCM0/TX-Node/internal/authorization"
 	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/usagev2"
 )
@@ -45,11 +46,13 @@ type Bootstrap struct {
 	UsageV2Session    *usagev2.Session
 	UsageV2Transport  usagev2.Transport
 	UsageV2NativeHTTP bool
+	Authorization     *authorization.Snapshot
 }
 
 type Snapshot struct {
-	Config *model.NodeSpec
-	Users  []model.UserSpec
+	Config        *model.NodeSpec
+	Users         []model.UserSpec
+	Authorization *authorization.Snapshot
 }
 
 type ReportPayload struct {

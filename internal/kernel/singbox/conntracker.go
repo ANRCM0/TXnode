@@ -131,7 +131,8 @@ type ConnTracker struct {
 	uuidMap map[string]int               // UUID → userID (for lookup in RoutedConnection)
 	connMap map[string]trackedConnection // connID → tracked wrapper, including UDP
 
-	idCounter atomic.Int64
+	idCounter            atomic.Int64
+	authorizationExpired atomic.Bool
 
 	// speedLimitFunc resolves a user UUID to a *rate.Limiter.
 	speedLimitFunc atomic.Pointer[func(uuid string) *rate.Limiter]
@@ -218,7 +219,7 @@ func (t *ConnTracker) register(uuid, id string, uid int, us *userStats, sourceIP
 	defer t.usersMu.Unlock()
 	// Recheck after device/speed callbacks: user removal can happen while they
 	// run. This check and insertion share the same lock as SetUserMap.
-	if uid <= 0 || us == nil || t.uuidMap[uuid] != uid || t.users[uid] != us {
+	if t.authorizationExpired.Load() || uid <= 0 || us == nil || t.uuidMap[uuid] != uid || t.users[uid] != us {
 		return false
 	}
 	us.addConn(sourceIP)
@@ -582,6 +583,31 @@ func (t *ConnTracker) CloseByUUID(uuid string) int {
 		_ = connection.Close()
 	}
 	return len(connections)
+}
+
+// StopAuthorization closes physical I/O before observer/session bookkeeping.
+// The terminal latch is also checked under the registration lock, so a delayed
+// routing callback cannot register a connection after the cohort is expired.
+func (t *ConnTracker) StopAuthorization() {
+	t.authorizationExpired.Store(true)
+	t.usersMu.RLock()
+	connections := make([]io.Closer, 0, len(t.connMap))
+	for _, connection := range t.connMap {
+		connections = append(connections, connection.closer)
+	}
+	t.usersMu.RUnlock()
+	for _, connection := range connections {
+		switch c := connection.(type) {
+		case *trackedConn:
+			c.cancel()
+			_ = c.Conn.Close()
+		case *trackedPacketConn:
+			c.cancel()
+			_ = c.PacketConn.Close()
+		default:
+			_ = connection.Close()
+		}
+	}
 }
 
 // ActiveCount returns the total number of active connections.

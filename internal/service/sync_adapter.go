@@ -15,6 +15,10 @@ func (s *Service) latchCertificateRenewal() {
 	}
 }
 func (s *Service) schedulePoll(ctx context.Context) {
+	if s.authorizationEnabled() {
+		s.requestAuthorizationPoll(ctx)
+		return
+	}
 	if s == nil || s.syncer == nil || s.certs == nil {
 		return
 	}
@@ -36,6 +40,10 @@ func (s *Service) resetSnapshotCache() {
 	}
 }
 func (s *Service) requestWSResync(ctx context.Context, reason string) {
+	if s.authorizationEnabled() {
+		s.requestAuthorizationPoll(ctx)
+		return
+	}
 	if s == nil || s.syncer == nil || s.certs == nil {
 		return
 	}
@@ -76,6 +84,10 @@ func (s *Service) applySyncResult(ctx context.Context, result nodesync.Result) {
 	if result.HasGeneration && result.Generation != s.desiredGeneration {
 		s.resetSnapshotCache()
 		s.schedulePoll(ctx)
+		return
+	}
+	if err := s.acceptAuthorization(result.Authorization, result.Users); err != nil {
+		s.refuseAuthorization(err)
 		return
 	}
 	if result.CertChanged {

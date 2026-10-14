@@ -1,0 +1,342 @@
+{
+    "status":  "local-real-accepted-precise-commit-ci-pending",
+    "phase":  "P0-native-finite-signed-authorization",
+    "recorded_local_date":  "2026-10-15",
+    "contract":  "contracts/node-protocol/native-authorization-lease-v1.md",
+    "runner":  "scripts/tests/node-native-authorization/run.py",
+    "workflow":  ".github/workflows/ci-node-native-authorization.yml",
+    "fixture":  {
+                    "databases":  [
+                                      "txboard_native_authorization_test_singbox",
+                                      "txboard_native_authorization_test_xray"
+                                  ],
+                    "account":  "txboard_native_authorization",
+                    "host":  "127.0.0.1",
+                    "redis_databases_default":  [
+                                                    54,
+                                                    55
+                                                ],
+                    "reset_existing_schema":  false,
+                    "evidence_reuse":  false,
+                    "authorization_refresh_seconds":  5,
+                    "ordinary_pull_seconds":  60,
+                    "accepted_labs":  [
+                                          {
+                                              "kernel":  "singbox",
+                                              "name":  "native-authorization-lab-r4",
+                                              "mysql_port":  20306,
+                                              "redis_port":  20379
+                                          },
+                                          {
+                                              "kernel":  "xray",
+                                              "name":  "native-authorization-lab-r5",
+                                              "mysql_port":  21306,
+                                              "redis_port":  21379
+                                          }
+                                      ],
+                    "kernel_runs_serialized_after_rejected_shared_workerman_parallel_attempt":  true
+                },
+    "real_acceptance":  [
+                            {
+                                "kernel":  "singbox",
+                                "status":  "passed",
+                                "protocols":  [
+                                                  "vless",
+                                                  "vmess"
+                                              ],
+                                "lease_seconds":  40,
+                                "signed_delivery_count":  11,
+                                "original_traffic_batches_replayed":  2,
+                                "distinct_process_pids":  {
+                                                              "first-admission":  10406,
+                                                              "offline-restart":  10553,
+                                                              "recovery":  10562
+                                                          },
+                                "io_closure_observations":  [
+                                                                {
+                                                                    "node_id":  2,
+                                                                    "kind":  "sibling-existing-stream",
+                                                                    "deadline_offset_ms":  0.747
+                                                                },
+                                                                {
+                                                                    "node_id":  2,
+                                                                    "kind":  "listener",
+                                                                    "deadline_offset_ms":  12.067
+                                                                },
+                                                                {
+                                                                    "node_id":  1,
+                                                                    "kind":  "primary-existing-stream",
+                                                                    "deadline_offset_ms":  1.194
+                                                                },
+                                                                {
+                                                                    "node_id":  1,
+                                                                    "kind":  "primary-new-before-expiry-stream",
+                                                                    "deadline_offset_ms":  1.33
+                                                                },
+                                                                {
+                                                                    "node_id":  1,
+                                                                    "kind":  "listener",
+                                                                    "deadline_offset_ms":  12.436
+                                                                }
+                                                            ],
+                                "allowed_observation_error_seconds":  2,
+                                "case_names":  [
+                                                   "expired",
+                                                   "first-admission",
+                                                   "offline-before-expiry",
+                                                   "offline-restart",
+                                                   "offline-start",
+                                                   "recovery",
+                                                   "signed-revoked",
+                                                   "unsigned-hint"
+                                               ],
+                                "result":  {
+                                               "workspace_path":  ".tmp/native-authorization-real-r4/singbox-live-result.json",
+                                               "sha256":  "cbee1096750801ba3b0ce3af5948f6735bbf17fb04c6180a044f50239778bb20"
+                                           },
+                                "execution":  {
+                                                  "workspace_path":  ".tmp/native-authorization-real-r4/singbox-1-result.json",
+                                                  "sha256":  "c0f173185ebedce773e8d9f068f1714c7969e118004d2d238b982098667fc6a7"
+                                              },
+                                "source_manifest":  {
+                                                        "workspace_path":  ".tmp/native-authorization-real-r4/manifest.json",
+                                                        "sha256":  "0690085c9345243db5653726ace668d7bad895783b5ba0e1cd1031c3131e38f8"
+                                                    }
+                            },
+                            {
+                                "kernel":  "xray",
+                                "status":  "passed",
+                                "protocols":  [
+                                                  "vless",
+                                                  "vmess"
+                                              ],
+                                "lease_seconds":  40,
+                                "signed_delivery_count":  9,
+                                "original_traffic_batches_replayed":  2,
+                                "distinct_process_pids":  {
+                                                              "first-admission":  11936,
+                                                              "offline-restart":  12008,
+                                                              "recovery":  12017
+                                                          },
+                                "io_closure_observations":  [
+                                                                {
+                                                                    "node_id":  2,
+                                                                    "kind":  "sibling-existing-stream",
+                                                                    "deadline_offset_ms":  1.534
+                                                                },
+                                                                {
+                                                                    "node_id":  2,
+                                                                    "kind":  "listener",
+                                                                    "deadline_offset_ms":  8.159
+                                                                },
+                                                                {
+                                                                    "node_id":  1,
+                                                                    "kind":  "primary-existing-stream",
+                                                                    "deadline_offset_ms":  0.972
+                                                                },
+                                                                {
+                                                                    "node_id":  1,
+                                                                    "kind":  "primary-new-before-expiry-stream",
+                                                                    "deadline_offset_ms":  1.056
+                                                                },
+                                                                {
+                                                                    "node_id":  1,
+                                                                    "kind":  "listener",
+                                                                    "deadline_offset_ms":  8.697
+                                                                }
+                                                            ],
+                                "allowed_observation_error_seconds":  2,
+                                "case_names":  [
+                                                   "expired",
+                                                   "first-admission",
+                                                   "offline-before-expiry",
+                                                   "offline-restart",
+                                                   "offline-start",
+                                                   "recovery",
+                                                   "signed-revoked",
+                                                   "unsigned-hint"
+                                               ],
+                                "result":  {
+                                               "workspace_path":  ".tmp/native-authorization-real-r5/xray-live-result.json",
+                                               "sha256":  "c33559151481615e7a78fce79d210c24d0f6361fce4fb4d5bcc38e5e44f8b01c"
+                                           },
+                                "execution":  {
+                                                  "workspace_path":  ".tmp/native-authorization-real-r5/xray-1-result.json",
+                                                  "sha256":  "2657d99ea6d777d2d07e6ca3747a77353841efae25a75de8c4f6cd07fcd8d6b7"
+                                              },
+                                "source_manifest":  {
+                                                        "workspace_path":  ".tmp/native-authorization-real-r5/manifest.json",
+                                                        "sha256":  "0690085c9345243db5653726ace668d7bad895783b5ba0e1cd1031c3131e38f8"
+                                                    }
+                            }
+                        ],
+    "regressions":  {
+                        "core":  {
+                                     "status":  "passed",
+                                     "total_tests":  1692,
+                                     "passed":  1538,
+                                     "skipped":  154,
+                                     "assertions":  16347,
+                                     "errors":  0,
+                                     "failures":  0,
+                                     "result":  {
+                                                    "workspace_path":  ".tmp/native-authorization-live-r1/php-full-result.json",
+                                                    "sha256":  "a009cf8861bbbaf197bdb1c944e0e951667bf32d03ad04b166807251f80251da"
+                                                },
+                                     "junit":  {
+                                                   "workspace_path":  ".tmp/native-authorization-live-r1/php-full.xml",
+                                                   "sha256":  "c16d4f23707343a5e8fb5130be0e69f98b6ea9e30fd60d3bdaeb0f0bd62eab1e"
+                                               }
+                                 },
+                        "node_race":  {
+                                          "status":  "passed",
+                                          "main_tests_passed":  613,
+                                          "subtests_passed":  577,
+                                          "skipped":  8,
+                                          "failures":  [
+
+                                                       ],
+                                          "result":  {
+                                                         "workspace_path":  ".tmp/native-authorization-integrated-r2/full-result.json",
+                                                         "sha256":  "53f34b60ca218719e7fa55aebfe9a0a786e5baf0c9b9413dec28fa8922831407"
+                                                     }
+                                      },
+                        "node_vet":  {
+                                         "status":  "passed",
+                                         "result":  {
+                                                        "workspace_path":  ".tmp/native-authorization-integrated-r2/vet-result.json",
+                                                        "sha256":  "781edb39e1575d4a2c20f03d27084ad1bb0da9ae3eba6e93e471fd76013665a2"
+                                                    }
+                                     },
+                        "node_build":  {
+                                           "status":  "passed",
+                                           "result":  {
+                                                          "workspace_path":  ".tmp/native-authorization-integrated-r2/build-result.json",
+                                                          "sha256":  "d5c969f753efb57be071e8924c7923ec143251a0bdf9a4a04270b3de27d5adc0"
+                                                      }
+                                       },
+                        "runner_self_tests":  {
+                                                  "status":  "passed",
+                                                  "tests":  6,
+                                                  "source":  "scripts/tests/node-native-authorization/test_runner.py"
+                                              }
+                    },
+    "source_evidence":  {
+                            "base_commit":  "ef34d29ddc7ca14f9f70a26a13cd5f37989ec490",
+                            "real_kernel_runtime_and_harness_source_identical":  true,
+                            "real_runtime_matches_full_node_and_core_accepted_sources":  true,
+                            "accepted_overlay_sha256":  {
+                                                            "api/app/Domains/Network/NativeNodeAuthorization.php":  "5949eb5f613c57dfc56f42aa8d43fa7ee6dc209611b311efe18a311ea821c01c",
+                                                            "api/app/Http/Controllers/Txapi/NodeProtocolController.php":  "23f417e37094ba5e02f24ad38542e0480bac3e915f4099498e2e17fbc932535e",
+                                                            "api/config/native_node_authorization.php":  "1f51318ecdb2256d5e765d20c4eb9cff593d56fcb6556c7c0fb3fc8a2344f318",
+                                                            "api/database/migrations/2026_10_14_000010_create_native_node_authorization_state.php":  "ab5032e426b041b6f2e3824af12c596ffe592193ee77f83c803a7cbc97973344",
+                                                            "node/internal/authorization/authorization.go":  "73c2c98380997be417b1f6d2eac7ad9cd64ca020d107e6f165a892714f3a0989",
+                                                            "node/internal/authorization/authorization_test.go":  "d47cea82d7c4dc2e3678199ff8fa31c523c5cf900dca53a1f2b1fac6591d9ef1",
+                                                            "node/internal/authorization/persistence_linux_test.go":  "db8abc0e66f14815b0a64b640af3dcafda969ec85d0694f629cb6a663f8d36ea",
+                                                            "node/internal/authorization/store_linux.go":  "841e22d07f9bdfa1f51b691dd4070d74676a0f41f1e07ff96e18317ccbd8f7c0",
+                                                            "node/internal/authorization/store_other.go":  "819340fb0c2eeb481ab004f745b98b81b2e489064b48caf2dbbad562212e2750",
+                                                            "node/internal/config/authorization.go":  "cb8de773e98a7a1d055d96b40c4563bede724c9977e1c3443cabab60d25c95ed",
+                                                            "node/internal/config/authorization_test.go":  "3eb9618654c1985ed8cd6136e01b894da459afe999be3871e1c27a046bb16401",
+                                                            "node/internal/config/config.go":  "eda5b309c324dfc3773c7be03b1441146eea89dd7fb5e528d2b8eaebf10d0676",
+                                                            "node/internal/controlplane/txboard.go":  "3494689fde741585c3c4e3d9c3ff894bf61b441b971b71a1aff84686cc4eb16a",
+                                                            "node/internal/controlplane/types.go":  "e01e24b7db36969f043c5007f004bea718c3004b8712d2e03315eb905063e386",
+                                                            "node/internal/kernel/singbox/authorization_stop_test.go":  "1859dd1c3e546d01d35f13461d58f686a6779d72ee4c7348ab6e03a2ce5c92a3",
+                                                            "node/internal/kernel/singbox/conntracker.go":  "608a068314faaf08748bf05f49fcb64cf97fd90e33b3ce58520489c3267d71f2",
+                                                            "node/internal/kernel/singbox/singbox.go":  "33a513c1fc646379071de68f100b029fdbf8f717215a1269a47f8cfb804ec5f7",
+                                                            "node/internal/kernel/xray/authorization_stop_test.go":  "3bd641f3ef52393b3452c2740bfbc8e7a7eb1524b72573916557dbd2f2ea2a97",
+                                                            "node/internal/kernel/xray/xray.go":  "44f871fe17f80e5a12fff131f74cc73de222749512cdfb4d356cdf3b186c4ea1",
+                                                            "node/internal/nodesync/authorization_test.go":  "74bd6fb67c9a897b674fe9de154669550e796b6cb46a690de1055dd079a53736",
+                                                            "node/internal/nodesync/controller.go":  "69f3a260655f44d897149cfba4407753c1199d8e4b2c37613dcab36a8ffb3ab7",
+                                                            "node/internal/panel/types.go":  "3e19f59446476c23f3e62d22f7583016ae07a72576e784d779821c47d163a058",
+                                                            "node/internal/service/authorization_adapter.go":  "096e79add0ff3fbf77cada92eb5d1732b85e102b78899dfc812159a29e324723",
+                                                            "node/internal/service/authorization_adapter_test.go":  "f040e69d8272d1b36c1bfb632190403192c451c2e40647d8e3d78b0c5f91f63a",
+                                                            "node/internal/service/authorization_blocking_test.go":  "c5acc69523c14ae69ca747cf205fcec5425b81e7e6d9a03067dcbb030045ac39",
+                                                            "node/internal/service/kernel_adapter.go":  "e316ee88a2bcb8c6a9abe3eb320b6c513683b3d0c4325b417b6d207ed6636c58",
+                                                            "node/internal/service/service.go":  "c6d2e068e92dc1097e442d7e4249654c6e48d4f1afe5042098e4a30653393013",
+                                                            "node/internal/service/sync_adapter.go":  "e126eee6c46028939925ceda126f1802c93f609cc51d2d3528b210b5622641d5",
+                                                            "node/internal/service/usage_observer_adapter.go":  "733db83e7f90df82452fa52fe0cd7a4a761b0c305db1f43a92164fd2d81815c2",
+                                                            "node/internal/service/user_adapter.go":  "486d5cf32d4e9869e1be59d9c2d797c7169befaad84bb4c80fa6e6dd9797c6ed",
+                                                            "node/internal/txboard/authorization_linux_test.go":  "9d161dc8da941576ad237246be8874fb3215eb2f638b150e481a60599e55e830",
+                                                            "node/internal/txboard/client.go":  "9467a5b5645bc30240c233017abf758a85526264fe169f59b983a4e0b4df16c8",
+                                                            "scripts/tests/node-native-authorization/README.md":  "088ea8109ec5812c6ef5c7e9e0cbcf2fe586c8c95d92124f8996dfb0fc49fb54",
+                                                            "scripts/tests/node-native-authorization/fixture.php":  "f2c76b5b0ca67a43cb4046b2aec6de9a24a7bae9f13a30fb4479fdbfd205d4d5",
+                                                            "scripts/tests/node-native-authorization/native_core_authorization_live_test.go":  "dd4533861398b7eddc14cf88659d8e9dc90c9f17e463795af81c52285877fec1",
+                                                            "scripts/tests/node-native-authorization/run.py":  "de7da741715bf679d404960117755773e1c70f037bcdeebe7ab0c9a30e668342",
+                                                            "scripts/tests/node-native-authorization/test_runner.py":  "1f2ae5f04242f55e09a6afe60ae50ec8e035a26b3add6c142da634105af9e3b0",
+                                                            "scripts/tests/node-native-authorization/tls_proxy.py":  "07dcc542d98a10f1790bd8c596a885db327e789ca0b13ac9da9264f2c931c302"
+                                                        },
+                            "current_runtime_changes_after_real_freeze":  {
+                                                                              "node/internal/config/authorization_test.go":  {
+                                                                                                                                 "accepted_sha256":  "3eb9618654c1985ed8cd6136e01b894da459afe999be3871e1c27a046bb16401",
+                                                                                                                                 "current_sha256":  "e56bf6265e950c7ac5fda46f7493c49e866cea0f083be38c50187a8c6a97e5d2"
+                                                                                                                             },
+                                                                              "node/internal/config/config.go":  {
+                                                                                                                     "accepted_sha256":  "eda5b309c324dfc3773c7be03b1441146eea89dd7fb5e528d2b8eaebf10d0676",
+                                                                                                                     "current_sha256":  "a03749f92f38a908916e850f26dd2e5993856a56ce4e41d15d5e0debcc23b14d"
+                                                                                                                 }
+                                                                          },
+                            "post_acceptance_guard_note":  "Parent added a configuration-only rejection for root authorization with instances. Service, kernel, Manager and Core are unchanged. Attach focused Linux guard evidence before final stage completion.",
+                            "current_api_node_source_differences_after_real_acceptance":  [
+                                                                                              {
+                                                                                                  "path":  "node/config.yml.example",
+                                                                                                  "role":  "documentation-or-example-updated-after-real-acceptance",
+                                                                                                  "accepted_sha256":  "d54ea1d36107b42b9492b62428801d99bb0e2f1d99039c6f519ed04a4d74d0e1",
+                                                                                                  "current_sha256":  "e07b07d1634cdcfb22d1ec3fe58b05f771eaa163842104a3be4d58f0e2b33986"
+                                                                                              },
+                                                                                              {
+                                                                                                  "path":  "node/docs/native-authorization-verification.json",
+                                                                                                  "role":  "documentation-or-example-updated-after-real-acceptance",
+                                                                                                  "accepted_sha256":  "09085c7c9a4f97b0bea3a6e869f15ee58529a5cfccab0c679cbb98d3fb2bc9b2",
+                                                                                                  "current_sha256":  "4b57dd41f27c69169ee7b668298c75874a5fc3dcb62bea4281dc94a288216ee6"
+                                                                                              },
+                                                                                              {
+                                                                                                  "path":  "node/docs/native-authorization.md",
+                                                                                                  "role":  "documentation-or-example-updated-after-real-acceptance",
+                                                                                                  "accepted_sha256":  "0fa406c62cc7118bbf249f8b7f1f24e9b9ebc1773e3db7abbc53f8f3b5f41164",
+                                                                                                  "current_sha256":  "f7a1a3fa460ad3fdada256c42fe24e1986ab490b7b25ec265148e3b8fe618c43"
+                                                                                              },
+                                                                                              {
+                                                                                                  "path":  "node/internal/config/authorization_test.go",
+                                                                                                  "role":  "configuration-test-for-runtime-guard",
+                                                                                                  "accepted_sha256":  "3eb9618654c1985ed8cd6136e01b894da459afe999be3871e1c27a046bb16401",
+                                                                                                  "current_sha256":  "e56bf6265e950c7ac5fda46f7493c49e866cea0f083be38c50187a8c6a97e5d2"
+                                                                                              },
+                                                                                              {
+                                                                                                  "path":  "node/internal/config/config.go",
+                                                                                                  "role":  "configuration-runtime-guard",
+                                                                                                  "accepted_sha256":  "eda5b309c324dfc3773c7be03b1441146eea89dd7fb5e528d2b8eaebf10d0676",
+                                                                                                  "current_sha256":  "a03749f92f38a908916e850f26dd2e5993856a56ce4e41d15d5e0debcc23b14d"
+                                                                                              }
+                                                                                          ],
+                            "real_traffic_and_authorization_runtime_parity":  "All Core API source, Node Service, Manager, kernel, reporting, transport and machine files in accepted full-source manifests match the real run manifests. Only the listed configuration guard/test plus docs/example changed later."
+                        },
+    "preserved_failures":  [
+                               {
+                                   "snapshot":  "native-authorization-live-r1",
+                                   "reason":  "synthetic user token exceeded char32; runner exception exit0 was corrected"
+                               },
+                               {
+                                   "snapshot":  "native-authorization-integrated-r2",
+                                   "reason":  "harness expected flat state instead of current state/digest envelope"
+                               },
+                               {
+                                   "snapshot":  "native-authorization-real-r3",
+                                   "reason":  "bulk ban bypasses per-user observer and node_sync worker was absent; use registered per-user update and real queue worker"
+                               },
+                               {
+                                   "snapshot":  "native-authorization-real-r4",
+                                   "kernel":  "xray",
+                                   "reason":  "parallel Workerman startup in shared source directory rejected; rerun serialized in fresh real-r5 and lab-r5"
+                               }
+                           ],
+    "precise_commit_ci":  null,
+    "excluded_release_gates":  [
+                                   "production-provider-secret-delivery",
+                                   "installer-key-provisioning",
+                                   "production-pki",
+                                   "key-rotation-overlap",
+                                   "ha-or-disk-anti-rollback",
+                                   "full-protocol-matrix"
+                               ],
+    "post_acceptance_guard_note":  "Linux final snapshot native-authorization-final-r1: go test -race -count=1 -json ./... passed 613 main + 577 subtests, 8 skips; includes authorization and config root-with-instances guard tests. Additional Linux guard evidence: .tmp/native-authorization-final-r1/focused-result.json; full source SHA-256 archived in .tmp/native-authorization-final-r1/manifest.json."
+}

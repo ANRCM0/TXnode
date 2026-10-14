@@ -82,6 +82,9 @@ func (s *Service) logUserRemovalProbe(removed []int, src userStateSource) {
 // Desired state stays authoritative after failed kernel mutation. Applied hashes
 // advance only after the entire operation succeeds; uncertain revocation stops.
 func (s *Service) applyUserUpdate(ctx context.Context, users []model.UserSpec, newHash string, src userStateSource) {
+	if !s.signedUsersAllowed(users) {
+		return
+	}
 	if s.usageMode() {
 		if computeUserHash(users) != s.users.Hash() {
 			s.failUsageV2()
@@ -117,6 +120,10 @@ func (s *Service) applyUserUpdate(ctx context.Context, users []model.UserSpec, n
 		s.rebuildDesiredUsers(ctx)
 		return
 	}
+	if !s.signedUsersAllowed(users) {
+		s.stopUncertainKernel()
+		return
+	}
 	if s.tracker != nil {
 		s.tracker.BindPeriods(users)
 	}
@@ -133,6 +140,10 @@ func (s *Service) rebuildDesiredUsers(ctx context.Context) {
 	}
 }
 func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers []model.UserSpec) {
+	if s.authorizationEnabled() {
+		s.requestAuthorizationPoll(ctx)
+		return
+	}
 	if s.usageMode() {
 		if len(deltaUsers) > 0 {
 			s.failUsageV2()

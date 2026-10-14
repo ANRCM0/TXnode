@@ -9,9 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ANRCM0/TX-Node/internal/auditcoord"
+	"github.com/ANRCM0/TX-Node/internal/authorization"
 	"github.com/ANRCM0/TX-Node/internal/certcoord"
 	"github.com/ANRCM0/TX-Node/internal/config"
 	"github.com/ANRCM0/TX-Node/internal/controlerror"
@@ -53,20 +55,30 @@ type Service struct {
 	pushInterval int // seconds
 	pullInterval int // seconds
 
-	lastConfigHash     string // desired full configuration hash
-	desiredGeneration  uint64 // main Service goroutine only
-	appliedConfigHash  string
-	appliedUserHash    string
-	desiredDirty       bool
-	pendingCertRenewal bool
-	applicationFailure string
-	configRejected     bool
-	syncer             *nodesync.Controller
-	reporter           *reporting.Controller
-	reporterInitErr    error
-	legacyPendingPath  string
-	usageV2            *isolatedUsageRuntime
-	usageOwner         *usagebucket.ProcessOwner
+	lastConfigHash           string // desired full configuration hash
+	desiredGeneration        uint64 // main Service goroutine only
+	appliedConfigHash        string
+	appliedUserHash          string
+	desiredDirty             bool
+	pendingCertRenewal       bool
+	applicationFailure       string
+	configRejected           bool
+	syncer                   *nodesync.Controller
+	reporter                 *reporting.Controller
+	reporterInitErr          error
+	legacyPendingPath        string
+	usageV2                  *isolatedUsageRuntime
+	usageOwner               *usagebucket.ProcessOwner
+	authorization            *authorization.Manager
+	authorizationResults     chan authorizationResult
+	authorizationRefresh     atomic.Bool
+	authorizationFullPending atomic.Bool
+	authorizationTimer       *time.Timer
+	authorizationWatchdog    *time.Timer
+	authorizationAdmissionMu sync.Mutex
+	authorizationDeadline    time.Time
+	authorizationExpired     atomic.Bool
+	authorizationFailure     error
 
 	push             *pushsync.Controller
 	machineMailbox   *controlplane.NodeMailbox
@@ -179,6 +191,7 @@ func (s *Service) Run(ctx context.Context) error {
 	defer s.certs.Stop()
 
 	// Handshake: get WS config + initial data in one call
+	defer s.closeAuthorization()
 	if err := s.initialSetup(ctx); err != nil {
 		return fmt.Errorf("initial setup: %w", err)
 	}
@@ -205,11 +218,24 @@ func (s *Service) Run(ctx context.Context) error {
 	defer pullTicker.Stop()
 	defer deviceReportTicker.Stop()
 	defer wsDiscoveryTicker.Stop()
+	authorizationTicker, authorizationRefresh, stopAuthorization := s.authorizationChannels()
+	defer stopAuthorization()
 
 	s.push.Start(ctx)
 	defer s.push.Stop()
 
 	for {
+		if s.authorizationFailure != nil {
+			return s.authorizationFailure
+		}
+		if s.authorizationEnabled() {
+			if !s.authorizationValid() {
+				return s.stopForAuthorization(fmt.Errorf("NODE_AUTHORIZATION_EXPIRED"))
+			}
+			if err := s.authorization.Check(time.Now()); err != nil {
+				return s.stopForAuthorization(err)
+			}
+		}
 		if err := s.syncer.Terminal(); err != nil {
 			return s.stopForAuthorityDenial(err)
 		}
@@ -219,6 +245,21 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 		}
 		select {
+		case <-authorizationTicker:
+			return s.stopForAuthorization(fmt.Errorf("NODE_AUTHORIZATION_EXPIRED"))
+		case <-authorizationRefresh:
+			s.requestAuthorization(ctx)
+		case result := <-s.authorizationResults:
+			s.authorizationRefresh.Store(false)
+			if err := s.applyAuthorizationResult(ctx, result); err != nil {
+				if s.authorizationFailure != nil {
+					return s.authorizationFailure
+				}
+				return s.stopForAuthorization(err)
+			}
+			if s.authorizationFullPending.Load() {
+				s.requestAuthorizationPoll(ctx)
+			}
 		case <-ctx.Done():
 			if cause := context.Cause(ctx); cause != nil {
 				if controlerror.IsAuthoritativeStopCause(cause) {
@@ -310,12 +351,18 @@ func (s *Service) Run(ctx context.Context) error {
 }
 
 func (s *Service) initialSetup(ctx context.Context) error {
+	if err := s.initAuthorization(); err != nil {
+		return err
+	}
 	// Register speed limit lookup with kernel unconditionally (before push/poll branch).
 	s.kernel.SetSpeedLimitFunc(s.speedTracker.GetLimiter)
 	s.kernel.SetDeviceLimitFunc(s.limiter.GetDeviceLimitByUUID)
 
 	bootstrap, err := s.source.Initial(ctx, s.wsMetrics, s.push.EventSink(), s.push.StatusSink())
 	if err != nil {
+		return err
+	}
+	if err := s.acceptAuthorization(bootstrap.Authorization, bootstrap.Users); err != nil {
 		return err
 	}
 
@@ -446,6 +493,13 @@ func (s *Service) wsMetrics() map[string]interface{} {
 
 // handleWSEvent processes data events received via WebSocket
 func (s *Service) handleWSEvent(ctx context.Context, event controlplane.Event) {
+	if s.authorizationEnabled() {
+		switch event.Type {
+		case controlplane.EventSyncUsers, controlplane.EventSyncUserDelta, controlplane.EventSyncConfig:
+			s.requestAuthorizationPoll(ctx)
+			return
+		}
+	}
 	if s.usageMode() {
 		switch event.Type {
 		case controlplane.EventSyncConfig:
