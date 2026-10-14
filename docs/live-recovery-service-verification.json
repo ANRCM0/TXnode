@@ -1,0 +1,290 @@
+{
+  "phase": "B3.9 source continuation",
+  "status": "verified-isolated-real-protocol-recovery-slice",
+  "production_acceptance": false,
+  "verified_date_local": "2026-10-14",
+  "timezone": "Asia/Shanghai",
+  "source_snapshot": {
+    "base": "4779b323fdfb337374c581a76eea36983c90ee67",
+    "archive_name": "node-live-continuation-base.tar",
+    "archive_sha256": "fe034199e0e3554adb9cf2ae64f3d17e8661775a903b06ba697abbbb7e558055",
+    "source_sha256": {
+      "node/internal/service/usage_v2_live_revocation_test.go": "9743922c686048fc6ac134a37ae4a25e9fdb9a4eacdf87c800f77ec9d4b1e1eb",
+      "scripts/tests/node-live-revocation/run.py": "e2546c4a9eb89920417ef898acae317a1f0125b3d7653f5e7ed8c056db00f115",
+      "scripts/tests/node-live-revocation/fixture.php": "5919e13f0fab69f07019c44c87b7b4c05d92b1fa87587db4dfd3ca50ceeb5dab",
+      "scripts/tests/node-live-revocation/tls-proxy.py": "be94ec942ececcbf843e909448aa4449301d95b14038eeefb98cec9977348086"
+    },
+    "go_mod_sha256": "508a1aa3d828005b403eaa58c64df6b930ab7367f9f084aab1741b3f236bd25d",
+    "go_sum_sha256": "8b0f5399a4b5c12f6fbbc0b6928c98a6e3835ab6ce26eb0866ca789ff612f61b",
+    "composer_lock_sha256": "f47b212c2fc530a7820e370eab7c6d624d13962e7d26e4f2ddf57a11848257c0",
+    "installed_json_sha256": "8e668e456c9772ae428a038ab003fba5752ab2591980fc8396d9122851145b80"
+  },
+  "environment": {
+    "go": "1.26.3 linux/amd64 race",
+    "php": "8.4.16",
+    "database": "MariaDB11.4.12 dedicated loopback test database",
+    "transport": "native Node Bearer over verified loopback TLS1.3"
+  },
+  "verification": {
+    "full_node_race": {
+      "mode": "go",
+      "exit_code": 0,
+      "log_sha256": "75127a0f8e4924ba462234890e6a1d48ae6b8415391454b1ec7cc176b1ecaccf",
+      "snapshot": "/opt/txboard-baseline/node-live-revocation-r21",
+      "main_passed": 475,
+      "subtests_passed": 334,
+      "skipped": 4,
+      "failed": 0
+    },
+    "affected_vet": {
+      "mode": "vet",
+      "exit_code": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "snapshot": "/opt/txboard-baseline/node-live-revocation-r22"
+    },
+    "protocols": {
+      "vless": {
+        "result": {
+          "mode": "vless",
+          "exit_code": 0,
+          "log_sha256": "f7cb4eb963e4ecd3d3f94ba6e9323e0b0b3fa2a4f75471cfc3eaf04fbbf2d3a0",
+          "snapshot": "/opt/txboard-baseline/node-live-revocation-r22",
+          "actual_result": {
+            "status": "verified-isolated-live-boundary",
+            "case": "source-continue",
+            "protocol": "vless",
+            "actual_service_run": true,
+            "actual_singbox_kernel": true,
+            "native_mutation": null,
+            "historical_persisted_ack_sql": {
+              "persisted_ack_sql_verified": true,
+              "batch_rows": "1",
+              "entry_rows": "0",
+              "receipt_id": "receipt_96394121-1c5b-4559-a242-58fb3845ecaa",
+              "scheduled_heartbeat_ack_verified": true,
+              "legacy_user_u": "0",
+              "legacy_user_d": "0",
+              "legacy_batch_rows": "0"
+            },
+            "historical_settlement": {
+              "status": "settled",
+              "sql_batch_rows": "1",
+              "sql_entry_rows": "1",
+              "raw_up_bytes": "43",
+              "raw_down_bytes": "79",
+              "billed_up_bytes": "64",
+              "billed_down_bytes": "118",
+              "billable_bytes": "182",
+              "receipt_id": "receipt_96394121-1c5b-4559-a242-58fb3845ecaa",
+              "second_scan_empty": true,
+              "legacy_user_u": "0",
+              "legacy_user_d": "0"
+            },
+            "final_sql": {
+              "status": "settled",
+              "batch_rows": "2",
+              "entry_rows": "2",
+              "old_source_epoch": "1",
+              "new_source_epoch": "2",
+              "historical_billable_bytes": "182",
+              "new_billable_bytes": "83",
+              "billable_bytes": "265",
+              "historical_receipt": "receipt_96394121-1c5b-4559-a242-58fb3845ecaa",
+              "new_receipt": "receipt_c63cb0b4-2fa8-45ec-85a1-379b84f6d8ba",
+              "original_sql_history_unchanged": true,
+              "billed_up_bytes": "119",
+              "billed_down_bytes": "146",
+              "legacy_user_u": "0",
+              "legacy_user_d": "0"
+            },
+            "boundary": {
+              "actual_service_run": true,
+              "core_instance_id": "live_revocation_core_fixture_1",
+              "new_batch_id": "e3cc93ff9ab6eb522c4e9b85024a24c7",
+              "new_download_bytes": "19",
+              "new_receipt_id": "receipt_c63cb0b4-2fa8-45ec-85a1-379b84f6d8ba",
+              "new_source_epoch": "2",
+              "new_upload_bytes": "37",
+              "old_batch_id": "80c377eca4821acda3140be8c0fd25cb",
+              "old_history_unchanged": true,
+              "old_receipt_id": "receipt_96394121-1c5b-4559-a242-58fb3845ecaa",
+              "old_source_epoch": "1",
+              "protocol": "vless",
+              "receipt_generation": "1"
+            },
+            "artifacts_sha256": {
+              "continuation-ready.json": "b33e880442678dbc17a9e0840cd2ec1d6401adafbdd1c08ac6da1d528306c2b7",
+              "history-capture.json": "e02b0600c7c5380b0c6f46b7823c949ba0358d6b35d05419f4ee3e1a17a5afe6",
+              "sql-continuation-settlement.log": "322b0ce1dccc4a90270a4cbb703d94fe37a0b63818725baf03691d040a0bafa6",
+              "continuation-result.json": "c7b78d08db2d16907777f805ed8a9e93dfa43dc3017ee415e577da4461d82f8a",
+              "sql-pending.log": "280ff1dffcd514bb7da3f8c1fe3a695737228f33303160a5782b81be53c4a406",
+              "sql-settlement.log": "65726b40929c71b128cdab83b1d20f300b3bb2d8c62020ad8770158c4ffbce35",
+              "continuation-issued.json": "f2e485ec5791ee59d146b984fa45b4cf0ae272d4a36f130831f6301e7476b89e",
+              "continuation-capture.json": "b5fe843d258499caf38fbc10eb6aee120608015cf7e634be958a8939e652b7a5",
+              "fixture.json": "205565d318549f49f0eba90b39f9731139edfa532ce265dbf7eeed6daf8841e6",
+              "native-observations.jsonl": "593a90df83a4c3d84ea28b392e554be574ba6dff78a25cd86542273b04cb904f",
+              "sql-final.log": "322b0ce1dccc4a90270a4cbb703d94fe37a0b63818725baf03691d040a0bafa6",
+              "history-ready.json": "d5d7a404ca2e99a1154ae06472ea07ccb3efa482c0f0435f2a16a4e1e6650294",
+              "cert.pem": "b8593f95e8ebad64bde66ea323e0a8896562e4b00a66c675c9494ab97caa8b9f",
+              "history-frozen.json": "66f73a96364a1cfd3293cf27aa6ac467e881a704d4e5eadeac69f05e5af7696d",
+              "mode/spool/b7c7a8fa4cbba54153bdccb356996395765f4e5ea6e8950470100507fa4f7508.usage.json": "6d8dea560b3a3a7ba8bc9a0c3c313ab97dcb28e9cbf5b2e0aa62b092ffd94b10",
+              "mode/spool/.usage-session": "b0e9da92fb363cc64182dc00a53ca51309c5f74a64aca930867adb1af8161600",
+              "mode/spool/.usage.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "mode/spool/595cdc504e6cdf3f54f5c6dbc5d23f6a710afb96f055f87fa37b9f3ef607884d.usage.json": "2d7d0e9dd063b43347e6c72808037a385bb563efab1b952be95fcb6bf5915a12",
+              "mode/journal/95f51ee1122b60e4384a4ee42e599515-00000000000000000001.json": "1ba39d427345bed978d9b212d7229d6c2086c805ffb5a32007a6d3f1a818df5a",
+              "mode/journal/.interval-source": "63af2a91a61b45bf457157576b9bd6872d5f93a19a3bb8ac1714f083bd921a25",
+              "mode/journal/766ceb956e5bf5c363a7d67fb02b9d6b-00000000000000000001.json": "488a3042f776963aa105c36302678d5bbb676d7d9da64b1f8ec0450c9033ae1d"
+            },
+            "production_authorization": false,
+            "private_material_exported": false,
+            "test_exit_code": 0
+          }
+        },
+        "verified_sql_backup": {
+          "database": "txboard_live_revocation_test",
+          "state": "2\t2\t265\t0\t0",
+          "backup": "/opt/txboard-baseline/node-live-revocation-r22/vless-source-continue-evidence/verified-database-before-reset.sql",
+          "mode": "0600",
+          "sha256": "7842f2770e7edc82e67c96a5aa2dfed1898acbbb709ed0986d4896cb0e65f3f9",
+          "result_sha256": "14334755fcaef93f73155cef63ad0a5b13d4f74cc0a14c5fd55995d2ff830881",
+          "purpose": "Preserve verified isolated continuation before independent protocol case"
+        }
+      },
+      "vmess": {
+        "result": {
+          "mode": "vmess",
+          "exit_code": 0,
+          "log_sha256": "ac2f4d2c93a07c3e1be484149f8963c53e123d09c41d1bdbfab4a32eb40927d9",
+          "snapshot": "/opt/txboard-baseline/node-live-revocation-r22",
+          "actual_result": {
+            "status": "verified-isolated-live-boundary",
+            "case": "source-continue",
+            "protocol": "vmess",
+            "actual_service_run": true,
+            "actual_singbox_kernel": true,
+            "native_mutation": null,
+            "historical_persisted_ack_sql": {
+              "persisted_ack_sql_verified": true,
+              "batch_rows": "1",
+              "entry_rows": "0",
+              "receipt_id": "receipt_7f9602c9-aba3-4f98-8c6c-1025c0d9d4f6",
+              "scheduled_heartbeat_ack_verified": true,
+              "legacy_user_u": "0",
+              "legacy_user_d": "0",
+              "legacy_batch_rows": "0"
+            },
+            "historical_settlement": {
+              "status": "settled",
+              "sql_batch_rows": "1",
+              "sql_entry_rows": "1",
+              "raw_up_bytes": "43",
+              "raw_down_bytes": "79",
+              "billed_up_bytes": "64",
+              "billed_down_bytes": "118",
+              "billable_bytes": "182",
+              "receipt_id": "receipt_7f9602c9-aba3-4f98-8c6c-1025c0d9d4f6",
+              "second_scan_empty": true,
+              "legacy_user_u": "0",
+              "legacy_user_d": "0"
+            },
+            "final_sql": {
+              "status": "settled",
+              "batch_rows": "2",
+              "entry_rows": "2",
+              "old_source_epoch": "1",
+              "new_source_epoch": "2",
+              "historical_billable_bytes": "182",
+              "new_billable_bytes": "83",
+              "billable_bytes": "265",
+              "historical_receipt": "receipt_7f9602c9-aba3-4f98-8c6c-1025c0d9d4f6",
+              "new_receipt": "receipt_ef5a4078-cbec-43df-9838-9a311460cba5",
+              "original_sql_history_unchanged": true,
+              "billed_up_bytes": "119",
+              "billed_down_bytes": "146",
+              "legacy_user_u": "0",
+              "legacy_user_d": "0"
+            },
+            "boundary": {
+              "actual_service_run": true,
+              "core_instance_id": "live_revocation_core_fixture_1",
+              "new_batch_id": "832a66765b0cbc4dd7c592b776a2bbbe",
+              "new_download_bytes": "19",
+              "new_receipt_id": "receipt_ef5a4078-cbec-43df-9838-9a311460cba5",
+              "new_source_epoch": "2",
+              "new_upload_bytes": "37",
+              "old_batch_id": "477ddbe11853cb9299806bb037b6062d",
+              "old_history_unchanged": true,
+              "old_receipt_id": "receipt_7f9602c9-aba3-4f98-8c6c-1025c0d9d4f6",
+              "old_source_epoch": "1",
+              "protocol": "vmess",
+              "receipt_generation": "1"
+            },
+            "artifacts_sha256": {
+              "continuation-ready.json": "5f34d209ff147fa174dc10d991e55e82bef07c9cdfaabedc755b4b1ea5811deb",
+              "history-capture.json": "5b407cbea28d0096fc5bf855cb8fdc4630975c734c2918cc482546c6301507ef",
+              "sql-continuation-settlement.log": "e3785d314d4f3430508034d91a2fe7e94a0626b6c9e780059f943fe85106ee39",
+              "continuation-result.json": "3b449a98d620c2698a01d2b9f4667b5987d997f34a15c4fe8a5562d4b5704a89",
+              "sql-pending.log": "93dce9bcae82fece1fb6bdef37d4638884e941ba6f506ea2ec4a5b70ce82f492",
+              "sql-settlement.log": "6e20baf49245cafb3860d8522ccd880c1c110f3a424dcd7f660bf5fe1a310c07",
+              "continuation-issued.json": "ced69d2a043cb9e777c91b7c6a3ca603883a02caa4fde6a6a75ca313e4d600c9",
+              "continuation-capture.json": "b5332d96db51c2b204f0473ed0fbd49356f30eb1c976f544bce55f8ed78b3f1e",
+              "fixture.json": "4f82300a4c57cb09b981dda47e397941f10d4bf1bb587514581768849eb10ebb",
+              "native-observations.jsonl": "60fdd229729afd3654d90b3832e41660e5f4f939591ec84bd988b93ad62b6c34",
+              "sql-final.log": "e3785d314d4f3430508034d91a2fe7e94a0626b6c9e780059f943fe85106ee39",
+              "history-ready.json": "f8b3a08f91d1b7e20da1bf3ff5b0a427377b4324f38aea9bd604c903fde0dec1",
+              "cert.pem": "2358a79ddc65987df37999aac43253c70364d259c87a22004e7205e53f281b29",
+              "history-frozen.json": "35770a8724e4888028d80c2cc21d8401d7769a02cbb6d7fe89d9e8fe3134e24a",
+              "mode/spool/.usage-session": "5faf13529b0980e51e5b71dbe1679437d8f32cc798694fff7b73d33655fd5199",
+              "mode/spool/.usage.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+              "mode/spool/93db81e504aaaf98719985a73668fc0136bd2ecd8a5f45f5f3b548718564649d.usage.json": "fad0fb1486af44d5243975fb13168ed61435dcd95e9c7e54ce0b982b576efb52",
+              "mode/spool/3e1c794bec26fe82f89d1904bdf8f25e67abade554799d9543b4bf10486efa66.usage.json": "1b5850a3b5100e4e60a22f4037b51110ca7cdb83f7ce1becba5f20654f486425",
+              "mode/journal/f847635ac66d308759671d7770fb4c9a-00000000000000000001.json": "53e89c2be3ea25216aba3b6415634bfd3396ac4f229142be049b3e2be6e6b717",
+              "mode/journal/.interval-source": "62506fc6b47b24cd112894b5e7f1696429eee2b84ffe2a3b9bef30580cea644e",
+              "mode/journal/9b2572ff48f8c72b5636ee4351055dc0-00000000000000000001.json": "2b9da5b1e2d455488c6c50d2de9d7bf1284be3acd673937c84bc436c3aeb6052"
+            },
+            "production_authorization": false,
+            "private_material_exported": false,
+            "test_exit_code": 0
+          }
+        },
+        "verified_sql_backup": {
+          "database": "txboard_live_revocation_test",
+          "state": "2\t2\t265\t0\t0",
+          "backup": "/opt/txboard-baseline/node-live-revocation-r22/vmess-source-continue-evidence/verified-database-before-reset.sql",
+          "mode": "0600",
+          "sha256": "ea6f1635eb5475d963cc3189dcfb25c237002f00bf772e8157268b4bed6a7a0b",
+          "result_sha256": "e31c7420c478cb07dd6856ceb8f232e17927adb8ec7f948918e6d951603d1ff8",
+          "purpose": "Preserve verified isolated continuation before independent protocol case"
+        }
+      }
+    }
+  },
+  "workflow": {
+    "path": ".github/workflows/ci-node-live-recovery.yml",
+    "sha256": "b58433fde5044e14ee7efe2094121a018028bbb26b63bc40c9cefeea105ecbed",
+    "actionlint": "passed",
+    "remote_status": "pending push and separate Oracle MySQL8.4 matrix"
+  },
+  "invariants": {
+    "prior_local_json_identical": true,
+    "prior_sql_batch_and_entry_identical": true,
+    "old_receipt_queried_by_new_process": true,
+    "implicit_old_batch_submit": false,
+    "old_billable_bytes": "182",
+    "new_billable_bytes": "83",
+    "total_billable_bytes": "265",
+    "upload_billable_bytes": "119",
+    "download_billable_bytes": "146",
+    "batch_rows": "2",
+    "entry_rows": "2",
+    "legacy_user_u": "0",
+    "legacy_user_d": "0"
+  },
+  "remaining_gates": [
+    "actual Core instance/receipt-generation drift",
+    "real SQL restore with missing confirmed receipt and zero implicit submit",
+    "trusted time and production provider delivery/revocation",
+    "global writer coverage/drain and authority switch"
+  ],
+  "scope": "Test/fixture/contract/CI additions only; no production v2 opening or Core authority changes"
+}

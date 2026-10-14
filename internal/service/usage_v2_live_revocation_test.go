@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"sync/atomic"
 	"testing"
@@ -123,13 +124,78 @@ func TestServiceUsageV2LiveRevocation(t *testing.T) {
 		liveProtocolWait(t, done, 12*time.Second, func() bool {
 			return revocationRecord(cfg.UsageV2.Directory, &record) && record.Receipt != nil && record.Receipt.SettlementStatus == "settled"
 		})
-		if caseName == "history" || caseName == "expiry" {
+		if caseName == "history" || caseName == "expiry" || caseName == "source-continue" {
 			cancel()
 			revocationStopped(t, done, false)
 			return
 		}
-	} else if phase != "tail" && phase != "expiry" {
+	} else if phase != "tail" && phase != "expiry" && phase != "continuation" {
 		t.Fatal("invalid live revocation phase")
+	}
+	if caseName == "source-continue" {
+		if phase != "continuation" {
+			t.Fatal("source continuation requires the second Core-issued epoch")
+		}
+		old, err := revocationRecords(cfg.UsageV2.Directory)
+		if err != nil || len(old) != 1 || old[0].Session.SourceEpoch != "1" || old[0].Receipt == nil || old[0].Receipt.SettlementStatus != "settled" {
+			t.Fatal("original settled source-epoch record missing", err)
+		}
+		nodeAddr := net.JoinHostPort("127.0.0.1", strconv.Itoa(fixture.NodePort))
+		dest := M.ParseSocksaddr(net.JoinHostPort("127.0.0.1", strconv.Itoa(fixture.OriginPort)))
+		flow := revocationExchange(t, origin, fixture.Protocol, nodeAddr, dest, 37, 19)
+		if err := flow.raw.CloseWrite(); err != nil {
+			t.Fatal(err)
+		}
+		var eof [1]byte
+		if n, e := flow.client.Read(eof[:]); n != 0 || e != io.EOF {
+			t.Fatal("continued source flow EOF", n, e)
+		}
+		if err := <-flow.originDone; err != nil {
+			t.Fatal("continued source origin completion", err)
+		}
+		flow.client.Close()
+		flow.raw.Close()
+		var records []usagev2.Record
+		liveProtocolWait(t, done, 12*time.Second, func() bool {
+			records, err = revocationRecords(cfg.UsageV2.Directory)
+			return err == nil && len(records) == 2 && records[1].Session.SourceEpoch == "2" && records[1].Receipt != nil
+		})
+		if records[0].Submission.PayloadDigest != old[0].Submission.PayloadDigest || records[0].Receipt == nil || records[0].Receipt.ReceiptID != old[0].Receipt.ReceiptID || records[0].Session.SourceEpoch != "1" {
+			t.Fatal("old source record changed while continuing")
+		}
+		liveProtocolWrite(t, filepath.Join(dir, "continuation-capture.json"), map[string]any{
+			"old_batch_id": old[0].Submission.Payload.BatchID, "old_digest": old[0].Submission.PayloadDigest,
+			"old_receipt_id": old[0].Receipt.ReceiptID, "old_source_epoch": old[0].Session.SourceEpoch,
+			"new_batch_id": records[1].Submission.Payload.BatchID, "new_digest": records[1].Submission.PayloadDigest,
+			"new_receipt_id": records[1].Receipt.ReceiptID, "new_source_epoch": records[1].Session.SourceEpoch,
+			"new_raw_up_bytes":     records[1].Submission.Payload.Entries[0].RawUpBytes,
+			"new_raw_down_bytes":   records[1].Submission.Payload.Entries[0].RawDownBytes,
+			"old_receipt_replayed": liveProtocolObservedOldReceipt(dir, old[0], started),
+		})
+		if !liveProtocolObservedOldReceipt(dir, old[0], started) {
+			t.Fatal("new Service did not query the immutable old receipt")
+		}
+		liveProtocolWrite(t, filepath.Join(dir, "continuation-ready.json"), map[string]any{"new_batch_id": records[1].Submission.Payload.BatchID, "source_epoch": "2"})
+		revocationWaitFile(t, done, dir, "continuation-settled.json", 12*time.Second)
+		liveProtocolWait(t, done, 12*time.Second, func() bool {
+			records, err = revocationRecords(cfg.UsageV2.Directory)
+			return err == nil && len(records) == 2 && records[1].Receipt != nil && records[1].Receipt.SettlementStatus == "settled"
+		})
+		if err != nil || len(records) != 2 || records[1].Receipt == nil || records[1].Receipt.SettlementStatus != "settled" || records[0].Receipt.ReceiptID != old[0].Receipt.ReceiptID || records[0].Submission.PayloadDigest != old[0].Submission.PayloadDigest {
+			t.Fatal("source epoch continuation mutated prior history or failed to settle", err)
+		}
+		cancel()
+		revocationStopped(t, done, false)
+		liveProtocolWrite(t, filepath.Join(dir, "continuation-result.json"), map[string]any{
+			"actual_service_run": true, "protocol": fixture.Protocol, "core_instance_id": records[1].Session.CoreInstanceID,
+			"receipt_generation": records[1].Session.ReceiptGeneration, "old_source_epoch": records[0].Session.SourceEpoch,
+			"new_source_epoch": records[1].Session.SourceEpoch, "old_batch_id": records[0].Submission.Payload.BatchID,
+			"new_batch_id": records[1].Submission.Payload.BatchID, "old_receipt_id": records[0].Receipt.ReceiptID,
+			"new_receipt_id": records[1].Receipt.ReceiptID, "old_history_unchanged": true,
+			"new_upload_bytes":   records[1].Submission.Payload.Entries[0].RawUpBytes,
+			"new_download_bytes": records[1].Submission.Payload.Entries[0].RawDownBytes,
+		})
+		return
 	}
 	if caseName == "udp" || caseName == "xudp" {
 		if phase != "history" || udpOrigin == nil {
@@ -494,12 +560,67 @@ func revocationTCPMuxDial(t *testing.T, protocol, address string, dest M.Socksad
 }
 
 func revocationRecord(modeDir string, record *usagev2.Record) bool {
-	files, _ := filepath.Glob(filepath.Join(modeDir, "spool", "*.json"))
-	if len(files) != 1 {
+	records, err := revocationRecords(modeDir)
+	if err != nil || len(records) != 1 {
 		return false
 	}
-	body, e := os.ReadFile(files[0])
-	return e == nil && usagev2.StrictDecode(body, record, usagev2.MaxPayloadBytes) == nil && record.Validate() == nil
+	*record = records[0]
+	return true
+}
+
+func revocationRecords(modeDir string) ([]usagev2.Record, error) {
+	files, err := filepath.Glob(filepath.Join(modeDir, "spool", "*.usage.json"))
+	if err != nil {
+		return nil, err
+	}
+	records := make([]usagev2.Record, 0, len(files))
+	for _, file := range files {
+		body, err := os.ReadFile(file)
+		if err != nil {
+			return nil, err
+		}
+		var record usagev2.Record
+		if err := usagev2.StrictDecode(body, &record, usagev2.MaxPayloadBytes); err != nil {
+			return nil, err
+		}
+		if err := record.Validate(); err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	sort.Slice(records, func(i, j int) bool {
+		a, b := records[i].Session.SourceEpoch, records[j].Session.SourceEpoch
+		if len(a) != len(b) {
+			return len(a) < len(b)
+		}
+		return a < b
+	})
+	return records, nil
+}
+
+func liveProtocolObservedOldReceipt(dir string, record usagev2.Record, started time.Time) bool {
+	body, err := os.ReadFile(filepath.Join(dir, "native-observations.jsonl"))
+	if err != nil {
+		return false
+	}
+	for _, line := range bytes.Split(body, []byte{'\n'}) {
+		var observation struct {
+			Path          string  `json:"path"`
+			Status        int     `json:"status"`
+			StartedAt     float64 `json:"started_at"`
+			SourceEpoch   string  `json:"source_epoch"`
+			ReceiptID     string  `json:"receipt_id"`
+			BatchID       string  `json:"batch_id"`
+			PayloadDigest string  `json:"payload_digest"`
+		}
+		if json.Unmarshal(line, &observation) == nil && observation.Path == "/txapi/node/v2/usage/batch/get" && observation.Status == 200 &&
+			observation.StartedAt >= float64(started.UnixNano())/1e9 && observation.SourceEpoch == record.Session.SourceEpoch &&
+			observation.BatchID == record.Submission.Payload.BatchID && observation.PayloadDigest == record.Submission.PayloadDigest &&
+			record.Receipt != nil && observation.ReceiptID == record.Receipt.ReceiptID {
+			return true
+		}
+	}
+	return false
 }
 func revocationStopped(t *testing.T, done <-chan error, wantFailure bool) {
 	t.Helper()
