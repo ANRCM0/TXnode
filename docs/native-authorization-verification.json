@@ -1,5 +1,5 @@
 {
-    "status":  "local-real-accepted-precise-commit-ci-pending",
+    "status":  "exact-review-branch-ci-passed-unmerged",
     "phase":  "P0-native-finite-signed-authorization",
     "recorded_local_date":  "2026-10-15",
     "contract":  "contracts/node-protocol/native-authorization-lease-v1.md",
@@ -330,44 +330,47 @@
                                }
                            ],
     "precise_commit_ci":  {
-                              "commit":  "b480f9f560b605da8e25ef6f20bf660a18d8d22f",
-                              "branch":  "feat/installer-node-authorization-preflight",
-                              "status":  "success",
-                              "workflows":  [
-                                                {
-                                                    "name":  "API regression",
-                                                    "run_id":  38629196566,
-                                                    "conclusion":  "success"
-                                                },
-                                                {
-                                                    "name":  "Node full tests, vet, stability and built-image capability smoke",
-                                                    "run_id":  38629196434,
-                                                    "conclusion":  "success",
-                                                    "image_publish":  "skipped for review branch"
-                                                },
-                                                {
-                                                    "name":  "finite authorization Core/Machine live runner",
-                                                    "run_id":  38629196396,
-                                                    "conclusion":  "success"
-                                                },
-                                                {
-                                                    "name":  "native Machine control live runner",
-                                                    "run_id":  38629196369,
-                                                    "conclusion":  "success"
-                                                },
-                                                {
-                                                    "name":  "native traffic VLESS/VMess",
-                                                    "run_id":  38629196455,
-                                                    "conclusion":  "success"
-                                                },
-                                                {
-                                                    "name":  "Core image build, Sodium roundtrip, Octane smoke, recovery",
-                                                    "run_id":  38629196471,
-                                                    "conclusion":  "success",
-                                                    "image_publish":  "skipped for review branch"
-                                                }
-                                            ],
-                              "default_branch_merge":  "not performed; review branch only"
+                              "runtime_commit":  "b480f9f560b605da8e25ef6f20bf660a18d8d22f",
+                              "runtime_workflows":  [
+                                                        {
+                                                            "name":  "api-ci",
+                                                            "run_id":  38629196566,
+                                                            "result":  "success"
+                                                        },
+                                                        {
+                                                            "name":  "Node CI and images",
+                                                            "run_id":  38629196434,
+                                                            "result":  "success",
+                                                            "image_publish":  "skipped for review branch"
+                                                        },
+                                                        {
+                                                            "name":  "txboard-core-image",
+                                                            "run_id":  38629196471,
+                                                            "result":  "success",
+                                                            "publish":  "skipped for review branch"
+                                                        },
+                                                        {
+                                                            "name":  "node-native-authorization-control",
+                                                            "run_id":  38629196396,
+                                                            "result":  "success"
+                                                        },
+                                                        {
+                                                            "name":  "node-native-machine-control",
+                                                            "run_id":  38629196369,
+                                                            "result":  "success"
+                                                        },
+                                                        {
+                                                            "name":  "node-native-traffic-control",
+                                                            "run_id":  38629196455,
+                                                            "result":  "success"
+                                                        }
+                                                    ],
+                              "final_node_documentation_commit":  "ab0760d6b4c88403d9b694ba2a195332d1b91666",
+                              "final_node_ci_run":  38632434862,
+                              "final_node_ci_result":  "success",
+                              "review_branch":  "feat/installer-node-authorization-preflight",
+                              "pull_request":  "not created: GitHub API returned must be a collaborator",
+                              "merged_to_default_branch":  false
                           },
     "excluded_release_gates":  [
                                    "production-provider-secret-delivery",
