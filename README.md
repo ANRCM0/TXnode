@@ -6,15 +6,32 @@ TX-Node 支持 `sing-box` / `xray-core` 双内核。安装、升级、回滚与�
 
 运行时职责收口规则见 [`docs/runtime-boundary.md`](docs/runtime-boundary.md)。
 
-下一轮 Core First 演进参考 [主仓 B0 基线](../docs/architecture/v2/README.md)、[Node Usage v2](../contracts/v2/node-usage/README.md) 与 [Credential Provider v1](../contracts/v2/credential-provider/README.md)（Target/Draft）。订阅计费身份、持久接收 ACK、授权租约与撤销版本尚未替代现行 v1；当前 202/queued 仅代表入队。
+下一轮 Core First 演进参考 [主仓 B0 基线](../docs/architecture/v2/README.md)、[Node Usage v2](../contracts/v2/node-usage/README.md) 与 [Credential Provider v1](../contracts/v2/credential-provider/README.md)（Target/Draft）。隔离Usage v2的订阅权威、有限授权租约与撤销版本仍未接管默认业务。当前原生v1默认先持久提交SQL receipt再返回202，`receipt_status=persisted`证明接收记录已保存，`settlement=queued`仍不证明账本结算。
 
 项目起源于 [cedar2025/Xboard-Node](https://github.com/cedar2025/Xboard-Node)。TX-Node 保留 Xboard 面板 API、认证字段和现有节点配置的协议兼容，但不再以周期性同步上游作为开发模式；上游后续修复会按需审查并选择性移植。独立维护策略见 [`docs/standalone.md`](docs/standalone.md)。
 
 ## Control Plane Provider 支持状态
 
-普通节点与 Machine Mode 均通过 `panel.provider` 选择远程控制平面；省略该字段或设置为 `xboard` 时使用现有 Xboard 兼容协议。`txboard` 启用 TXBoard 原生 `/txapi/node/v1` HTTP/WSS 协议（Node 与 Machine Mode）；原生 WebSocket 默认由 TXBoard 服务端关闭，不影响 HTTP 轮询。上线前仍需跨仓库真实环境联调。Standalone 模式使用本地控制平面。
+普通节点与 Machine Mode 均通过 `panel.provider` 选择远程控制平面；省略该字段或设置为 `xboard` 时使用现有 Xboard 兼容协议。`txboard` 启用 TXBoard 原生 `/txapi/node/v1` HTTP/WSS 协议（Node 与 Machine Mode）；原生 WebSocket 默认由 TXBoard 服务端关闭，不影响 HTTP 轮询。P0.5已完成隔离真实Core/Workerman双节点联调；部署到生产仍须对应环境验收。Standalone模式使用本地控制平面。
 
 Provider 的构造错误处理、配置继承及原生协议验收边界见 [`docs/control-plane-providers.md`](docs/control-plane-providers.md)。
+
+## 协议接入与验收范围
+
+| 协议 | sing-box适配 | Xray适配 |
+| --- | --- | --- |
+| Shadowsocks（含SS2022） | 已接入 | 已接入；部分加密方式有多用户限制 |
+| VMess、VLESS、Trojan | 已接入 | 已接入 |
+| Hysteria 1 | 已接入 | 未开放 |
+| Hysteria 2 | 已接入 | 已接入，仅v2 |
+| TUIC v5、AnyTLS、NaiveProxy、Mieru | 已接入 | 未开放 |
+| SOCKS5、HTTP/HTTPS代理 | 已接入 | Node运行时未开放 |
+
+表格依据两内核的[sing-box协议列表](internal/kernel/singbox/singbox.go)和[Xray协议列表](internal/kernel/xray/xray.go)。Xray有SOCKS/HTTP配置生成代码，但当前Node运行时校验未开放。XHTTP/SplitHTTP使用Xray；Machine模式已有按传输选择内核的逻辑。VLESS Encryption适配需要Xray。
+
+P0.5/P0.6已经完成真实Machine控制、持久流量接收、去重扣量、超额撤销、reset观察周期与崩溃恢复。两内核×VLESS/VMess TCP有真实计量/撤销证据，完整Core/Redis worker链覆盖sing-box VLESS/VMess；通用UDP packet计量测试不能代表全部协议认证链。详细见[Machine验收](docs/native-machine-control-verification.json)、[流量验收](docs/native-traffic-quota-verification.json)与[当前开发进度](../docs/architecture/v2/current-progress.md)。
+
+有限离线授权、生产凭据交付/密钥恢复、其余协议完整验收和HA仍在后续路线中。
 
 ## 安装与部署
 

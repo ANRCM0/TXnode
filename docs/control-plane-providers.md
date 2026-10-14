@@ -45,10 +45,15 @@ For Xboard, change `provider` to `xboard` and provide the compatible panel token
 
 - **TXBoard HTTP:** `/txapi/node/v1` with `Authorization: Bearer`, `X-TX-Node-ID` and/or `X-TX-Machine-ID`. No credentials in query parameters. Versioned `data` response envelope; config and user snapshots can return HTTP 304 based on separate ETags.
 - **TXBoard WebSocket:** versioned event frames and machine-scoped multiplexing; availability depends on the panel-side Workerman/native-WS configuration. HTTP polling operates without native WS.
-- **Traffic:** `202 queued` means the batch was accepted into the panel's asynchronous queue, **not** committed to its billing ledger. TX-Node's persistent pending-batch spool and TXBoard's idempotent batch settlement require end-to-end verification.
+- **Traffic:** Native Core defaults to SQL reception before nonempty HTTP202. `receipt_status=persisted` attests that durable acceptance; `settlement=queued` does not attest billing. Exact replay freezes the original rate/day and post-hook input. Explicit legacy mode reports `queued_only`; period-aware reports require durable mode. Native Node persists the original ID/body and drains pending/terminal records before restart admission.
+- **Observed periods:** Core supplies signed `traffic_period` values in native user snapshots. Node reports canonical `traffic_segments`; current epochs consume current quota, while older observed epochs retain historical accounting. This is not a finite offline authorization lease. See the [traffic boundary](../../contracts/node-protocol/native-traffic-quota-v1.md) and [period boundary](../../contracts/node-protocol/native-traffic-period-v1.md).
 - **AccessAudit:** An optional shared sing-box collector uses provider-specific transports. Xboard preserves the legacy `/api/v1/plugin/access-audit/*` plugin API. TXBoard uses native `/txapi/node/v1/audit/*` bearer Node/Machine identity with stable per-event dedup IDs, and the TXBoard admin manages rules/logs. Audit defaults off; enable only once the corresponding panel endpoints are deployed. Xray has no equivalent embedded collector.
 - **Compatibility:** Preserve the Xboard adapter and the Installer migration boundaries. Deprecated executable names and legacy configuration paths are *migration inputs*, not active release targets.
 - **Factories:** `controlplane.NewForConfigChecked`, `service.NewChecked`, and `machine.NewChecked` report unsupported provider errors. Multi-instance settings inherit `panel.provider` when omitted.
+
+## Completed isolated acceptance
+
+P0.5 proves actual Core/Workerman shared Machine scope and credential rotation; P0.6 proves actual VLESS/VMess bytes, durable acceptance, Redis worker settlement, lost ACK/queue recovery, actual process restart and observed reset epochs. Reports: [Machine](native-machine-control-verification.json), [traffic/quota](native-traffic-quota-verification.json). These do not activate isolated Usage v2 or global migration authority.
 
 ## Production acceptance
 
