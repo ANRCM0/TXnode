@@ -883,7 +883,7 @@
     "sha256": "a2a410bb18d67fea88306b6b33a82861b61fcb4f675cfed78b75548c86a74b28",
     "actionlint": "passed",
     "matrix": "vless/vmess x source-continue/generation-drift/instance-drift/receipt-missing, exclusive Oracle MySQL8.4 databases",
-    "remote_status": "pending push"
+    "remote_status": "all six triggered workflows succeeded at b1d172e, including eight independent Oracle MySQL8.4 cases"
   },
   "source_continuation_remote_ci": [
     {
@@ -941,5 +941,49 @@
     "trusted time / full recovery coordination",
     "production provider delivery and revocation",
     "global writer coverage/drain and authority switch"
+  ],
+  "recovery_boundaries_remote_ci": [
+    {
+      "conclusion": "success",
+      "databaseId": 38499178691,
+      "headSha": "b1d172e0fa1dc47b7647797ca346fa0166058dd0",
+      "status": "completed",
+      "workflowName": "Documentation"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 38499178719,
+      "headSha": "b1d172e0fa1dc47b7647797ca346fa0166058dd0",
+      "status": "completed",
+      "workflowName": "bounded-node-core-usage"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 38499178707,
+      "headSha": "b1d172e0fa1dc47b7647797ca346fa0166058dd0",
+      "status": "completed",
+      "workflowName": "node-live-recovery-core-usage"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 38499178682,
+      "headSha": "b1d172e0fa1dc47b7647797ca346fa0166058dd0",
+      "status": "completed",
+      "workflowName": "node-live-protocol-core-usage"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 38499178625,
+      "headSha": "b1d172e0fa1dc47b7647797ca346fa0166058dd0",
+      "status": "completed",
+      "workflowName": "node-service-core-usage"
+    },
+    {
+      "conclusion": "success",
+      "databaseId": 38499178782,
+      "headSha": "b1d172e0fa1dc47b7647797ca346fa0166058dd0",
+      "status": "completed",
+      "workflowName": "Node CI and images"
+    }
   ]
 }

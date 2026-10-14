@@ -35,7 +35,8 @@ outbox、方向计费和总账全部归零。随后由 Core 正常发放 source 
 5项环境门控跳过、0失败；恢复条件测试另行实际运行。受影响包 vet、PHP语法、
 Python编译、actionlint及文档链接检查通过。source 延续也在 r24 使用同一新夹具
 复验两协议；此前 `64309e8` 六个远端 workflow 已全部通过，包括独立 Oracle
-MySQL8.4 source 延续及 Node 镜像兼容构建。扩展八案例 CI 在本批推送后核对。
+MySQL8.4 source 延续及 Node 镜像兼容构建。`b1d172e` 的六个 workflow 已全部成功，
+包括扩展八案例 Oracle MySQL8.4 恢复 matrix。
 
 本批完成这些隔离恢复案例，未开启生产 v2。生产 Provider、可信时间、完整恢复
 协调、全局 writer coverage/drain 与权威切换仍按各自阶段门禁推进。
