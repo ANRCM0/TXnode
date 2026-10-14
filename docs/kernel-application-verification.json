@@ -1,0 +1,226 @@
+{
+  "phase": "P0.4",
+  "status": "isolated-both-kernel-configuration-and-revocation-verified",
+  "base_commit": "34dbf10150206e39bc6dd9e8ba3e818184dd0f2a",
+  "snapshot": "/opt/txboard-baseline/kernel-application-integrated-r2",
+  "source_sha256": {
+    "contracts/node-protocol/kernel-application-boundary-v1.md": "6608f7ddca062bae1f664140f356b0b8fedfd5627ba2a76a8b46d21a939ae5c5",
+    "node/internal/kernel/singbox/reload_application_test.go": "aecf4a95816331d0e8962d907f7cec817f92c8934e6e037c41b0ccb304fc75d9",
+    "node/internal/kernel/singbox/reload_policy.go": "28d9ac3d702c710f9cbe971b5f1edb1bc830c7e79731ce5e1664b4e22cc5acba",
+    "node/internal/kernel/singbox/singbox.go": "17dbb565a6e8c10a5fb284d2d58203d1633cc15b26487880d5ae3adb331242b7",
+    "node/internal/kernel/xray/user_application_test.go": "55e2fec455604c744ecf37acddb9a7c299cc98d61ac6f966b696e30d27db1996",
+    "node/internal/kernel/xray/xray.go": "62d491669a05757f2014a5ba753fc549f94b69d7ac1f612f42d53af82e595c3e",
+    "node/internal/kernel/xray/xray_test.go": "fa25d63eaf62f7f23797f129a97d29a70b5d9d2662aafba5591451c3bf7b33dc",
+    "node/internal/service/native_kernel_apply_live_test.go": "2b9c0f40c667e8009999b377192e647cef111d158a266c0f7a6bfea395c15e0c",
+    "node/internal/service/native_snapshot_application_test.go": "ec5f4866038d44298ddd6128f4377f85221670cbc2726855e05a303d133103c1",
+    "node/internal/service/sync_adapter.go": "fac7f58a2c777dc24b89e6f5c25212d15acda1d47ba38e479d5e09996ee9334e"
+  },
+  "dependencies": {
+    "go_mod_sha256": "d3182ea1ce51ffac95c6b48432b77e8b9e05a31cc88666751c23e7c18d8018b0",
+    "go_sum_sha256": "284fae554b201c0972272c2f19d08def1fe2748b98384b81cddbd05df48ee55e"
+  },
+  "acceptance": {
+    "race": {
+      "mode": "race",
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "-count=1",
+        "-json",
+        "./..."
+      ],
+      "exit_code": 0,
+      "snapshot": "/opt/txboard-baseline/kernel-application-integrated-r2",
+      "log_sha256": "33616abfc4ea2533c6944e0bb19c04335cb78d8eda60fa5b93158876d9a63830",
+      "main_passed": 554,
+      "subtests_passed": 465,
+      "skipped": 6,
+      "failures": []
+    },
+    "live": {
+      "mode": "live",
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "-count=1",
+        "-json",
+        "-run",
+        "^TestNativeKernelApplyLive",
+        "./internal/service"
+      ],
+      "exit_code": 0,
+      "snapshot": "/opt/txboard-baseline/kernel-application-integrated-r2",
+      "log_sha256": "a790715e07245e694b81d773f3bf9d21e73cbc7e6a208d30930e98ac529c506f",
+      "main_passed": 3,
+      "subtests_passed": 8,
+      "skipped": 0,
+      "failures": []
+    },
+    "vet": {
+      "mode": "vet",
+      "command": [
+        "go",
+        "vet",
+        "./..."
+      ],
+      "exit_code": 0,
+      "snapshot": "/opt/txboard-baseline/kernel-application-integrated-r2",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "build": {
+      "mode": "build",
+      "command": [
+        "go",
+        "build",
+        "-trimpath",
+        "-tags",
+        "with_quic with_utls with_wireguard with_clash_api",
+        "-o",
+        "/opt/txboard-baseline/kernel-application-integrated-r2/tx-node-release",
+        "./cmd/tx-node"
+      ],
+      "exit_code": 0,
+      "snapshot": "/opt/txboard-baseline/kernel-application-integrated-r2",
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "behavior": {
+    "singbox_full_generated_construction_changes_require_stop_and_rebuild": true,
+    "unknown_outbound_references_rejected_before_modification": true,
+    "user_only_hot_updates_preserve_runtime_and_meters": true,
+    "actual_SOCKS_outbound_A_to_B_verified": true,
+    "invalid_construction_never_marked_applied": true,
+    "recovering_prior_applied_config_not_deduplicated_when_stopped_or_dirty": true,
+    "old_protocol_listener_removed": true,
+    "xray_prepares_full_user_set_before_mutation": true,
+    "xray_partial_add_errors_do_not_advance_bookkeeping": true,
+    "xray_subset_removal_and_UUID_rebinding_require_verified_reconstruction": true,
+    "xray_established_streams_close_and_current_users_recover": true,
+    "xray_final_meter_survives_stop_and_rebuild": true,
+    "xray_per_user_force_close_capability_claimed": false
+  },
+  "failure_reproductions": {
+    "invalid_outbound_and_recovery": {
+      "mode": "live",
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "-count=1",
+        "-json",
+        "-run",
+        "^TestNativeKernelApplyLive",
+        "./internal/service"
+      ],
+      "exit_code": 1,
+      "snapshot": "/opt/txboard-baseline/kernel-application-integrated-r1",
+      "log_sha256": "476a4f9d09031a9f3db9e2c133dac0f1a35ca6078085e9255f2363f81fddf249",
+      "main_passed": 2,
+      "subtests_passed": 6,
+      "skipped": 0,
+      "failures": [
+        {
+          "Package": "github.com/ANRCM0/TX-Node/internal/service",
+          "Test": "TestNativeKernelApplyLiveSingBoxCustomOutboundReconstruction/vless"
+        },
+        {
+          "Package": "github.com/ANRCM0/TX-Node/internal/service",
+          "Test": "TestNativeKernelApplyLiveSingBoxCustomOutboundReconstruction/vmess"
+        },
+        {
+          "Package": "github.com/ANRCM0/TX-Node/internal/service",
+          "Test": "TestNativeKernelApplyLiveSingBoxCustomOutboundReconstruction"
+        },
+        {
+          "Package": "github.com/ANRCM0/TX-Node/internal/service"
+        }
+      ]
+    },
+    "original_native_Service_live": {
+      "paths": [
+        "node/internal/kernel/singbox/reload_application_test.go",
+        "node/internal/kernel/singbox/reload_policy.go",
+        "node/internal/kernel/singbox/singbox.go",
+        "node/internal/kernel/xray/user_application_test.go",
+        "node/internal/kernel/xray/xray.go",
+        "node/internal/service/native_kernel_apply_live_test.go"
+      ],
+      "source_sha256": {
+        "node/internal/kernel/xray/xray.go": "a8f8ac667689f41168f1272fa1fc5685ccde4cad022fe0df1b3f0c6e84e81a28",
+        "node/internal/kernel/singbox/singbox.go": "542dbc6d8eddbba11fcdf500dcdf9245123681e6433e25adddae4e3a72dc2929",
+        "node/internal/service/native_kernel_apply_live_test.go": "2b9c0f40c667e8009999b377192e647cef111d158a266c0f7a6bfea395c15e0c",
+        "node/internal/kernel/singbox/reload_application_test.go": "e35f711ffca476cc267b4a13afbae6b5aaff5d98fb91ab59a0366aff690bfdb0",
+        "node/internal/kernel/singbox/reload_policy.go": "e7584fdbf83b2a1b43888f3be9ddfa4df3abc5e952ad3ed2d8c2b818b5777051",
+        "node/internal/kernel/xray/user_application_test.go": "bbc6b3a012db49a8162d091eb1217f3a84a6b4789fefc2ddca65d064309fe38f"
+      },
+      "archive": "kernel-apply-live-base-r4.tar",
+      "base": "0b86c795ca66875157b7796e4a43be93743c5840",
+      "snapshot": "/opt/txboard-baseline/kernel-apply-live-r4",
+      "go_sum_sha256": "284fae554b201c0972272c2f19d08def1fe2748b98384b81cddbd05df48ee55e",
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "-json",
+        "-count=1",
+        "-timeout=150s",
+        "./internal/service",
+        "-run",
+        "^TestNativeKernelApplyLive"
+      ],
+      "exit_code": 1,
+      "log": "/opt/txboard-baseline/kernel-apply-live-r4/race.log",
+      "log_sha256": "89058127d4015100e970296212631b958cfa1d4d6231a0e9a4fd8dc51ab1121f",
+      "passed": 8,
+      "failed": 3
+    }
+  },
+  "specialists": {
+    "singbox": {
+      "source_sha256": {
+        "node/internal/kernel/singbox/singbox.go": "17dbb565a6e8c10a5fb284d2d58203d1633cc15b26487880d5ae3adb331242b7",
+        "node/internal/kernel/singbox/reload_policy.go": "28d9ac3d702c710f9cbe971b5f1edb1bc830c7e79731ce5e1664b4e22cc5acba",
+        "node/internal/kernel/singbox/reload_application_test.go": "aecf4a95816331d0e8962d907f7cec817f92c8934e6e037c41b0ccb304fc75d9"
+      },
+      "targeted": {
+        "exit_code": 0,
+        "main_passed": 9,
+        "subtests_passed": 29,
+        "failed": []
+      },
+      "kernel_regression": {
+        "exit_code": 0,
+        "main_passed": 101,
+        "subtests_passed": 73,
+        "failed": []
+      },
+      "vet_exit_code": 0,
+      "working_source_matches": true
+    },
+    "xray": {
+      "exit_code": 0,
+      "snapshot": "/opt/txboard-baseline/xray-user-boundary-r7",
+      "command": [
+        "go",
+        "test",
+        "-race",
+        "./internal/kernel/xray"
+      ],
+      "sha256": {
+        "internal/kernel/xray/xray.go": "62d491669a05757f2014a5ba753fc549f94b69d7ac1f612f42d53af82e595c3e",
+        "internal/kernel/xray/user_application_test.go": "55e2fec455604c744ecf37acddb9a7c299cc98d61ac6f966b696e30d27db1996"
+      },
+      "log_sha256": "4862586b9bc8bb44a39a831dd9a537f77e6a801db66803d80530094ff0b9a4ae"
+    }
+  },
+  "limitations": [
+    "Actual protocol tests use native HTTP fixtures and the Service main queue; they do not prove true Core Workerman Machine integration.",
+    "Xray strong user revocation reconstructs the instance and can disrupt unaffected streams; only current users recover under that declared policy.",
+    "Finite offline authorization, persisted Core application revision, all-protocol/Cluster/HA and global migration/drain remain incomplete."
+  ],
+  "remote_CI": {
+    "status": "pending-push"
+  }
+}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -14,9 +15,9 @@ import (
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/uuid"
 	xrayCore "github.com/xtls/xray-core/core"
+	featurebandwidth "github.com/xtls/xray-core/features/bandwidth"
 	"github.com/xtls/xray-core/features/inbound"
 	"github.com/xtls/xray-core/features/stats"
-	featurebandwidth "github.com/xtls/xray-core/features/bandwidth"
 	"github.com/xtls/xray-core/infra/conf/serial"
 	xrayProxy "github.com/xtls/xray-core/proxy"
 	"github.com/xtls/xray-core/proxy/shadowsocks"
@@ -31,8 +32,8 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/config"
 	"github.com/ANRCM0/TX-Node/internal/geoassets"
 	"github.com/ANRCM0/TX-Node/internal/kernel"
-	"github.com/ANRCM0/TX-Node/internal/nlog"
 	"github.com/ANRCM0/TX-Node/internal/model"
+	"github.com/ANRCM0/TX-Node/internal/nlog"
 )
 
 const (
@@ -48,7 +49,8 @@ const (
 // Lifecycle:  Start  →  running  →  Stop / Reload
 //
 // Lock discipline:
-//   - mu is held only for brief field swaps (microseconds).
+//   - operationMu serializes lifecycle and user applications.
+//   - mu protects field swaps and statistics; it is never held for Start/Close.
 //   - instance.Start() and instance.Close() run OUTSIDE the lock.
 //   - running (atomic) gates fast-path checks in IsRunning / GetConnections.
 type Xray struct {
@@ -57,17 +59,20 @@ type Xray struct {
 
 	// mu protects instance, limitDispatcher, users, protocol, inboundTag,
 	// lastKernelHash, and cumTraffic. Never held during slow I/O.
-	mu              sync.Mutex
-	instance        *xrayCore.Instance
-	limitDispatcher *LimitDispatcher
-	users           []model.UserSpec
-	nodeConfig      *model.NodeSpec
-	tls             kernel.TLSCert
-	protocol        string
-	inboundTag      string
-	lastKernelHash  string
-	cumTraffic      map[int][2]int64
-	speedLimitFunc  func(string) *rate.Limiter
+	operationMu         sync.Mutex // serializes lifecycle and user transactions
+	instanceCancel      context.CancelFunc
+	userManagerOverride func() (xrayProxy.UserManager, error) // same-package controlled fault seam
+	mu                  sync.Mutex
+	instance            *xrayCore.Instance
+	limitDispatcher     *LimitDispatcher
+	users               []model.UserSpec
+	nodeConfig          *model.NodeSpec
+	tls                 kernel.TLSCert
+	protocol            string
+	inboundTag          string
+	lastKernelHash      string
+	cumTraffic          map[int][2]int64
+	speedLimitFunc      func(string) *rate.Limiter
 
 	// running is set after a successful Start and cleared before shutdown.
 	// Atomic so IsRunning / GetConnections never block.
@@ -104,64 +109,72 @@ func (x *Xray) Protocols() []string {
 
 // ─── Lifecycle ──────────────────────────────────────────────────────────────
 
-// Start builds a new xray-core instance and atomically replaces the old
-// one. The method is organised in five non-overlapping phases so that the
-// kernel mutex is never held during slow operations (Start / Close).
-// Crucially, the old instance stays alive until the new one is confirmed
-// running — if StartNew fails, the old instance is untouched.
-//
-//	Phase 1 – Build:      generate protobuf config  (no lock, pure computation)
-//	Phase 2 – Create:     xrayCore.New + capture LD (brief global lock)
-//	Phase 3 – StartNew:   instance.Start            (no lock, potentially slow)
-//	Phase 4 – Swap:       store new, extract old     (brief kernel lock)
-//	Phase 5 – RecycleOld: close old in background    (non-blocking)
+// Start synchronously closes the old runtime before constructing its replacement.
+// This deliberate reconstruction can disrupt unaffected streams; per-user strong
+// closure is not available and Capabilities does not claim it.
 func (x *Xray) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
+	x.operationMu.Lock()
+	defer x.operationMu.Unlock()
+	return x.start(nodeConfig, users, tls)
+}
+func (x *Xray) start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
+	// A replacement must release the old listener and revoke all old sessions.
+	x.stop()
+	if nodeConfig == nil {
+		return errors.New("XRAY_CONFIG_INVALID")
+	}
+	if nodeConfig.Protocol != "hysteria" {
+		if _, err := prepareMemoryUsers(nodeConfig.Protocol, nodeConfig, users); err != nil {
+			return err
+		}
+	}
 	// ── Phase 1: Build config (no shared state) ─────────────────────────
 	x.prepareGeoAssets(nodeConfig)
 
 	data, err := marshalConfig(x.cfg, nodeConfig, users, tls)
 	if err != nil {
-		return err
+		return errors.New("XRAY_CONFIG_INVALID")
 	}
 
 	pbConfig, err := serial.LoadJSONConfig(bytes.NewReader(data))
 	if err != nil {
-		return fmt.Errorf("parse xray config: %w", err)
+		return errors.New("XRAY_CONFIG_INVALID")
 	}
 
 	// ── Phase 2: Create instance (global lock for LD capture) ───────────
 	xrayCreationMu.Lock()
-	inst, err := xrayCore.New(pbConfig)
+	instanceCtx, instanceCancel := context.WithCancel(context.Background())
+	inst, err := xrayCore.NewWithContext(instanceCtx, pbConfig)
 	ld := globalLimitDispatcher.Load()
 	xrayCreationMu.Unlock()
 	if err != nil {
-		return fmt.Errorf("create xray: %w", err)
+		instanceCancel()
+		return errors.New("XRAY_CREATE_FAILED")
 	}
 
 	// ── Phase 3: Start new (no lock, potentially slow) ──────────────────
 	if err := startWithTimeout(inst, startTimeout); err != nil {
+		instanceCancel()
 		inst.Close()
-		return err
+		return errors.New("XRAY_START_FAILED")
 	}
 
 	// ── Phase 4: Swap old → new (brief kernel lock) ─────────────────────
 	x.mu.Lock()
-	old := x.instance
-	oldLD := x.limitDispatcher
 	x.instance = inst
+	x.instanceCancel = instanceCancel
 	x.limitDispatcher = ld
-	x.users = users
+	x.users = append([]model.UserSpec(nil), users...)
 	x.nodeConfig = nodeConfig
 	x.tls = tls
 	x.protocol = nodeConfig.Protocol
 	x.inboundTag = nodeConfig.Protocol + "-in"
-	x.cumTraffic = make(map[int][2]int64)
 	x.lastKernelHash = kernel.ComputeHash(nodeConfig, users)
 	x.running.Store(true)
 	x.mu.Unlock()
 
 	// ── Phase 5: Recycle old (background, non-blocking) ─────────────────
-	closeOld(old, oldLD)
+	// Previous instance was synchronously cancelled/closed before binding.
 
 	x.updateDispatcherLimits(users)
 	x.updateBandwidthLimits(users)
@@ -173,45 +186,66 @@ func (x *Xray) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls ker
 	return nil
 }
 
-// Reload updates dispatcher limits and handles configuration changes.
-// Since Xray does not support granular inbound reconstruction without an
-// instance restart for most transport/TLS settings, it triggers a full restart
-// if any kernel-affecting fields (hash mismatch) have changed.
+// Reload applies unchanged identities/limits in place. Structural changes
+// return an explicit reconstruction requirement for the Service caller.
 func (x *Xray) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
-	x.updateDispatcherLimits(users)
-	x.updateBandwidthLimits(users)
-
+	x.operationMu.Lock()
+	defer x.operationMu.Unlock()
+	if nodeConfig == nil {
+		return errors.New("XRAY_CONFIG_INVALID")
+	}
+	if nodeConfig.Protocol != "hysteria" {
+		if _, err := prepareMemoryUsers(nodeConfig.Protocol, nodeConfig, users); err != nil {
+			return err
+		}
+	}
 	newHash := kernel.ComputeHash(nodeConfig, users)
-
 	x.mu.Lock()
-	same := x.lastKernelHash == newHash && tlsEqual(x.tls, tls)
+	same := x.instance != nil && x.running.Load() && x.lastKernelHash == newHash && tlsEqual(x.tls, tls)
 	if same {
-		x.users = users
-		x.mu.Unlock()
-		nlog.Core().Debug("xray: limits updated, kernel configuration unchanged")
-		return nil
+		x.users = append([]model.UserSpec(nil), users...)
 	}
 	x.mu.Unlock()
-
-	nlog.Core().Info("xray: configuration changed, performing full restart")
-	return x.Start(nodeConfig, users, tls)
+	if same {
+		x.updateDispatcherLimits(users)
+		x.updateBandwidthLimits(users)
+		return nil
+	}
+	return ErrUserReconstructionRequired
 }
 
-// Stop gracefully shuts down the kernel, draining active connections first.
-func (x *Xray) Stop() {
+// Stop synchronously revokes the instance context, closes listeners and retains
+// final cumulative counters. It does not wait minutes with old streams alive.
+func (x *Xray) Stop() { x.operationMu.Lock(); defer x.operationMu.Unlock(); x.stop() }
+func (x *Xray) stop() {
 	x.running.Store(false)
-
 	x.mu.Lock()
 	inst := x.instance
 	ld := x.limitDispatcher
-	x.instance = nil
-	x.limitDispatcher = nil
+	cancel := x.instanceCancel
+	if inst == nil {
+		x.mu.Unlock()
+		return
+	}
+	_, _ = x.aggregateStats()
 	x.mu.Unlock()
-
+	if cancel != nil {
+		cancel()
+	}
+	_ = inst.Close()
 	if ld != nil {
 		drainConns(ld, drainTimeout)
 	}
-	closeOld(inst, ld)
+	// Counters remain accessible after Manager.Close; collect final task bytes.
+	x.mu.Lock()
+	_, _ = x.aggregateStats()
+	x.instance = nil
+	x.limitDispatcher = nil
+	x.instanceCancel = nil
+	x.mu.Unlock()
+	if ld != nil {
+		ld.ResetConns()
+	}
 }
 
 func (x *Xray) IsRunning() bool { return x.running.Load() }
@@ -228,7 +262,10 @@ func tlsEqual(a, b kernel.TLSCert) bool {
 // so traffic accounting must come from xray-core itself.
 func (x *Xray) GetUserTraffic(_ context.Context) (traffic map[int][2]int64, aliveIPs map[int]map[string]bool, connCount int, err error) {
 	if !x.running.Load() {
-		return nil, nil, 0, nil
+		x.mu.Lock()
+		traffic = copyCumulative(x.cumTraffic)
+		x.mu.Unlock()
+		return traffic, nil, 0, nil
 	}
 
 	x.mu.Lock()
@@ -252,7 +289,7 @@ func (x *Xray) CloseConnection(_ context.Context, _ string) error {
 }
 
 func (x *Xray) CloseUserConnections(_ context.Context, _ string) error {
-	// No-op: handled by RemoveUsers at the xray core level.
+	// Per-user established connection close is unavailable; callers must rebuild.
 	return nil
 }
 
@@ -286,212 +323,155 @@ func (x *Xray) ClearGlobalDevices() {}
 // Delta "add" events also carry property updates (speed/device limits) for
 // existing users, so this method always merges properties and refreshes the
 // dispatcher limits — even when no brand-new users need to be added.
+var (
+	ErrUserReconstructionRequired = errors.New("XRAY_USER_RECONSTRUCTION_REQUIRED")
+	ErrUserConversion             = errors.New("XRAY_USER_CONVERSION_FAILED")
+	ErrUserOperation              = errors.New("XRAY_USER_OPERATION_FAILED")
+)
+
 func (x *Xray) AddUsers(users []model.UserSpec) (int, error) {
+	x.operationMu.Lock()
+	defer x.operationMu.Unlock()
 	x.mu.Lock()
-	if x.instance == nil {
-		x.mu.Unlock()
-		return 0, fmt.Errorf("not running")
+	defer x.mu.Unlock()
+	if x.instance == nil || !x.running.Load() {
+		return 0, errors.New("XRAY_NOT_RUNNING")
 	}
-
-	// Merge: overwrite existing users' properties, collect truly new ones.
-	userMap := make(map[int]model.UserSpec, len(x.users))
-	for _, u := range x.users {
-		userMap[u.ID] = u
+	merged := append([]model.UserSpec(nil), x.users...)
+	indexes := make(map[int]int, len(merged))
+	for i, u := range merged {
+		indexes[u.ID] = i
 	}
-	var toAdd []model.UserSpec
 	for _, u := range users {
-		if _, exists := userMap[u.ID]; !exists {
-			toAdd = append(toAdd, u)
-		}
-		userMap[u.ID] = u // always overwrite properties
-	}
-	merged := make([]model.UserSpec, 0, len(userMap))
-	for _, u := range userMap {
-		merged = append(merged, u)
-	}
-
-	if len(toAdd) == 0 {
-		// No new kernel users, but properties (limits) may have changed.
-		x.users = merged
-		x.mu.Unlock()
-		x.updateDispatcherLimits(merged)
-	x.updateBandwidthLimits(merged)
-		return 0, nil
-	}
-
-	um, err := x.getUserManager()
-	if err != nil {
-		// Protocol doesn't support UserManager → full restart
-		nc, t := x.nodeConfig, x.tls
-		x.mu.Unlock()
-		nlog.Core().Debug("xray: AddUsers fallback to restart", "reason", err)
-		if err := x.Start(nc, merged, t); err != nil {
-			return 0, err
-		}
-		return len(toAdd), nil
-	}
-
-	proto := x.protocol
-	nc := x.nodeConfig
-	x.mu.Unlock()
-
-	ctx := context.Background()
-	added := 0
-	for _, u := range toAdd {
-		mu, err := toMemoryUser(proto, nc, u)
-		if err != nil {
-			nlog.Core().Warn("xray: skip user, cannot build account", "user", u.ID, "error", err)
-			continue
-		}
-		if err := um.AddUser(ctx, mu); err != nil {
-			nlog.Core().Warn("xray: AddUser failed", "user", u.ID, "error", err)
-			continue
-		}
-		added++
-	}
-
-	// Update bookkeeping with full merged list (new users + updated properties).
-	x.mu.Lock()
-	x.users = merged
-	x.mu.Unlock()
-	x.updateDispatcherLimits(merged)
-	x.updateBandwidthLimits(merged)
-
-	nlog.Core().Info("xray: users added via UserManager", "added", added, "total", len(merged))
-	return added, nil
-}
-
-// RemoveUsers removes users from the running kernel via xray's UserManager API.
-// Truly hitless for supported protocols — remaining connections unaffected.
-func (x *Xray) RemoveUsers(users []model.UserSpec) (int, error) {
-	x.mu.Lock()
-	if x.instance == nil {
-		x.mu.Unlock()
-		return 0, fmt.Errorf("not running")
-	}
-	removeSet := make(map[int]struct{}, len(users))
-	for _, u := range users {
-		removeSet[u.ID] = struct{}{}
-	}
-	var kept []model.UserSpec
-	removed := 0
-	for _, u := range x.users {
-		if _, rm := removeSet[u.ID]; rm {
-			removed++
+		if i, ok := indexes[u.ID]; ok {
+			merged[i] = u
 		} else {
-			kept = append(kept, u)
+			indexes[u.ID] = len(merged)
+			merged = append(merged, u)
 		}
 	}
-	if removed == 0 {
-		x.mu.Unlock()
-		return 0, nil
-	}
-
-	if len(kept) == 0 {
-		x.mu.Unlock()
-		x.Stop()
-		return removed, nil
-	}
-
-	um, err := x.getUserManager()
-	if err != nil {
-		nc, t := x.nodeConfig, x.tls
-		x.mu.Unlock()
-		nlog.Core().Debug("xray: RemoveUsers fallback to restart", "reason", err)
-		if err := x.Start(nc, kept, t); err != nil {
-			return 0, err
-		}
-		return removed, nil
-	}
-	x.mu.Unlock()
-
-	ctx := context.Background()
-	actualRemoved := 0
-	for _, u := range users {
-		email := userEmail(u.ID)
-		if err := um.RemoveUser(ctx, email); err != nil {
-			nlog.Core().Debug("xray: RemoveUser skipped", "user", u.ID, "error", err)
-			continue
-		}
-		actualRemoved++
-	}
-
-	x.mu.Lock()
-	x.users = kept
-	x.mu.Unlock()
-	x.updateDispatcherLimits(kept)
-	x.updateBandwidthLimits(kept)
-
-	nlog.Core().Info("xray: users removed via UserManager", "removed", actualRemoved, "total", len(kept))
-	return actualRemoved, nil
+	return x.applyUsersLocked(merged)
 }
-
-// UpdateUsers replaces the entire user set. If only speed/device limits
-// changed, updates the dispatcher without restarting. Otherwise uses
-// UserManager for hitless add/remove where supported.
-func (x *Xray) UpdateUsers(users []model.UserSpec) (added, removed int, err error) {
+func (x *Xray) RemoveUsers(users []model.UserSpec) (int, error) {
+	x.operationMu.Lock()
+	defer x.operationMu.Unlock()
 	x.mu.Lock()
 	if x.instance == nil {
 		x.mu.Unlock()
-		return 0, 0, fmt.Errorf("not running")
+		return 0, errors.New("XRAY_NOT_RUNNING")
 	}
-	toAdd, toRemove := kernel.UserDiff(x.users, users)
-	added, removed = len(toAdd), len(toRemove)
+	remove := make(map[int]bool, len(users))
+	for _, u := range users {
+		remove[u.ID] = true
+	}
+	count := 0
+	for _, u := range x.users {
+		if remove[u.ID] {
+			count++
+		}
+	}
+	if count == 0 {
+		x.mu.Unlock()
+		return 0, nil
+	}
+	if count < len(x.users) {
+		x.mu.Unlock()
+		return 0, ErrUserReconstructionRequired
+	}
+	x.mu.Unlock()
+	x.stop()
+	x.mu.Lock()
+	x.users = nil
+	x.lastKernelHash = ""
+	x.mu.Unlock()
+	return count, nil
+}
 
-	if added == 0 && removed == 0 {
-		// Only limits changed — update dispatcher without restart.
-		x.users = users
+func (x *Xray) UpdateUsers(users []model.UserSpec) (int, int, error) {
+	x.operationMu.Lock()
+	defer x.operationMu.Unlock()
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.instance == nil || !x.running.Load() {
+		return 0, 0, errors.New("XRAY_NOT_RUNNING")
+	}
+	added, err := x.applyUsersLocked(users)
+	return added, 0, err
+}
+
+// Must hold operationMu and mu. Validate the complete desired set before
+// manager operations; removals/rebinding require established-session teardown.
+func (x *Xray) applyUsersLocked(users []model.UserSpec) (int, error) {
+	toAdd, toRemove := kernel.UserDiff(x.users, users)
+	prepared, err := prepareMemoryUsers(x.protocol, x.nodeConfig, users)
+	if err != nil {
+		return 0, err
+	}
+	oldUUID := make(map[int]string, len(x.users))
+	for _, user := range x.users {
+		oldUUID[user.ID] = user.UUID
+	}
+	for _, user := range users {
+		if old, exists := oldUUID[user.ID]; exists && old != user.UUID {
+			return 0, ErrUserReconstructionRequired
+		}
+	}
+	if len(toRemove) > 0 {
+		return 0, ErrUserReconstructionRequired
+	}
+	if len(toAdd) == 0 {
+		x.users = append([]model.UserSpec(nil), users...)
+		x.lastKernelHash = kernel.ComputeHash(x.nodeConfig, users)
 		x.mu.Unlock()
 		x.updateDispatcherLimits(users)
 		x.updateBandwidthLimits(users)
-		nlog.Core().Info("xray: limits updated, kernel unchanged")
-		return 0, 0, nil
+		x.mu.Lock()
+		return 0, nil
 	}
-
-	um, umErr := x.getUserManager()
-	if umErr != nil {
-		// Protocol doesn't support UserManager → full restart
-		nc, t := x.nodeConfig, x.tls
-		x.mu.Unlock()
-		nlog.Core().Debug("xray: UpdateUsers fallback to restart", "reason", umErr)
-		if err = x.Start(nc, users, t); err != nil {
-			return 0, 0, err
-		}
-		return
+	manager, err := x.getUserManager()
+	if err != nil {
+		return 0, ErrUserReconstructionRequired
 	}
-
-	proto := x.protocol
-	nc := x.nodeConfig
-	x.mu.Unlock()
-
-	ctx := context.Background()
-
-	// Remove first, then add (order matters for UUID changes on same ID)
-	for _, u := range toRemove {
-		email := userEmail(u.ID)
-		if err := um.RemoveUser(ctx, email); err != nil {
-			nlog.Core().Debug("xray: RemoveUser skipped in UpdateUsers", "user", u.ID, "error", err)
-		}
-	}
+	added := 0
 	for _, u := range toAdd {
-		mu, err := toMemoryUser(proto, nc, u)
-		if err != nil {
-			nlog.Core().Warn("xray: skip user in UpdateUsers", "user", u.ID, "error", err)
-			continue
+		if err := manager.AddUser(context.Background(), prepared[u.ID]); err != nil {
+			return added, ErrUserOperation
 		}
-		if err := um.AddUser(ctx, mu); err != nil {
-			nlog.Core().Warn("xray: AddUser failed in UpdateUsers", "user", u.ID, "error", err)
-		}
+		added++
 	}
-
-	x.mu.Lock()
-	x.users = users
+	x.users = append([]model.UserSpec(nil), users...)
+	x.lastKernelHash = kernel.ComputeHash(x.nodeConfig, users)
 	x.mu.Unlock()
 	x.updateDispatcherLimits(users)
 	x.updateBandwidthLimits(users)
-
-	nlog.Core().Info("xray: users updated via UserManager", "added", added, "removed", removed, "total", len(users))
-	return
+	x.mu.Lock()
+	return added, nil
+}
+func prepareMemoryUsers(proto string, nc *model.NodeSpec, users []model.UserSpec) (map[int]*protocol.MemoryUser, error) {
+	if nc == nil {
+		return nil, ErrUserConversion
+	}
+	prepared := make(map[int]*protocol.MemoryUser, len(users))
+	identities := make(map[string]bool, len(users))
+	for _, u := range users {
+		if u.ID <= 0 || u.UUID == "" || prepared[u.ID] != nil || identities[u.UUID] {
+			return nil, ErrUserConversion
+		}
+		memory, err := toMemoryUser(proto, nc, u)
+		if err != nil {
+			return nil, ErrUserConversion
+		}
+		prepared[u.ID] = memory
+		identities[u.UUID] = true
+	}
+	return prepared, nil
+}
+func copyCumulative(source map[int][2]int64) map[int][2]int64 {
+	out := make(map[int][2]int64, len(source))
+	for id, value := range source {
+		out[id] = value
+	}
+	return out
 }
 
 var _ kernel.Kernel = (*Xray)(nil)
@@ -502,6 +482,9 @@ var _ kernel.Kernel = (*Xray)(nil)
 // inbound handler. Must be called with x.mu held.
 // Returns error for protocols that don't support UserManager (socks, http).
 func (x *Xray) getUserManager() (xrayProxy.UserManager, error) {
+	if x.userManagerOverride != nil {
+		return x.userManagerOverride()
+	}
 	if x.instance == nil {
 		return nil, fmt.Errorf("instance is nil")
 	}
@@ -670,26 +653,6 @@ func startWithTimeout(inst *xrayCore.Instance, timeout time.Duration) error {
 // closeOld shuts down a previously running instance and its dispatcher.
 // Recycling happens in a background goroutine to prevent the main thread
 // from blocking on slow connection draining, enabling "hitless" reload.
-func closeOld(inst *xrayCore.Instance, ld *LimitDispatcher) {
-	if inst == nil {
-		return
-	}
-	go func() {
-		// 1. Drain connections gracefully (best effort, e.g. 5 minutes)
-		// We use a much longer timeout here than the default Stop() because
-		// it's running in background and doesn't block new user connections.
-		if ld != nil {
-			drainConns(ld, 5*time.Minute)
-		}
-		// 2. Hard close
-		inst.Close()
-		if ld != nil {
-			ld.ResetConns()
-		}
-		nlog.Core().Debug("xray: old instance recycled")
-	}()
-}
-
 // drainConns waits up to timeout for the dispatcher's active connections to
 // reach zero. Used only during graceful Stop, not during hot-reload.
 func drainConns(ld *LimitDispatcher, timeout time.Duration) {
@@ -706,6 +669,9 @@ func drainConns(ld *LimitDispatcher, timeout time.Duration) {
 // when LimitDispatcher is not available. Returns per-user cumulative traffic.
 // Must be called with x.mu held.
 func (x *Xray) aggregateStats() (map[int][2]int64, error) {
+	if x.instance == nil {
+		return copyCumulative(x.cumTraffic), nil
+	}
 	sm := x.instance.GetFeature(stats.ManagerType())
 	if sm == nil {
 		return nil, nil
@@ -715,7 +681,7 @@ func (x *Xray) aggregateStats() (map[int][2]int64, error) {
 		return nil, nil
 	}
 
-	traffic := make(map[int][2]int64)
+	traffic := copyCumulative(x.cumTraffic)
 	for _, u := range x.users {
 		email := userEmail(u.ID)
 

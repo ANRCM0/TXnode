@@ -162,7 +162,6 @@ func TestXraySetSpeedLimitFuncUsesPatchedCorePath(t *testing.T) {
 	}
 }
 
-
 func TestXrayCapabilities(t *testing.T) {
 	x := New(config.KernelConfig{Type: "xray"})
 	caps := x.Capabilities()
@@ -173,7 +172,6 @@ func TestXrayCapabilities(t *testing.T) {
 		t.Fatalf("unexpected force-close xray capabilities: %+v", caps)
 	}
 }
-
 
 func TestXrayUpdateBandwidthLimitsWritesPatchedCoreFeature(t *testing.T) {
 	inst := new(xrayCore.Instance)
@@ -189,7 +187,6 @@ func TestXrayUpdateBandwidthLimitsWritesPatchedCoreFeature(t *testing.T) {
 		t.Fatal("expected patched bandwidth feature to receive user limiter")
 	}
 }
-
 
 func TestXrayUpdateBandwidthLimitsUsesSpeedLimitFunc(t *testing.T) {
 	inst := new(xrayCore.Instance)
@@ -213,7 +210,6 @@ func TestXrayUpdateBandwidthLimitsUsesSpeedLimitFunc(t *testing.T) {
 	}
 }
 
-
 func TestXrayUpdateBandwidthLimitsFallsBackToUserSpeed(t *testing.T) {
 	inst := new(xrayCore.Instance)
 	bm := featurebandwidth.New()
@@ -229,7 +225,6 @@ func TestXrayUpdateBandwidthLimitsFallsBackToUserSpeed(t *testing.T) {
 	}
 }
 
-
 func TestXrayUpdateUsersLimitOnlyRefreshesDispatcherAndBandwidth(t *testing.T) {
 	x := New(config.KernelConfig{Type: "xray"})
 	ld := newTestDispatcher()
@@ -239,10 +234,13 @@ func TestXrayUpdateUsersLimitOnlyRefreshesDispatcherAndBandwidth(t *testing.T) {
 		t.Fatalf("Instance.AddFeature(bandwidth) error = %v", err)
 	}
 	x.instance = inst
+	x.running.Store(true)
+	x.protocol = "vless"
+	x.nodeConfig = &model.NodeSpec{Protocol: "vless"}
 	x.limitDispatcher = ld
-	x.users = []model.UserSpec{{ID: 1, UUID: "uuid-1", DeviceLimit: 1, SpeedLimit: 8}}
+	x.users = []model.UserSpec{{ID: 1, UUID: "00112233-4455-6677-8899-aabbccddeeff", DeviceLimit: 1, SpeedLimit: 8}}
 
-	added, removed, err := x.UpdateUsers([]model.UserSpec{{ID: 1, UUID: "uuid-1", DeviceLimit: 3, SpeedLimit: 16}})
+	added, removed, err := x.UpdateUsers([]model.UserSpec{{ID: 1, UUID: "00112233-4455-6677-8899-aabbccddeeff", DeviceLimit: 3, SpeedLimit: 16}})
 	if err != nil {
 		t.Fatalf("UpdateUsers() error = %v", err)
 	}

@@ -307,3 +307,32 @@ func TestUUIDReplacementRemovalErrorCannotSilentlyConfirmNewIdentity(t *testing.
 		t.Fatal("same authoritative UUID snapshot not retried")
 	}
 }
+
+func TestStoppedOrDirtyKernelCannotSuppressPreviouslyAppliedConfig(t *testing.T) {
+	k := &fakeKernel{}
+	s := snapshotTestService(k)
+	cfg := &model.NodeSpec{Protocol: "vless", ServerPort: 12345}
+	users := []model.UserSpec{{ID: 1, UUID: "first"}}
+	s.lastConfig = cfg
+	s.lastConfigHash = computeConfigHash(cfg)
+	s.updateUserState(users, srcBootstrap)
+	if !s.startKernel(cfg, users) {
+		t.Fatal("initial start")
+	}
+	if s.pollAppliedConfigHash() != computeConfigHash(cfg) {
+		t.Fatal("confirmed running state not deduplicated")
+	}
+	s.markApplicationPending("KERNEL_RELOAD_FAILED")
+	if s.pollAppliedConfigHash() != "" {
+		t.Fatal("dirty application filtered recovery snapshot")
+	}
+	s.desiredDirty = false
+	s.kernelLife.Stop()
+	if s.pollAppliedConfigHash() != "" {
+		t.Fatal("stopped kernel filtered previously applied configuration")
+	}
+	s.applySyncResult(context.Background(), nodesync.Result{Config: cfg, ConfigHash: computeConfigHash(cfg), Users: users, UserHash: computeUserHash(users)})
+	if !k.running || s.desiredDirty || s.appliedConfigHash != computeConfigHash(cfg) {
+		t.Fatal("previously applied configuration not recoverable")
+	}
+}

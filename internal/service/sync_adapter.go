@@ -20,7 +20,16 @@ func (s *Service) schedulePoll(ctx context.Context) {
 		return
 	}
 	s.latchCertificateRenewal()
-	s.syncer.PollAt(ctx, s.appliedConfigHash, s.pendingCertRenewal, s.desiredGeneration)
+	s.syncer.PollAt(ctx, s.pollAppliedConfigHash(), s.pendingCertRenewal, s.desiredGeneration)
+}
+
+// A previous successful hash cannot suppress recovery after the kernel stopped
+// or a rejected desired construction left an application pending.
+func (s *Service) pollAppliedConfigHash() string {
+	if s.desiredDirty || s.pendingCertRenewal || s.configRejected || !s.kernel.IsRunning() {
+		return ""
+	}
+	return s.appliedConfigHash
 }
 func (s *Service) resetSnapshotCache() {
 	if reset, ok := s.source.(interface{ ResetSnapshotCache() }); ok {
@@ -32,7 +41,7 @@ func (s *Service) requestWSResync(ctx context.Context, reason string) {
 		return
 	}
 	s.latchCertificateRenewal()
-	if !s.syncer.RequestResyncAt(ctx, s.appliedConfigHash, s.pendingCertRenewal, s.desiredGeneration) {
+	if !s.syncer.RequestResyncAt(ctx, s.pollAppliedConfigHash(), s.pendingCertRenewal, s.desiredGeneration) {
 		return
 	}
 	nlog.Core().Warn("ws state may be stale, scheduling REST reconciliation", "reason", reason)
