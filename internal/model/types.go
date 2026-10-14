@@ -82,10 +82,20 @@ type BrutalConfig struct {
 }
 
 type UserSpec struct {
-	ID          int
-	UUID        string
-	SpeedLimit  int
-	DeviceLimit int
+	TrafficPeriod string
+	ID            int
+	UUID          string
+	SpeedLimit    int
+	DeviceLimit   int
+}
+
+// TrafficSegment retains the opaque Core authorization period observed by the
+// meter owner; a zero-length period denotes explicit legacy/unbound bytes.
+type TrafficSegment struct {
+	UserID   int    `json:"user_id"`
+	Period   string `json:"period"`
+	Upload   int64  `json:"upload"`
+	Download int64  `json:"download"`
 }
 
 func (n *NodeSpec) GetProxyProtocol() bool {

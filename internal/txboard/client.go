@@ -532,6 +532,8 @@ func (c *Client) PostReport(body map[string]any) error {
 		Accepted        bool   `json:"accepted"`
 		BatchID         string `json:"traffic_batch_id"`
 		Settlement      string `json:"settlement"`
+		ReceiptStatus   string `json:"receipt_status"`
+		ReceiptID       string `json:"receipt_id"`
 	}
 	if err := decode(resp, &ack, 202); err != nil {
 		return err
@@ -542,6 +544,12 @@ func (c *Client) PostReport(body map[string]any) error {
 	if traffic, ok := body["traffic"]; ok && traffic != nil {
 		if id, ok := body["traffic_batch_id"].(string); ok && id != "" && (ack.BatchID != id || ack.Settlement != "queued") {
 			return errors.New("invalid TXBoard report ACK")
+		}
+	}
+	if segments, present := body["traffic_segments"]; present && segments != nil {
+		receipt, err := strconv.ParseUint(ack.ReceiptID, 10, 64)
+		if ack.ReceiptStatus != "persisted" || err != nil || receipt == 0 || len(ack.ReceiptID) > 20 || ack.ReceiptID[0] == '0' {
+			return errors.New("invalid durable TXBoard report ACK")
 		}
 	}
 	return nil

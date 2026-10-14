@@ -17,6 +17,8 @@ import (
 // The payload contains the already-flushed runtime counters that may need to be
 // restored when an asynchronous delivery fails.
 type Batch struct {
+	MoreTraffic  bool    `json:"MoreTraffic,omitempty"`
+	RecoveryTail []Batch `json:"RecoveryTail,omitempty"`
 	Payload      controlplane.ReportPayload
 	TrafficCount int
 	OnlineCount  int
@@ -41,6 +43,7 @@ type Controller struct {
 	pending         *Batch
 	spool           *batchSpool
 	terminal        *Batch
+	terminalIndex   int
 	terminalSpool   *batchSpool
 	admissionClosed bool
 	stopped         bool
@@ -84,6 +87,7 @@ func (c *Controller) nextBatch(prepare PrepareFunc) (Batch, error) {
 	}
 
 	batch := prepare()
+	batch.MoreTraffic = false // continuation belongs only to terminal queue capture
 	if len(batch.Payload.Traffic) > 0 {
 		batch.Payload.BatchID = newReportBatchID()
 		if c.spool != nil {
@@ -114,13 +118,22 @@ func (c *Controller) acknowledge(batch Batch) error {
 			}
 		}
 		c.pending = nil
-	} else if c.terminal != nil && c.terminal.Payload.BatchID == batch.Payload.BatchID {
+	} else if c.terminal != nil {
+		current := c.terminalItemLocked()
+		if current.Payload.BatchID != batch.Payload.BatchID {
+			return nil
+		} // stale unrelated ACK owns neither slot
+		if c.terminalIndex < len(c.terminal.RecoveryTail) {
+			c.terminalIndex++
+			return nil
+		}
 		if c.terminalSpool != nil {
-			if err := c.terminalSpool.clear(batch); err != nil {
+			if err := c.terminalSpool.clear(*c.terminal); err != nil {
 				return ErrRecoveryFailed
 			}
 		}
 		c.terminal = nil
+		c.terminalIndex = 0
 	}
 	return nil
 }
@@ -152,8 +165,15 @@ func NewDurable(sink controlplane.Sink, path string) (*Controller, error) {
 	if err != nil {
 		return nil, ErrRecoveryFailed
 	}
-	if pending != nil && terminal != nil && pending.Payload.BatchID == terminal.Payload.BatchID {
+	if pending != nil && len(pending.RecoveryTail) > 0 {
 		return nil, ErrRecoveryFailed
+	}
+	if pending != nil && terminal != nil {
+		for _, batch := range terminalBatches(*terminal) {
+			if pending.Payload.BatchID == batch.Payload.BatchID {
+				return nil, ErrRecoveryFailed
+			}
+		}
 	}
 	return &Controller{sink: sink, spool: spool, pending: pending,
 		terminalSpool: terminalSpool, terminal: terminal,
@@ -207,6 +227,7 @@ func (c *Controller) PushAsync(
 				failureNotice := batch
 				if batch.Payload.BatchID != "" {
 					failureNotice.Payload.Traffic = nil
+					failureNotice.Payload.TrafficSegments = nil
 				}
 				onFailure(failureNotice, err)
 			}
@@ -218,6 +239,7 @@ func (c *Controller) PushAsync(
 			if onFailure != nil {
 				failureNotice := batch
 				failureNotice.Payload.Traffic = nil
+				failureNotice.Payload.TrafficSegments = nil
 				onFailure(failureNotice, err)
 			}
 			return
@@ -232,7 +254,11 @@ func (c *Controller) PushAsync(
 
 // PushSync is used for the shutdown flush. It intentionally bypasses async
 // overlap/backoff state, matching the previous Service behavior.
-func (c *Controller) PushSync(prepare PrepareFunc) error {
+func (c *Controller) PushSync(prepare PrepareFunc) error { return c.PushSyncRecoverable(prepare, nil) }
+
+// Only a never-published (untagged) batch is returned for restoration. Stable
+// pending/ambiguous batches stay in their slot and retain original attribution.
+func (c *Controller) PushSyncRecoverable(prepare PrepareFunc, onFailure FailureFunc) error {
 	if !c.SupportsReporting() || prepare == nil {
 		return nil
 	}
@@ -247,6 +273,9 @@ func (c *Controller) PushSync(prepare PrepareFunc) error {
 	c.pendingMu.Unlock()
 	batch, err := c.nextBatch(prepare)
 	if err != nil {
+		if onFailure != nil && batch.Payload.BatchID == "" {
+			onFailure(batch, err)
+		}
 		return err
 	}
 	if err := c.sink.Report(batch.Payload); err != nil {
@@ -258,6 +287,9 @@ func (c *Controller) PushSync(prepare PrepareFunc) error {
 	if hadPending {
 		next, err := c.nextBatch(prepare)
 		if err != nil {
+			if onFailure != nil && next.Payload.BatchID == "" {
+				onFailure(next, err)
+			}
 			return err
 		}
 		if err := c.sink.Report(next.Payload); err != nil {
@@ -331,7 +363,6 @@ func (c *Controller) CheckpointTerminal(prepare PrepareFunc, onFailure FailureFu
 		return ErrTerminalCheckpointExists
 	}
 	c.checkpointed = true
-	// Refuse an unexpectedly existing/corrupt terminal file before flushing.
 	if c.terminalSpool != nil {
 		if _, err := os.Lstat(c.terminalSpool.path); !errors.Is(err, os.ErrNotExist) {
 			c.pendingMu.Unlock()
@@ -342,25 +373,70 @@ func (c *Controller) CheckpointTerminal(prepare PrepareFunc, onFailure FailureFu
 		c.pendingMu.Unlock()
 		return ErrTerminalCheckpointFailed
 	}
-	c.pendingMu.Unlock()
-	batch := prepare()
-	if len(batch.Payload.Traffic) == 0 {
-		return nil
-	}
-	batch.Payload.BatchID = newReportBatchID()
-	if c.terminalSpool != nil {
-		if err := c.terminalSpool.save(batch); err != nil {
+	c.pendingMu.Unlock() // closed admission is visible before prepare; never call it under the spool mutex
+	var batches []Batch
+	restore := func() {
+		for _, batch := range batches {
 			batch.Payload.BatchID = ""
 			if onFailure != nil {
 				onFailure(batch, ErrTerminalCheckpointFailed)
 			}
+		}
+	}
+	for {
+		batch := prepare()
+		more := batch.MoreTraffic
+		batch.MoreTraffic = false
+		if len(batch.Payload.Traffic) == 0 {
+			if more {
+				restore()
+				return ErrTerminalCheckpointFailed
+			}
+			break
+		}
+		batch.Payload.BatchID = newReportBatchID()
+		batch.RecoveryTail = nil
+		batches = append(batches, batch)
+		if !more {
+			break
+		}
+		if len(batches) >= 4096 {
+			restore()
+			return ErrTerminalCheckpointFailed
+		}
+	}
+	if len(batches) == 0 {
+		return nil
+	}
+	root := batches[0]
+	if len(batches) > 1 {
+		root.RecoveryTail = append([]Batch(nil), batches[1:]...)
+	}
+	if c.terminalSpool != nil {
+		if err := c.terminalSpool.save(root); err != nil {
+			restore()
 			return ErrTerminalCheckpointFailed
 		}
 	}
 	c.pendingMu.Lock()
-	c.terminal = &batch
+	c.terminal = &root
+	c.terminalIndex = 0
 	c.pendingMu.Unlock()
 	return nil
+}
+func terminalBatches(root Batch) []Batch {
+	first := root
+	first.RecoveryTail = nil
+	all := []Batch{first}
+	return append(all, root.RecoveryTail...)
+}
+func (c *Controller) terminalItemLocked() Batch {
+	if c.terminalIndex == 0 {
+		batch := *c.terminal
+		batch.RecoveryTail = nil
+		return batch
+	}
+	return c.terminal.RecoveryTail[c.terminalIndex-1]
 }
 
 // HasTerminalTail never interprets a removed/corrupt on-disk tail as empty.
@@ -404,6 +480,9 @@ func (c *Controller) ReplayRecovery() error {
 			return nil
 		}
 		batch, err := c.checkedSlot(slot, spool)
+		if slot == c.terminal && err == nil {
+			batch = c.terminalItemLocked()
+		}
 		c.pendingMu.Unlock()
 		if err != nil {
 			return ErrRecoveryFailed
@@ -415,4 +494,15 @@ func (c *Controller) ReplayRecovery() error {
 			return ErrRecoveryFailed
 		}
 	}
+}
+
+// HasRecoveryBatch includes pending-only startup; neither immutable slot may be
+// bypassed by newly admitted native traffic after an authenticated restart.
+func (c *Controller) HasRecoveryBatch() bool {
+	if c == nil {
+		return false
+	}
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	return c.pending != nil || c.terminal != nil
 }

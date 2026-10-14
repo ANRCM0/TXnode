@@ -66,13 +66,8 @@ func (s *batchSpool) load() (*Batch, error) {
 	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
 		return nil, errors.New("invalid pending batch spool trailing data")
 	}
-	if batch.Payload.BatchID == "" || len(batch.Payload.BatchID) > 128 || len(batch.Payload.Traffic) == 0 {
-		return nil, errors.New("invalid pending batch spool (missing ID/traffic)")
-	}
-	for userID, traffic := range batch.Payload.Traffic {
-		if userID <= 0 || traffic[0] < 0 || traffic[1] < 0 {
-			return nil, errors.New("invalid pending batch spool traffic")
-		}
+	if err := validateRecoveryBundle(batch); err != nil {
+		return nil, err
 	}
 	return &batch, nil
 }
@@ -92,9 +87,15 @@ func (s *batchSpool) matches(expected Batch) error {
 
 func (s *batchSpool) save(batch Batch) error {
 	dir := filepath.Dir(s.path)
+	if err := validateRecoveryBundle(batch); err != nil {
+		return err
+	}
 	encoded, err := json.Marshal(batch)
 	if err != nil {
 		return err
+	}
+	if len(encoded) > 64<<20 {
+		return errors.New("REPORTING_RECOVERY_BUNDLE_TOO_LARGE")
 	}
 	tmp, err := os.CreateTemp(dir, ".traffic-write-*")
 	if err != nil {
@@ -177,4 +178,27 @@ func syncDirectory(path string) error {
 	}
 	defer d.Close()
 	return d.Sync()
+}
+
+func validateRecoveryBundle(root Batch) error {
+	if len(root.RecoveryTail) > 4095 {
+		return errors.New("REPORTING_RECOVERY_BUNDLE_INVALID")
+	}
+	ids := make(map[string]bool, len(root.RecoveryTail)+1)
+	for _, batch := range terminalBatches(root) {
+		id := batch.Payload.BatchID
+		if id == "" || len(id) > 128 || ids[id] || len(batch.Payload.Traffic) == 0 || len(batch.RecoveryTail) > 0 || batch.MoreTraffic {
+			return errors.New("REPORTING_RECOVERY_BUNDLE_INVALID")
+		}
+		ids[id] = true
+		for uid, raw := range batch.Payload.Traffic {
+			if uid <= 0 || raw[0] < 0 || raw[1] < 0 {
+				return errors.New("invalid pending batch spool traffic")
+			}
+		}
+		if err := validateSpoolTrafficSegments(batch); err != nil {
+			return err
+		}
+	}
+	return nil
 }

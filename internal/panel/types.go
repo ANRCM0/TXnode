@@ -71,8 +71,8 @@ type MachineNode struct {
 
 // MachineNodesResponse is the response from GET /api/v2/server/machine/nodes.
 type MachineNodesResponse struct {
-	Nodes      []MachineNode      `json:"nodes"`
-	BaseConfig MachineBaseConfig  `json:"base_config"`
+	Nodes      []MachineNode     `json:"nodes"`
+	BaseConfig MachineBaseConfig `json:"base_config"`
 }
 
 // MachineBaseConfig holds polling intervals for machine mode.
@@ -274,10 +274,11 @@ type RouteAction struct {
 
 // User represents a user returned by the panel
 type User struct {
-	ID          int    `json:"id"`
-	UUID        string `json:"uuid"`
-	SpeedLimit  int    `json:"speed_limit"`  // Mbps, 0 = unlimited
-	DeviceLimit int    `json:"device_limit"` // max devices, 0 = unlimited
+	TrafficPeriod string `json:"traffic_period,omitempty"`
+	ID            int    `json:"id"`
+	UUID          string `json:"uuid"`
+	SpeedLimit    int    `json:"speed_limit"`  // Mbps, 0 = unlimited
+	DeviceLimit   int    `json:"device_limit"` // max devices, 0 = unlimited
 }
 
 type UsersResponse struct {

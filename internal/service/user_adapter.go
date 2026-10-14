@@ -93,6 +93,11 @@ func (s *Service) applyUserUpdate(ctx context.Context, users []model.UserSpec, n
 	}
 	s.observeBoundary("USER_UPDATE_BEGIN", true)
 	defer s.observeBoundary("USER_UPDATE_END", false)
+	periodChanged := s.tracker != nil && (s.tracker.PeriodsChanged(users) || s.tracker.PeriodModeChanged(users))
+	// Retired connections keep old period until stopped and sampled.
+	if s.kernel.IsRunning() && (periodChanged || len(users) == 0) {
+		s.stopUncertainKernel()
+	}
 	s.replaceUserState(users, newHash, src)
 	if len(users) == 0 {
 		s.applyDesiredState(ctx)
@@ -111,6 +116,9 @@ func (s *Service) applyUserUpdate(ctx context.Context, users []model.UserSpec, n
 	if _, _, err := s.kernel.UpdateUsers(users); err != nil {
 		s.rebuildDesiredUsers(ctx)
 		return
+	}
+	if s.tracker != nil {
+		s.tracker.BindPeriods(users)
 	}
 	s.confirmAppliedUsers(users)
 }
@@ -144,6 +152,10 @@ func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers 
 	} else {
 		desired = s.users.Subtract(deltaUsers)
 		src = srcDeltaRm
+	}
+	periodChanged := s.tracker != nil && (s.tracker.PeriodsChanged(desired) || s.tracker.PeriodModeChanged(desired))
+	if s.kernel.IsRunning() && (periodChanged || len(desired) == 0) {
+		s.stopUncertainKernel()
 	}
 	s.replaceUserState(desired, computeUserHash(desired), src)
 	if len(desired) == 0 || !s.kernel.IsRunning() {
@@ -179,6 +191,9 @@ func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers 
 			s.rebuildDesiredUsers(ctx)
 			return
 		}
+	}
+	if s.tracker != nil {
+		s.tracker.BindPeriods(desired)
 	}
 	s.confirmAppliedUsers(desired)
 }

@@ -53,15 +53,16 @@ type Snapshot struct {
 }
 
 type ReportPayload struct {
-	BatchID string
-	Traffic map[int][2]int64
-	Alive   map[int][]string
-	Online  map[int]int
-	CPU     float64
-	Mem     [2]uint64
-	Swap    [2]uint64
-	Disk    [2]uint64
-	Metrics map[string]interface{}
+	TrafficSegments []model.TrafficSegment `json:"traffic_segments,omitempty"`
+	BatchID         string
+	Traffic         map[int][2]int64
+	Alive           map[int][]string
+	Online          map[int]int
+	CPU             float64
+	Mem             [2]uint64
+	Swap            [2]uint64
+	Disk            [2]uint64
+	Metrics         map[string]interface{}
 }
 
 type PushClient interface {

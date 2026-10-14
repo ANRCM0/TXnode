@@ -33,8 +33,7 @@ func (s *Service) stopForAuthorityDenial(denial error) error {
 		}
 		return s.prepareReportBatch()
 	}, func(batch reporting.Batch, _ error) {
-		s.tracker.RestoreTraffic(batch.Payload.Traffic)
-		s.tracker.RestoreAliveIPs(batch.Payload.Alive)
+		s.restoreReportBatch(batch)
 	})
 	// A pre-existing/corrupt slot or persistence refusal cannot keep admission open.
 	if !prepared {

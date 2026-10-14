@@ -3,11 +3,13 @@ package tracker
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"math"
 	"sort"
 	"sync"
 	"sync/atomic"
 
+	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/nlog"
 )
 
@@ -44,7 +46,11 @@ type Tracker struct {
 
 	// pending accumulates deltas between flushes.
 	// Protected by mu — written by Process, drained by FlushTraffic.
-	pendingTraffic map[int][2]int64
+	pendingTraffic  map[int][2]int64
+	pendingSegments map[trafficSegmentKey][2]int64
+	observedPeriods map[int]string
+	activeSigned    bool
+	activeModeKnown bool
 
 	// live holds the current snapshot, swapped atomically.
 	// Readers load this pointer without any lock.
@@ -60,9 +66,10 @@ type Tracker struct {
 
 func New() *Tracker {
 	t := &Tracker{
-		lastSeen:       make(map[int][2]int64),
-		pendingTraffic: make(map[int][2]int64),
-		aliveIPsBuf:    make(map[int][]string),
+		lastSeen:        make(map[int][2]int64),
+		pendingTraffic:  make(map[int][2]int64),
+		pendingSegments: make(map[trafficSegmentKey][2]int64), observedPeriods: make(map[int]string),
+		aliveIPsBuf: make(map[int][]string),
 	}
 	// Publish initial empty snapshot.
 	t.live.Store(&snapshot{
@@ -71,6 +78,19 @@ func New() *Tracker {
 		online:   make(map[int]int),
 	})
 	return t
+}
+
+// BeginCumulativeGeneration is an explicit successful producer-reconstruction
+// boundary. New producer counters start at zero even if their first sample is
+// larger than the old producer's final value. Preserve pending report deltas;
+// caller must sample the retired producer before advancing this boundary.
+func (t *Tracker) BeginCumulativeGeneration() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	t.lastSeen = make(map[int][2]int64)
+	t.mu.Unlock()
 }
 
 // Process computes per-user traffic deltas from cumulative kernel counters.
@@ -108,6 +128,11 @@ func (t *Tracker) Process(
 			cur[0] += deltaUp
 			cur[1] += deltaDown
 			t.pendingTraffic[uid] = cur
+			key := trafficSegmentKey{userID: uid, period: t.observedPeriods[uid]}
+			segment := t.pendingSegments[key]
+			segment[0] += deltaUp
+			segment[1] += deltaDown
+			t.pendingSegments[key] = segment
 
 			cycleOut += deltaUp
 			cycleIn += deltaDown
@@ -133,24 +158,238 @@ func (t *Tracker) Process(
 
 // FlushTraffic returns accumulated per-user traffic and resets the pending buffer.
 // Lock-free: reads from live snapshot, then acquires mu only to drain.
-func (t *Tracker) FlushTraffic() map[int][2]int64 {
-	t.mu.Lock()
-	data := t.pendingTraffic
-	t.pendingTraffic = make(map[int][2]int64, len(data))
-	t.mu.Unlock()
-	return data
+func (t *Tracker) FlushTraffic() map[int][2]int64 { traffic, _ := t.FlushBatch(); return traffic }
+
+type trafficSegmentKey struct {
+	userID int
+	period string
 }
 
-// RestoreTraffic adds traffic back (used when push to panel fails).
-func (t *Tracker) RestoreTraffic(data map[int][2]int64) {
+// BindPeriods follows successful admission reconstruction. Removed users retain
+// their last binding so the final producer sample cannot acquire a new period.
+type PeriodBindings struct {
+	periods       map[int]string
+	signed, known bool
+}
+
+func (t *Tracker) BindPeriods(users []model.UserSpec) PeriodBindings {
+	if t == nil {
+		return PeriodBindings{}
+	}
 	t.mu.Lock()
-	for uid, d := range data {
+	defer t.mu.Unlock()
+	previous := PeriodBindings{periods: make(map[int]string, len(t.observedPeriods)), signed: t.activeSigned, known: t.activeModeKnown}
+	for uid, period := range t.observedPeriods {
+		previous.periods[uid] = period
+	}
+	for _, u := range users {
+		t.observedPeriods[u.ID] = u.TrafficPeriod
+	}
+	if len(users) > 0 {
+		signed, mixed := AdmissionPeriodMode(users)
+		if !mixed {
+			t.activeSigned = signed
+			t.activeModeKnown = true
+		}
+	}
+	return previous
+}
+func (t *Tracker) RestorePeriodBindings(previous PeriodBindings) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.observedPeriods = make(map[int]string, len(previous.periods))
+	for uid, period := range previous.periods {
+		t.observedPeriods[uid] = period
+	}
+	t.activeSigned = previous.signed
+	t.activeModeKnown = previous.known
+}
+
+func (t *Tracker) PeriodsChanged(users []model.UserSpec) bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, u := range users {
+		if old, ok := t.observedPeriods[u.ID]; ok && old != u.TrafficPeriod {
+			return true
+		}
+	}
+	return false
+}
+
+// FlushBatch atomically removes the aggregate and exactly matching attribution.
+// Pure legacy traffic retains nil segments. Mixed traffic drains legacy first
+// with its own batch ID; signed segments remain for the next batch.
+func (t *Tracker) FlushBatch() (map[int][2]int64, []model.TrafficSegment) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	legacy, aware := false, false
+	for key := range t.pendingSegments {
+		if key.period == "" {
+			legacy = true
+		} else {
+			aware = true
+		}
+	}
+	if legacy && aware {
+		// Legacy/unbound and signed bytes cannot share a period-aware wire body.
+		// Drain only the legacy cohort now; retain every signed segment for next ID.
+		traffic := make(map[int][2]int64)
+		for key, value := range t.pendingSegments {
+			if key.period != "" {
+				continue
+			}
+			cur := traffic[key.userID]
+			cur[0] += value[0]
+			cur[1] += value[1]
+			traffic[key.userID] = cur
+			remaining := t.pendingTraffic[key.userID]
+			remaining[0] -= value[0]
+			remaining[1] -= value[1]
+			if remaining == [2]int64{} {
+				delete(t.pendingTraffic, key.userID)
+			} else {
+				t.pendingTraffic[key.userID] = remaining
+			}
+			delete(t.pendingSegments, key)
+		}
+		return traffic, nil
+	}
+	if aware {
+		keys := make([]trafficSegmentKey, 0, len(t.pendingSegments))
+		for key := range t.pendingSegments {
+			keys = append(keys, key)
+		}
+		sort.Slice(keys, func(i, j int) bool {
+			if keys[i].userID == keys[j].userID {
+				return keys[i].period < keys[j].period
+			}
+			return keys[i].userID < keys[j].userID
+		})
+		if len(keys) > 10000 {
+			keys = keys[:10000]
+		}
+		traffic := make(map[int][2]int64)
+		segments := make([]model.TrafficSegment, 0, len(keys))
+		// Leave at least 512 KiB for status, alive/device metrics and the outer envelope.
+		encodedBudget := 1024
+		for _, key := range keys {
+			value := t.pendingSegments[key]
+			candidate := model.TrafficSegment{UserID: key.userID, Period: key.period, Upload: value[0], Download: value[1]}
+			encoded, _ := json.Marshal(candidate)
+			cost := len(encoded) + 1
+			if _, exists := traffic[key.userID]; !exists {
+				cost += 72
+			} // worst-case int64 aggregate key/directions
+			if len(segments) > 0 && encodedBudget+cost > 512<<10 {
+				break
+			}
+			encodedBudget += cost
+			sum := traffic[key.userID]
+			sum[0] += value[0]
+			sum[1] += value[1]
+			traffic[key.userID] = sum
+			segments = append(segments, model.TrafficSegment{UserID: key.userID, Period: key.period, Upload: value[0], Download: value[1]})
+			remaining := t.pendingTraffic[key.userID]
+			remaining[0] -= value[0]
+			remaining[1] -= value[1]
+			if remaining == [2]int64{} {
+				delete(t.pendingTraffic, key.userID)
+			} else {
+				t.pendingTraffic[key.userID] = remaining
+			}
+			delete(t.pendingSegments, key)
+		}
+		return traffic, segments
+	}
+	traffic := t.pendingTraffic
+	t.pendingTraffic = make(map[int][2]int64, len(traffic))
+	t.pendingSegments = make(map[trafficSegmentKey][2]int64)
+	return traffic, nil
+}
+
+// AdmissionPeriodMode validates the entire desired cohort, not just same UIDs.
+func AdmissionPeriodMode(users []model.UserSpec) (signed bool, mixed bool) {
+	legacy := false
+	for _, u := range users {
+		if u.TrafficPeriod == "" {
+			legacy = true
+		} else {
+			signed = true
+		}
+	}
+	return signed, legacy && signed
+}
+func (t *Tracker) PeriodModeChanged(users []model.UserSpec) bool {
+	if t == nil || len(users) == 0 {
+		return false
+	}
+	signed, mixed := AdmissionPeriodMode(users)
+	if mixed {
+		return true
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.activeModeKnown && t.activeSigned != signed {
+		return true
+	}
+	for key := range t.pendingSegments {
+		if (key.period != "") != signed {
+			return true
+		}
+	}
+	return false
+}
+
+func (t *Tracker) HasLegacyPending() bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for key, value := range t.pendingSegments {
+		if key.period == "" && (value[0] != 0 || value[1] != 0) {
+			return true
+		}
+	}
+	return false
+}
+
+func (t *Tracker) RestoreTraffic(data map[int][2]int64) { t.RestoreBatch(data, nil) }
+
+// RestoreBatch never looks at current bindings: failed immutable report bytes
+// retain their supplied period; nil is explicitly historical legacy semantics.
+func (t *Tracker) RestoreBatch(data map[int][2]int64, segments []model.TrafficSegment) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for uid, value := range data {
 		cur := t.pendingTraffic[uid]
-		cur[0] += d[0]
-		cur[1] += d[1]
+		cur[0] += value[0]
+		cur[1] += value[1]
 		t.pendingTraffic[uid] = cur
 	}
-	t.mu.Unlock()
+	if len(segments) == 0 {
+		for uid, value := range data {
+			key := trafficSegmentKey{userID: uid}
+			cur := t.pendingSegments[key]
+			cur[0] += value[0]
+			cur[1] += value[1]
+			t.pendingSegments[key] = cur
+		}
+		return
+	}
+	for _, segment := range segments {
+		key := trafficSegmentKey{userID: segment.UserID, period: segment.Period}
+		cur := t.pendingSegments[key]
+		cur[0] += segment.Upload
+		cur[1] += segment.Download
+		t.pendingSegments[key] = cur
+	}
 }
 
 // HasTraffic returns true if there is accumulated traffic to report.
@@ -358,4 +597,21 @@ func (t *Tracker) ProcessUsageV2Metrics(cumulative map[int][2]int64, alive map[i
 	}
 	t.live.Store(&snapshot{traffic: map[int][2]int64{}, aliveIPs: alive, online: online, connCount: connections, inSpeed: down, outSpeed: up})
 	return true
+}
+
+func (t *Tracker) HasPeriodAttribution() bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.activeModeKnown && t.activeSigned {
+		return true
+	}
+	for key := range t.pendingSegments {
+		if key.period != "" {
+			return true
+		}
+	}
+	return false
 }

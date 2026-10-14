@@ -228,7 +228,9 @@ func (s *Service) Run(ctx context.Context) error {
 			if s.usageMode() {
 				s.usageV2.tracker.StopBoundedUsageTraffic()
 			}
-			s.pushReportSync()
+			if err := s.pushReportSync(); err != nil {
+				return err
+			}
 			return nil
 
 		case <-s.usageFailureChannel():
@@ -346,7 +348,7 @@ func (s *Service) initialSetup(ctx context.Context) error {
 		return cause
 	}
 	if bootstrap.Config == nil {
-		if s.reporter.HasTerminalTail() {
+		if s.reporter.HasTerminalTail() || s.cfg.Panel.Provider == "txboard" && s.reporter.HasRecoveryBatch() {
 			return fmt.Errorf("NATIVE_AUTHORITY_RECOVERY_CONFIG_REQUIRED")
 		}
 		if bootstrap.Push != nil {
@@ -361,7 +363,7 @@ func (s *Service) initialSetup(ctx context.Context) error {
 		return err
 	}
 
-	if !s.cfg.UsageV2.Enabled && s.reporter.HasTerminalTail() {
+	if !s.cfg.UsageV2.Enabled && (s.reporter.HasTerminalTail() || s.cfg.Panel.Provider == "txboard" && s.reporter.HasRecoveryBatch()) {
 		if err := s.reporter.ReplayRecovery(); err != nil {
 			return fmt.Errorf("NATIVE_AUTHORITY_RECOVERY_FAILED: %w", err)
 		}

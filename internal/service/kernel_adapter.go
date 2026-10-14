@@ -6,6 +6,7 @@ import (
 
 	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/nlog"
+	"github.com/ANRCM0/TX-Node/internal/tracker"
 )
 
 // startKernel keeps Service-specific logging/limiter hooks outside the generic
@@ -15,12 +16,49 @@ func (s *Service) startKernel(config *model.NodeSpec, users []model.UserSpec) bo
 	if s == nil || s.kernelLife == nil || (s.syncer != nil && s.syncer.Terminal() != nil) {
 		return false
 	}
+	if !s.usageMode() && s.kernel.IsRunning() {
+		s.stopUncertainKernel()
+	}
+	if !s.usageMode() && s.tracker != nil && s.tracker.PeriodModeChanged(users) && s.cfg != nil && s.cfg.Panel.Provider == "txboard" {
+		// A legacy-to-signed upgrade cannot leave a mixed uncheckpointed cohort.
+		// Old immutable bodies are replayed as-is, then unsigned pending bytes get
+		// their own durable ID before new signed-period listeners are admitted.
+		if s.reporter != nil && s.reporter.HasRecoveryBatch() {
+			if err := s.reporter.ReplayRecovery(); err != nil {
+				s.markApplicationPending("LEGACY_PERIOD_DRAIN_REQUIRED")
+				return false
+			}
+		}
+		for s.tracker.HasTraffic() {
+			if s.reporter == nil || s.reporter.PushSyncRecoverable(s.prepareReportBatch, s.restoreUnsubmittedReport) != nil {
+				s.markApplicationPending("PERIOD_MODE_DRAIN_REQUIRED")
+				return false
+			}
+		}
+	}
+	if _, mixed := tracker.AdmissionPeriodMode(users); mixed {
+		s.stopUncertainKernel()
+		s.markApplicationPending("PERIOD_MODE_MIXED")
+		return false
+	}
+	var previousPeriods tracker.PeriodBindings
+	if !s.usageMode() && s.tracker != nil {
+		previousPeriods = s.tracker.BindPeriods(users)
+	}
 	s.observeBoundary("KERNEL_START_BEGIN", true)
 	if err := s.kernelLife.Start(config, users, s.certs.TLSCert()); err != nil {
+		if !s.usageMode() && s.tracker != nil {
+			s.tracker.RestorePeriodBindings(previousPeriods)
+		}
 		s.markApplicationPending("KERNEL_START_FAILED")
 		s.observeBoundary("KERNEL_START_FAILED", false)
 		nlog.Core().Error("failed to start kernel", "error", err)
 		return false
+	}
+	if !s.usageMode() && s.tracker != nil {
+		if lifecycle, ok := s.kernel.(interface{ ResetsCumulativeTrafficOnStart() bool }); ok && lifecycle.ResetsCumulativeTrafficOnStart() {
+			s.tracker.BeginCumulativeGeneration()
+		}
 	}
 	s.confirmAppliedState(config, users)
 	s.observeBoundary("KERNEL_START_OK", false)
@@ -99,6 +137,9 @@ func (s *Service) applyDesiredState(ctx context.Context) {
 		return
 	}
 	users := s.users.Users()
+	if s.kernel.IsRunning() && (len(users) == 0 || s.tracker != nil && (s.tracker.PeriodsChanged(users) || s.tracker.PeriodModeChanged(users))) {
+		s.stopUncertainKernel()
+	}
 	if len(users) == 0 {
 		if s.kernel.IsRunning() || s.appliedUserHash != computeUserHash(users) {
 			s.stopKernelObserved(true)

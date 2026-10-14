@@ -187,6 +187,9 @@ func (p *TXBoardControlPlane) Report(payload ReportPayload) error {
 		}
 		body["traffic_batch_id"] = payload.BatchID
 		body["traffic"] = payload.Traffic
+		if len(payload.TrafficSegments) > 0 {
+			body["traffic_segments"] = payload.TrafficSegments
+		}
 	}
 	if len(payload.Alive) > 0 {
 		body["alive"] = payload.Alive
