@@ -5,6 +5,7 @@ package machine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -26,6 +27,7 @@ type nodeHandle struct {
 	cancelCause context.CancelCauseFunc
 	done        chan struct{}
 	mailbox     *controlplane.NodeMailbox
+	result      chan error
 }
 
 // Orchestrator manages all nodes bound to a panel machine. It:
@@ -51,6 +53,7 @@ type Orchestrator struct {
 	wsMu     sync.RWMutex
 	ws       machineSocket
 	wsCancel context.CancelFunc
+	wsDone   chan struct{}
 
 	// Discovery may be triggered by both the ticker and an incoming WS event.
 	rediscoverMu sync.Mutex
@@ -188,7 +191,16 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			o.stopAll()
+			stopErr := o.stopAll()
+			if controlerror.IsRuntimeCheckpoint(context.Cause(ctx)) {
+				o.mu.Lock()
+				failed := len(o.failures) > 0
+				o.mu.Unlock()
+				if failed {
+					return errors.Join(stopErr, errors.New("NODE_RUNTIME_CHECKPOINT_CHILD_FAILED"))
+				}
+				return stopErr
+			}
 			if d, ok := controlerror.AsAuthorityDenial(context.Cause(ctx)); ok {
 				return d
 			}
@@ -233,8 +245,9 @@ func (o *Orchestrator) startNode(ctx context.Context, mn machineNode) {
 	nodeCtx, cancelCause := context.WithCancelCause(ctx)
 	cancel := func() { cancelCause(nil) }
 	done := make(chan struct{})
+	result := make(chan error, 1)
 	mb := controlplane.NewNodeMailbox()
-	o.nodes[mn.ID] = &nodeHandle{cancel: cancel, cancelCause: cancelCause, done: done, mailbox: mb}
+	o.nodes[mn.ID] = &nodeHandle{cancel: cancel, cancelCause: cancelCause, done: done, mailbox: mb, result: result}
 	o.mu.Unlock()
 
 	o.eventsMu.Lock()
@@ -288,7 +301,9 @@ func (o *Orchestrator) startNode(ctx context.Context, mn machineNode) {
 	go func() {
 		defer close(done)
 		defer o.unregisterNode(mn.ID)
-		if err := svc.Run(nodeCtx); err != nil {
+		err := svc.Run(nodeCtx)
+		result <- err
+		if err != nil {
 			o.signalAuthorityDenial(err)
 			o.recordFailure(mn.ID, err, startedAt)
 			return
@@ -401,7 +416,8 @@ func (o *Orchestrator) stopNodeCause(nodeID int, cause error) {
 	<-h.done
 }
 
-func (o *Orchestrator) stopAll() {
+func (o *Orchestrator) stopAll() error {
+	var failures []error
 	o.mu.Lock()
 	handles := make(map[int]*nodeHandle, len(o.nodes))
 	for id, h := range o.nodes {
@@ -419,11 +435,24 @@ func (o *Orchestrator) stopAll() {
 	}
 	for _, h := range handles {
 		<-h.done
+		if h.result != nil {
+			select {
+			case err := <-h.result:
+				if err != nil {
+					failures = append(failures, err)
+				}
+			default:
+			}
+		}
 	}
 
 	if o.wsCancel != nil {
 		o.wsCancel()
+		if o.wsDone != nil {
+			<-o.wsDone
+		}
 	}
+	return errors.Join(failures...)
 }
 
 // ─── Node discovery ──────────────────────────────────────────────────────
@@ -555,7 +584,9 @@ func (o *Orchestrator) tryStartWS(ctx context.Context) {
 	o.wsMu.Unlock()
 	wsCtx, wsCancel := context.WithCancel(ctx)
 	o.wsCancel = wsCancel
-	go ws.Run(wsCtx)
+	done := make(chan struct{})
+	o.wsDone = done
+	go func() { defer close(done); ws.Run(wsCtx) }()
 
 	nlog.Core().Info("machine: ws mux started")
 }

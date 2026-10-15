@@ -70,6 +70,7 @@ type Service struct {
 	usageV2                  *isolatedUsageRuntime
 	usageOwner               *usagebucket.ProcessOwner
 	authorization            *authorization.Manager
+	authorizationWorkers     sync.WaitGroup
 	authorizationResults     chan authorizationResult
 	authorizationRefresh     atomic.Bool
 	authorizationFullPending atomic.Bool
@@ -240,6 +241,9 @@ func (s *Service) Run(ctx context.Context) error {
 			return s.stopForAuthorityDenial(err)
 		}
 		if cause := context.Cause(ctx); cause != nil {
+			if controlerror.IsRuntimeCheckpoint(cause) {
+				return s.stopForRuntimeCheckpoint()
+			}
 			if controlerror.IsAuthoritativeStopCause(cause) {
 				return s.stopForAuthorityDenial(cause)
 			}
@@ -262,6 +266,9 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 		case <-ctx.Done():
 			if cause := context.Cause(ctx); cause != nil {
+				if controlerror.IsRuntimeCheckpoint(cause) {
+					return s.stopForRuntimeCheckpoint()
+				}
 				if controlerror.IsAuthoritativeStopCause(cause) {
 					return s.stopForAuthorityDenial(cause)
 				}
@@ -392,6 +399,9 @@ func (s *Service) initialSetup(ctx context.Context) error {
 		s.machineMailboxCh = s.machineMailbox.NotifyCh()
 	}
 	if cause := context.Cause(ctx); cause != nil {
+		if controlerror.IsRuntimeCheckpoint(cause) {
+			return s.stopForRuntimeCheckpoint()
+		}
 		return cause
 	}
 	if bootstrap.Config == nil {

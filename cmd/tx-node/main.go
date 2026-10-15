@@ -16,6 +16,7 @@ import (
 
 	"github.com/ANRCM0/TX-Node/internal/buildinfo"
 	"github.com/ANRCM0/TX-Node/internal/config"
+	"github.com/ANRCM0/TX-Node/internal/controlerror"
 	"github.com/ANRCM0/TX-Node/internal/machine"
 	"github.com/ANRCM0/TX-Node/internal/nlog"
 	"github.com/ANRCM0/TX-Node/internal/service"
@@ -30,6 +31,7 @@ func main() {
 	requestedConfigPath := flag.String("c", "config.yml", "config file path")
 	showVersion := flag.Bool("v", false, "show version")
 	showCapabilities := flag.Bool("capabilities", false, "print runtime capabilities without starting services")
+	showBackupLayout := flag.Bool("backup-layout", false, "print supported private-free backup layout without starting services")
 	flag.Parse()
 	if *showCapabilities {
 		if err := writeRuntimeCapabilities(os.Stdout); err != nil {
@@ -46,14 +48,29 @@ func main() {
 	configPath := resolveConfigPath(*requestedConfigPath)
 	rootCfg, err := config.LoadRoot(configPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
+		if *showBackupLayout {
+			fmt.Fprintln(os.Stderr, "NODE_BACKUP_LAYOUT_INVALID_CONFIG")
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to load config: %v\n", err)
+		}
 		os.Exit(1)
 	}
 
 	instances, err := rootCfg.NormalizeInstances()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to normalize config: %v\n", err)
+		if *showBackupLayout {
+			fmt.Fprintln(os.Stderr, "NODE_BACKUP_LAYOUT_INVALID_CONFIG")
+		} else {
+			fmt.Fprintf(os.Stderr, "failed to normalize config: %v\n", err)
+		}
 		os.Exit(1)
+	}
+	if *showBackupLayout {
+		if err := writeBackupLayout(os.Stdout, rootCfg); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
 	}
 	config.InitLogger(instances[0].Log)
 
@@ -141,10 +158,16 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 	}()
 
 	for root := initialRoot; ; {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancelCause := context.WithCancelCause(context.Background())
+		cancel := func() { cancelCause(nil) }
 
+		_, checkpointLayoutError := makeBackupLayout(root)
+		errChSignal := make(chan error, 1)
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		if sig := checkpointSignal(); sig != nil {
+			signal.Notify(sigCh, sig)
+		}
 
 		reloadCh := make(chan *config.RootConfig, 1)
 
@@ -162,7 +185,15 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 			select {
 			case sig := <-sigCh:
 				nlog.Core().Info(fmt.Sprintf("received %v, shutting down...", sig))
-				cancel()
+				if sig == checkpointSignal() {
+					if checkpointLayoutError != nil {
+						cancelOnServiceError(errChSignal, cancel, checkpointLayoutError)
+					} else {
+						cancelCause(controlerror.RuntimeCheckpoint)
+					}
+				} else {
+					cancel()
+				}
 
 				select {
 				case sig = <-sigCh:
@@ -194,7 +225,7 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 			startHealth(instances[0].HealthPort)
 		}
 
-		errCh := make(chan error, 1)
+		errCh := errChSignal
 		doneCh := make(chan struct{})
 		var wg sync.WaitGroup
 		for _, instanceCfg := range instances {
@@ -253,6 +284,9 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 		var newRoot *config.RootConfig
 		select {
 		case newRoot = <-reloadCh:
+			if controlerror.IsRuntimeCheckpoint(context.Cause(ctx)) {
+				newRoot = nil
+			}
 			nlog.Core().Info("config changed, restarting all services...")
 			cancel()
 			<-doneCh
@@ -265,9 +299,21 @@ func runWithReload(initialRoot *config.RootConfig, configPath string) {
 		}
 
 		if newRoot == nil {
-			close(errCh)
-			if err := <-errCh; err != nil {
-				os.Exit(1)
+			select {
+			case err := <-errCh:
+				if err != nil {
+					os.Exit(1)
+				}
+			default:
+			}
+			if controlerror.IsRuntimeCheckpoint(context.Cause(ctx)) {
+				if healthSrv != nil {
+					healthSrv.Close()
+				}
+				if err := writeCheckpointReceipt(); err != nil {
+					nlog.Core().Error("runtime checkpoint receipt failed", "error", err)
+					os.Exit(1)
+				}
 			}
 			nlog.Core().Info("stopped")
 			return

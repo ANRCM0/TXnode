@@ -146,7 +146,9 @@ func (s *Service) requestAuthorizationSnapshot(ctx context.Context, full bool) {
 	source := s.source.(authorizationSource)
 	s.latchCertificateRenewal()
 	certChanged := s.pendingCertRenewal
+	s.authorizationWorkers.Add(1)
 	go func() {
+		defer s.authorizationWorkers.Done()
 		var snapshot controlplane.Snapshot
 		var err error
 		if full {
@@ -213,6 +215,7 @@ func (s *Service) refuseAuthorization(err error) {
 	}
 }
 func (s *Service) closeAuthorization() {
+	s.authorizationWorkers.Wait()
 	if s.authorization != nil {
 		s.authorizationAdmissionMu.Lock()
 		s.authorizationExpired.Store(true)

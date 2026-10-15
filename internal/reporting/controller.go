@@ -506,3 +506,21 @@ func (c *Controller) HasRecoveryBatch() bool {
 	defer c.pendingMu.Unlock()
 	return c.pending != nil || c.terminal != nil
 }
+
+// JoinCheckpoint waits only for an already-admitted asynchronous report. After
+// CheckpointTerminal admission is closed permanently, so no replacement worker
+// can start. This prevents late ACK/removal writes after a backup receipt.
+func (c *Controller) JoinCheckpoint() {
+	if c == nil {
+		return
+	}
+	c.pendingMu.Lock()
+	closed := c.admissionClosed
+	c.pendingMu.Unlock()
+	if !closed {
+		return
+	}
+	for c.active.Load() {
+		time.Sleep(time.Millisecond)
+	}
+}

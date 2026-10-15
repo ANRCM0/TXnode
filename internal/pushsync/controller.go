@@ -17,8 +17,8 @@ const (
 )
 
 type DiscoveryResult struct {
-	Checked   bool
-	NeedsPoll bool
+	Checked    bool
+	NeedsPoll  bool
 	Transition Transition
 }
 
@@ -40,6 +40,7 @@ type Controller struct {
 	mu             sync.RWMutex
 	client         controlplane.PushClient
 	cancel         context.CancelFunc
+	done           chan struct{}
 	disconnectedAt time.Time
 }
 
@@ -105,9 +106,11 @@ func (c *Controller) Start(ctx context.Context) bool {
 	client := c.client
 	runCtx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
+	done := make(chan struct{})
+	c.done = done
 	c.mu.Unlock()
 
-	go client.Run(runCtx)
+	go func() { defer close(done); client.Run(runCtx) }()
 	return true
 }
 
@@ -121,11 +124,16 @@ func (c *Controller) Stop() {
 
 	c.mu.Lock()
 	cancel := c.cancel
+	done := c.done
 	c.cancel = nil
+	c.done = nil
 	c.mu.Unlock()
 
 	if cancel != nil {
 		cancel()
+		if done != nil {
+			<-done
+		}
 	}
 }
 
@@ -218,8 +226,8 @@ func (c *Controller) Discover(
 	}
 
 	result := DiscoveryResult{
-		Checked:   true,
-		NeedsPoll: c.source.SupportsPolling(),
+		Checked:    true,
+		NeedsPoll:  c.source.SupportsPolling(),
 		Transition: TransitionNone,
 	}
 
