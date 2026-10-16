@@ -131,8 +131,6 @@ func TestNativePersistedCutoffRequiresValidDurableReceiptBeforeRefusal(t *testin
 			switch failure {
 			case "invalid receipt":
 				receipt.PayloadDigest = "sha256:broken"
-			case "durability failure":
-				spool.syncFile = func(*os.File) error { return errors.New("synthetic receipt fsync failure") }
 			case "other quarantine":
 				receipt.ReasonCode = "USAGE_GRANT_OWNERSHIP_OR_COVERAGE"
 			case "pending cutoff":
@@ -144,6 +142,9 @@ func TestNativePersistedCutoffRequiresValidDurableReceiptBeforeRefusal(t *testin
 			reporter, err := NewReporter(s, spool, transport)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if failure == "durability failure" {
+				spool.syncFile = func(*os.File) error { return errors.New("synthetic receipt fsync failure") }
 			}
 			refusals := 0
 			err = reporter.DeliverNativePage(context.Background(), 16, func(Record) { refusals++ })
