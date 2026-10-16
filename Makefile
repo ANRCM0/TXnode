@@ -23,8 +23,7 @@ build-all: build-linux build-linux-arm64
 
 # Run tests
 test:
-	go test -v -race -count=1 ./internal/...
-	go test ./cmd/tx-node
+	go test -race -count=1 ./internal/... ./cmd/...
 
 # Re-run the extracted runtime-controller suites under the race detector with
 # randomized test order. This is intentionally focused: it guards the lifecycle
