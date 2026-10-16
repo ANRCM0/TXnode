@@ -30,6 +30,7 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/pushsync"
 	"github.com/ANRCM0/TX-Node/internal/reporting"
 	"github.com/ANRCM0/TX-Node/internal/tracker"
+	"github.com/ANRCM0/TX-Node/internal/usagebucket"
 	"github.com/ANRCM0/TX-Node/internal/usageobserver"
 	"github.com/ANRCM0/TX-Node/internal/userstate"
 )
