@@ -130,6 +130,17 @@ func (p *TXBoardControlPlane) Initial(ctx context.Context, metricsFn func() map[
 		b.UsageV2Transport = transport
 		b.UsageV2NativeHTTP = true
 	}
+	if p.authorization != nil && p.authorization.Config().PolicyVersion == config.NativeProviderUsagePolicyVersion {
+		if snapshot.Authorization == nil || snapshot.Authorization.Payload.UsageV2 == nil {
+			return Bootstrap{}, errors.New("NATIVE_USAGE_SIGNED_SESSION_REQUIRED")
+		}
+		b.UsageV2Session = snapshot.Authorization.Payload.UsageV2
+		b.UsageV2Transport, err = p.client.NativeUsageTransport(b.UsageV2Session)
+		if err != nil {
+			return Bootstrap{}, err
+		}
+		b.UsageV2NativeHTTP = true
+	}
 	if p.machine {
 		b.Push = p.sharedPush
 		if p.sharedPush != nil && p.register != nil {
@@ -301,6 +312,13 @@ func (p *TXBoardControlPlane) PrepareIsolatedUsageV2(caFile string) error {
 	}
 	p.isolatedUsageV2 = true
 	return nil
+}
+
+func (p *TXBoardControlPlane) PrepareNativeUsageV2(caFile string) error {
+	if p == nil || p.client == nil {
+		return errors.New("NATIVE_USAGE_TRANSPORT_REQUIRED")
+	}
+	return p.client.PrepareIsolatedUsageV2TLS(caFile)
 }
 
 // ConfigureAuthorization supplies per-child durable authority after Machine expansion.

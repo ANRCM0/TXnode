@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 type Transport interface {
@@ -20,6 +22,8 @@ type Reporter struct {
 	// A failed write retains the same ID in memory until its durability can be
 	// retried; accepting fresh counter intervals in that state would risk loss.
 	unconfirmed *Record
+	cursor      string
+	quarantined atomic.Int64
 }
 
 func NewReporter(session Session, spool *Spool, transport Transport) (*Reporter, error) {
@@ -52,7 +56,13 @@ func NewReporter(session Session, spool *Spool, transport Transport) (*Reporter,
 	if err := spool.BindSession(copySession); err != nil {
 		return nil, err
 	}
-	return &Reporter{session: copySession, spool: spool, transport: transport}, nil
+	reporter := &Reporter{session: copySession, spool: spool, transport: transport}
+	for _, record := range records {
+		if nativeQuarantined(record) {
+			reporter.quarantined.Add(1)
+		}
+	}
+	return reporter, nil
 }
 
 // Capture transfers ownership of already bounded counters to the reporter.
@@ -112,6 +122,9 @@ func (r *Reporter) Deliver(ctx context.Context) error {
 		return err
 	}
 	for _, record := range records {
+		if record.LocalQuarantine != nil {
+			return ErrRecoveryRequired
+		}
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -139,4 +152,101 @@ func (r *Reporter) Deliver(ctx context.Context) error {
 	return nil
 }
 
-func (r *Reporter) Close() error { return r.spool.Close() }
+func (r *Reporter) Close() error                  { return r.spool.Close() }
+func (r *Reporter) NativeQuarantinedCount() int64 { return r.quarantined.Load() }
+
+// DeliverPage bounds recovery work while advancing through retained records.
+// A slow first batch cannot starve newer durable batches on every retry.
+func (r *Reporter) DeliverPage(ctx context.Context, limit int) error {
+	return r.deliverPage(ctx, limit, false, nil)
+}
+
+// DeliverNativePage preserves original authorization evidence and durable Core
+// quarantine receipts. Older 422 refusals retain their local marker until a
+// query discovers a real receipt; neither capture is rewritten or resubmitted.
+func (r *Reporter) DeliverNativePage(ctx context.Context, limit int, refused func(Record)) error {
+	return r.deliverPage(ctx, limit, true, refused)
+}
+
+func (r *Reporter) deliverPage(ctx context.Context, limit int, native bool, refused func(Record)) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if limit < 1 || limit > 128 || r.unconfirmed != nil {
+		return ErrRecoveryRequired
+	}
+	records, err := r.spool.Records()
+	if err != nil {
+		return err
+	}
+	start := 0
+	for i, record := range records {
+		if recordName(record) == r.cursor {
+			start = i + 1
+			break
+		}
+	}
+	if start >= len(records) {
+		start = 0
+	}
+	for i := 0; i < len(records) && i < limit; i++ {
+		record := records[(start+i)%len(records)]
+		if record.LocalQuarantine != nil && !native {
+			return ErrRecoveryRequired
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		receipt, found, err := r.transport.Get(ctx, record.Submission.Query())
+		if err != nil {
+			return err
+		}
+		if !found {
+			if record.Receipt != nil {
+				return ErrRecoveryRequired
+			}
+			if record.LocalQuarantine != nil {
+				if refused != nil {
+					refused(record)
+				}
+				r.cursor = recordName(record)
+				continue
+			}
+			receipt, err = r.transport.Submit(ctx, record.Submission)
+			if err != nil {
+				var response *HTTPError
+				if native && errors.As(err, &response) && response.Status == 422 && response.Code == NativeCutoffCode {
+					record.LocalQuarantine = &LocalQuarantine{Reason: NativeCutoffCode, HTTPStatus: 422,
+						ObservedAt: time.Now().Unix(), CaptureDigest: immutableCaptureDigest(record)}
+					if err := r.spool.Save(record); err != nil {
+						return err
+					}
+					r.quarantined.Add(1)
+					if refused != nil {
+						refused(record)
+					}
+					r.cursor = recordName(record)
+					continue
+				}
+				return err
+			}
+		}
+		if err := receipt.Validate(record.Session, record.Submission); err != nil {
+			return err
+		}
+		wasQuarantined := nativeQuarantined(record)
+		record.Receipt = &receipt
+		if err := r.spool.Save(record); err != nil {
+			return err
+		}
+		if quarantined := nativeQuarantined(record); quarantined && !wasQuarantined {
+			r.quarantined.Add(1)
+		} else if !quarantined && wasQuarantined {
+			r.quarantined.Add(-1)
+		}
+		if native && nativeCutoffReceipt(record.Receipt) && refused != nil {
+			refused(record)
+		}
+		r.cursor = recordName(record)
+	}
+	return nil
+}

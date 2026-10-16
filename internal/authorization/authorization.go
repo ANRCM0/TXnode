@@ -23,6 +23,7 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/config"
 	"github.com/ANRCM0/TX-Node/internal/credentialdelivery"
 	"github.com/ANRCM0/TX-Node/internal/panel"
+	"github.com/ANRCM0/TX-Node/internal/usagev2"
 )
 
 const Audience = "tx-node-native-authorization-v1"
@@ -60,6 +61,7 @@ type Payload struct {
 	Complete        bool                                `json:"complete"`
 	Users           []panel.User                        `json:"users"`
 	Provider        *credentialdelivery.ProviderBinding `json:"provider,omitempty"`
+	UsageV2         *usagev2.Session                    `json:"usage_v2,omitempty"`
 }
 
 // Snapshot metadata is copied at acceptance. The verified envelope remains
@@ -108,7 +110,7 @@ var keyIDRE = regexp.MustCompile(`\A[A-Za-z0-9_-]{1,64}\z`)
 var instanceRE = regexp.MustCompile(`\A[A-Za-z0-9:_-]{8,80}\z`)
 
 func NewManager(cfg config.AuthorizationConfig, target Target) (*Manager, error) {
-	if target.NodeID <= 0 || target.MachineID != nil && *target.MachineID <= 0 || cfg.StateDir == "" || !filepath.IsAbs(cfg.StateDir) || !instanceRE.MatchString(cfg.CoreInstanceID) || !keyIDRE.MatchString(cfg.KeyID) || !positiveDecimal(cfg.KeyEpoch) || cfg.PolicyVersion != config.NativeAuthorizationPolicyVersion && cfg.PolicyVersion != config.NativeProviderAuthorizationPolicyVersion || cfg.MaxClockSkew < 0 || cfg.MaxClockSkew > 30 {
+	if target.NodeID <= 0 || target.MachineID != nil && *target.MachineID <= 0 || cfg.StateDir == "" || !filepath.IsAbs(cfg.StateDir) || !instanceRE.MatchString(cfg.CoreInstanceID) || !keyIDRE.MatchString(cfg.KeyID) || !positiveDecimal(cfg.KeyEpoch) || cfg.PolicyVersion != config.NativeAuthorizationPolicyVersion && !config.ProviderAuthorizationPolicy(cfg.PolicyVersion) || cfg.MaxClockSkew < 0 || cfg.MaxClockSkew > 30 {
 		return nil, refuse("CONFIGURATION_INVALID")
 	}
 	if err := cfg.ValidateProvider(); err != nil {
@@ -245,6 +247,13 @@ func (m *Manager) AcceptVerifiedForProtocol(candidate *Snapshot, protocol string
 	return m.acceptVerified(candidate, &protocol, now)
 }
 
+func (m *Manager) VerifyCandidate(candidate *Snapshot, now time.Time) (*Snapshot, error) {
+	if candidate == nil {
+		return nil, refuse("SNAPSHOT_REQUIRED")
+	}
+	return m.Verify(candidate.envelope, candidate.Users, now)
+}
+
 func (m *Manager) acceptVerified(candidate *Snapshot, protocol *string, now time.Time) (*Snapshot, error) {
 	if candidate == nil {
 		return nil, refuse("SNAPSHOT_REQUIRED")
@@ -288,8 +297,12 @@ func (m *Manager) acceptVerified(candidate *Snapshot, protocol *string, now time
 }
 
 func Verify(env Envelope, outerUsers []panel.User, trust Trust, target Target, policy string, now time.Time, skew int) (*Snapshot, error) {
-	if policy == config.NativeProviderAuthorizationPolicyVersion {
-		return verifyProviderSnapshot(env, outerUsers, trust, target, now, skew)
+	if config.ProviderAuthorizationPolicy(policy) {
+		snapshot, err := verifyProviderSnapshot(env, outerUsers, trust, target, now, skew)
+		if err == nil && snapshot.Payload.PolicyVersion != policy {
+			return nil, refuse("POLICY_MISMATCH")
+		}
+		return snapshot, err
 	}
 	if policy != config.NativeAuthorizationPolicyVersion || skew < 0 || skew > 30 || target.NodeID <= 0 || trust.ProtocolVersion != 1 || trust.Algorithm != "Ed25519" {
 		return nil, refuse("INVALID")
@@ -422,6 +435,7 @@ func cloneSnapshot(s *Snapshot) *Snapshot {
 		out.Payload.Provider = &provider
 	}
 	out.PayloadBytes = append([]byte(nil), s.PayloadBytes...)
+	out.Payload.UsageV2 = cloneUsageSession(s.Payload.UsageV2)
 	return &out
 }
 func compareDecimal(a, b string) int {

@@ -138,7 +138,7 @@ func (s *SingBox) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 		return err
 	}
 	cfgMap := buildConfig(s.cfg, nodeConfig, users, tls)
-	if s.boundedPrepared != nil {
+	if s.boundedPrepared != nil && !s.boundedPrepared.nativeUsage {
 		if err := isolateBoundedListeners(cfgMap); err != nil {
 			return err
 		}

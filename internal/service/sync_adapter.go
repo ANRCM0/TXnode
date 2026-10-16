@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"github.com/ANRCM0/TX-Node/internal/controlplane"
 	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/nlog"
 	"github.com/ANRCM0/TX-Node/internal/nodesync"
@@ -69,6 +70,13 @@ func (s *Service) acceptDesiredConfig(ctx context.Context, node *model.NodeSpec)
 }
 func (s *Service) applySyncResult(ctx context.Context, result nodesync.Result) {
 	if result.Terminal != nil || s.authorityTerminal(ctx) {
+		return
+	}
+	if s.nativeUsageMode() {
+		if err := s.applyNativeAuthorization(ctx, controlplane.Snapshot{Config: result.Config, Users: result.Users,
+			Authorization: result.Authorization}, result.CertChanged); err != nil {
+			s.refuseAuthorization(err)
+		}
 		return
 	}
 	if s.usageMode() && (result.CertChanged || result.Config != nil && result.ConfigHash != s.lastConfigHash || result.Users != nil && result.UserHash != s.users.Hash()) {

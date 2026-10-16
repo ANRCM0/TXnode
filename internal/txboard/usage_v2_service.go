@@ -50,3 +50,12 @@ func (c *Client) ServiceUsageV2(hs *Handshake) (*usagev2.Session, usagev2.Transp
 	}
 	return &session, transport, nil
 }
+
+// NativeUsageTransport receives the Session only from the verified v2 signed
+// authorization; an unrelated handshake mapping is never used for billing.
+func (c *Client) NativeUsageTransport(session *usagev2.Session) (usagev2.Transport, error) {
+	if c == nil || session == nil || session.Validate() != nil || session.NodeID != strconv.Itoa(c.nodeID) {
+		return nil, errors.New("NATIVE_USAGE_SESSION_INVALID")
+	}
+	return usagev2.NewHTTPTransport(c.baseURL, c.token, session.NodeID, c.machineID, c.http)
+}

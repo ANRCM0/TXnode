@@ -367,7 +367,7 @@ func (rc *RootConfig) validateRoot() error {
 	}
 	if len(rc.Instances) > 1 {
 		for _, instance := range rc.Instances {
-			if instance.UsageV2.Enabled {
+			if instance.UsageV2.Enabled && instance.Authorization.PolicyVersion != NativeProviderUsagePolicyVersion {
 				return fmt.Errorf("USAGE_V2_SINGLE_SERVICE_REQUIRED")
 			}
 		}

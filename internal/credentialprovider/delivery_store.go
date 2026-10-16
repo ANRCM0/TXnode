@@ -92,7 +92,7 @@ func readDeliverySubject(tx *bolt.Tx, ref string) (*privateSubject, error) {
 
 func verifyIssueEvidence(subject *privateSubject, record storedOperation, receipt IssueResult) error {
 	if subject.Issue == nil || *subject.Issue != receipt ||
-		record.Operation != "issue" || record.Status != "succeeded" ||
+		(record.Operation != "issue" && record.Operation != "rotate") || record.Status != "succeeded" ||
 		subject.AccessSubjectID != receipt.AccessSubjectID || subject.ProviderSubjectRef != receipt.ProviderSubjectRef ||
 		subject.ProfileID != receipt.CredentialProfileID ||
 		!positiveDecimal(subject.SubscriptionID) || !positiveDecimal(subject.TermsID) || !positiveDecimal(subject.ExpectedVersion) {
@@ -135,20 +135,13 @@ func (s *Store) liveCredential(tx *bolt.Tx, binding credentialdelivery.MetadataS
 		subject.TermsID != binding.TermsID || subject.ProfileID != binding.CredentialProfileID {
 		return nil, "", errDeliveryState
 	}
-	opID := tx.Bucket(issueEvidenceBucket).Get([]byte(binding.ProviderSubjectRef))
-	if !operationPattern.Match(opID) {
+	if s.currentEvidence(tx, subject) != nil || subject.Issue.CredentialRef != binding.CredentialRef ||
+		subject.Issue.CredentialGeneration != binding.CredentialGeneration {
 		return nil, "", errDeliveryState
 	}
-	record, err := decodeStoredOperation(tx.Bucket(operationsBucket).Get(opID))
-	var receipt IssueResult
-	if err != nil || string(tx.Bucket(keysBucket).Get([]byte(record.IdempotencyKey))) != string(opID) ||
-		json.Unmarshal(record.Result, &receipt) != nil || verifyIssueEvidence(subject, record, receipt) != nil ||
-		receipt.CredentialRef != binding.CredentialRef || receipt.CredentialGeneration != binding.CredentialGeneration {
-		return nil, "", errDeliveryState
-	}
+	receipt := *subject.Issue
 	// Bind private ownership and terms to the original canonical mutation hash.
-	if !issueHashMatches(subject, record, receipt, s.providerID, s.epoch) ||
-		subject.RevocationFactVersion != "" || receipt.NotBeforeAt > now.Unix() ||
+	if subject.RevocationFactVersion != "" || receipt.NotBeforeAt > now.Unix() ||
 		receipt.CredentialExpiresAt <= now.Unix() {
 		return nil, "", errDeliveryState
 	}

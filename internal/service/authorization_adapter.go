@@ -81,7 +81,7 @@ func (s *Service) acceptAuthorization(snapshot *authorization.Snapshot, users []
 	// Withdraw the prior cohort before a changed snapshot can extend the
 	// authority deadline. The final meter retains its old period bindings.
 	if s.kernel.IsRunning() && (nodesync.UserHash(users) != s.users.Hash() ||
-		s.authorization.Config().PolicyVersion == config.NativeProviderAuthorizationPolicyVersion &&
+		config.ProviderAuthorizationPolicy(s.authorization.Config().PolicyVersion) &&
 			(s.lastConfig == nil || s.lastConfig.Protocol != protocol)) {
 		s.stopUncertainKernel()
 	}
@@ -189,6 +189,9 @@ func (s *Service) applyAuthorizationResult(ctx context.Context, result authoriza
 	}
 	if s.authorityTerminal(ctx) {
 		return context.Cause(ctx)
+	}
+	if s.nativeUsageMode() {
+		return s.applyNativeAuthorization(ctx, result.snapshot, result.certChanged)
 	}
 	s.applySyncResult(ctx, nodesync.Result{Config: result.snapshot.Config, Users: result.snapshot.Users,
 		UserHash: computeUserHash(result.snapshot.Users), Authorization: result.snapshot.Authorization, CertChanged: result.certChanged})

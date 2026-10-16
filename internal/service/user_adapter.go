@@ -82,6 +82,12 @@ func (s *Service) logUserRemovalProbe(removed []int, src userStateSource) {
 // Desired state stays authoritative after failed kernel mutation. Applied hashes
 // advance only after the entire operation succeeds; uncertain revocation stops.
 func (s *Service) applyUserUpdate(ctx context.Context, users []model.UserSpec, newHash string, src userStateSource) {
+	if s.nativeUsageMode() {
+		if !s.signedUsersAllowed(users) {
+			s.failNativeUsage()
+		}
+		return
+	}
 	if !s.signedUsersAllowed(users) {
 		return
 	}

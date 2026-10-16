@@ -237,6 +237,9 @@ func TestC1StoreBackfillIsAtomicIdempotentAndPreservesRecords(t *testing.T) {
 		if err := tx.DeleteBucket(issueEvidenceBucket); err != nil {
 			return err
 		}
+		if err := emulateC1GenerationStore(tx); err != nil {
+			return err
+		}
 		return tx.Bucket(metadataBucket).Delete([]byte("issue_evidence_version"))
 	}); err != nil {
 		t.Fatal(err)
@@ -271,6 +274,9 @@ func TestC1BackfillRejectsDamagedEvidenceWithoutPartialMigration(t *testing.T) {
 					return err
 				}
 				if err := tx.Bucket(metadataBucket).Delete([]byte("issue_evidence_version")); err != nil {
+					return err
+				}
+				if err := emulateC1GenerationStore(tx); err != nil {
 					return err
 				}
 				operations := tx.Bucket(operationsBucket)
@@ -312,13 +318,61 @@ func TestC1BackfillRejectsDamagedEvidenceWithoutPartialMigration(t *testing.T) {
 			}
 			defer db.Close()
 			db.View(func(tx *bolt.Tx) error {
-				if tx.Bucket(issueEvidenceBucket) != nil || tx.Bucket(metadataBucket).Get([]byte("issue_evidence_version")) != nil {
+				if tx.Bucket(issueEvidenceBucket) != nil || tx.Bucket(metadataBucket).Get([]byte("issue_evidence_version")) != nil ||
+					tx.Bucket(generationEvidenceBucket) != nil ||
+					tx.Bucket(metadataBucket).Get([]byte("credential_evidence_version")) != nil ||
+					string(tx.Bucket(metadataBucket).Get([]byte("identity"))) != "native-provider-store/1:provider-a:1" {
 					t.Error("failed migration left partial index or marker")
 				}
 				return nil
 			})
 		})
 	}
+}
+
+func TestStore2UpgradeRevalidatesExistingStore1IssuanceIndex(t *testing.T) {
+	store, path := testStore(t)
+	receipt := issueForDelivery(t, store)
+	if err := store.db.Update(func(tx *bolt.Tx) error {
+		if err := emulateC1GenerationStore(tx); err != nil {
+			return err
+		}
+		return tx.Bucket(issueEvidenceBucket).Delete([]byte(receipt.ProviderSubjectRef))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store.Close()
+	upgraded, err := OpenStore(path, "provider-a", "1")
+	if err == nil {
+		upgraded.Close()
+		t.Fatal("previous index marker hid an unindexed issued Subject")
+	}
+	db, err := bolt.Open(path, 0600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.View(func(tx *bolt.Tx) error {
+		if tx.Bucket(generationEvidenceBucket) != nil ||
+			tx.Bucket(metadataBucket).Get([]byte("credential_evidence_version")) != nil ||
+			string(tx.Bucket(metadataBucket).Get([]byte("identity"))) != "native-provider-store/1:provider-a:1" {
+			t.Error("failed generation upgrade changed old store version")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func emulateC1GenerationStore(tx *bolt.Tx) error {
+	if err := tx.DeleteBucket(generationEvidenceBucket); err != nil {
+		return err
+	}
+	metadata := tx.Bucket(metadataBucket)
+	if err := metadata.Delete([]byte("credential_evidence_version")); err != nil {
+		return err
+	}
+	return metadata.Put([]byte("identity"), []byte("native-provider-store/1:provider-a:1"))
 }
 
 func TestRealTLSDeliverySeparatesRolesAndRejectsStaleGrant(t *testing.T) {

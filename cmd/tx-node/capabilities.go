@@ -14,7 +14,7 @@ import (
 func writeRuntimeCapabilities(output io.Writer) error {
 	capabilities := []string{}
 	if runtime.GOOS == "linux" {
-		capabilities = append(capabilities, "node_authorization_snapshot_v1", "node_runtime_checkpoint_v1", "node_provider_credential_delivery_v1")
+		capabilities = append(capabilities, "node_authorization_snapshot_v1", "node_runtime_checkpoint_v1", "node_provider_credential_delivery_v1", "node_native_subscription_usage_v1")
 	}
 	return json.NewEncoder(output).Encode(struct {
 		ProtocolVersion int      `json:"protocol_version"`

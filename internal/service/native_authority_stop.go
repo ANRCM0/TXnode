@@ -11,6 +11,11 @@ import (
 // before sampling the final meter. The original typed cause stays distinguishable.
 // Checkpoint's prepare callback executes only after report admission is closed.
 func (s *Service) stopForAuthorityDenial(denial error) error {
+	if s.nativeUsageMode() {
+		s.stopNativeUsageIO()
+		s.stopKernelObserved(false)
+		return denial
+	}
 	if s.usageMode() {
 		s.failUsageV2()
 		s.stopKernelObserved(false)

@@ -38,13 +38,21 @@ type isolatedUsageRuntime struct {
 	workerStarted bool
 }
 
-func (s *Service) usageMode() bool { return s != nil && s.usageV2 != nil }
+func (s *Service) usageMode() bool        { return s != nil && s.usageV2 != nil }
+func (s *Service) meteredUsageMode() bool { return s.usageMode() || s.nativeUsageMode() }
 func (s *Service) preflightUsageV2() error {
 	if s.cfg == nil || !s.cfg.UsageV2.Enabled {
 		return nil
 	}
 	if s.cfg.ValidateUsageV2() != nil {
 		return errUsageV2
+	}
+	if s.nativeUsageConfigured() {
+		prepare, ok := s.source.(interface{ PrepareNativeUsageV2(string) error })
+		if !ok || prepare.PrepareNativeUsageV2(s.cfg.UsageV2.CAFile) != nil {
+			return errUsageV2
+		}
+		return nil
 	}
 	prepare, supported := s.source.(usageV2TransportSetup)
 	if !supported {
@@ -65,6 +73,9 @@ func (s *Service) preflightUsageV2() error {
 func (s *Service) initUsageV2(ctx context.Context, b controlplane.Bootstrap) error {
 	if !s.cfg.UsageV2.Enabled {
 		return nil
+	}
+	if s.nativeUsageConfigured() {
+		return s.initNativeUsage(ctx, b)
 	}
 	if b.UsageV2Session == nil || b.UsageV2Transport == nil || !b.UsageV2NativeHTTP || b.Push != nil || b.Mailbox != nil || len(b.Users) == 0 {
 		return errUsageV2
@@ -133,6 +144,10 @@ func (s *Service) initUsageV2(ctx context.Context, b controlplane.Bootstrap) err
 }
 
 func (s *Service) startUsageV2Worker() {
+	if s.nativeUsageMode() {
+		s.startNativeUsageWorker()
+		return
+	}
 	if !s.usageMode() {
 		return
 	}
@@ -179,6 +194,10 @@ func (s *Service) startUsageV2Worker() {
 }
 
 func (s *Service) failUsageV2() {
+	if s.nativeUsageMode() {
+		s.failNativeUsage()
+		return
+	}
 	if !s.usageMode() {
 		return
 	}
@@ -193,6 +212,10 @@ func (s *Service) failUsageV2() {
 	})
 }
 func (s *Service) closeUsageV2() {
+	if s.nativeUsageMode() {
+		s.closeNativeUsage()
+		return
+	}
 	if !s.usageMode() {
 		return
 	}
@@ -214,6 +237,9 @@ func (s *Service) closeUsageV2() {
 	}
 }
 func (s *Service) usageFailureChannel() <-chan error {
+	if s.nativeUsageMode() {
+		return s.nativeUsage.failure
+	}
 	if !s.usageMode() {
 		return nil
 	}

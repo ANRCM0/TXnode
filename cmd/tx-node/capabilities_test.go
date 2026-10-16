@@ -24,7 +24,7 @@ func TestRuntimeCapabilitiesCanBeReadBeforeConfigOrCredentials(t *testing.T) {
 		t.Fatal("invalid capability response", output.String())
 	}
 	if runtime.GOOS == "linux" {
-		if len(actual.Capabilities) != 3 || actual.Capabilities[0] != "node_authorization_snapshot_v1" || actual.Capabilities[1] != "node_runtime_checkpoint_v1" || actual.Capabilities[2] != "node_provider_credential_delivery_v1" {
+		if len(actual.Capabilities) != 4 || actual.Capabilities[0] != "node_authorization_snapshot_v1" || actual.Capabilities[1] != "node_runtime_checkpoint_v1" || actual.Capabilities[2] != "node_provider_credential_delivery_v1" || actual.Capabilities[3] != "node_native_subscription_usage_v1" {
 			t.Fatal("Linux finite authorization capability missing")
 		}
 	} else if len(actual.Capabilities) != 0 {

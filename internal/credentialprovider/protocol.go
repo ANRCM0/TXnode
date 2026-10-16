@@ -52,6 +52,41 @@ type IssueInput struct {
 	CredentialExpiresAt    int64  `json:"credential_expires_at"`
 }
 
+type RotateInput struct {
+	InstallationID               string `json:"installation_id"`
+	AccessSubjectID              string `json:"access_subject_id"`
+	SubscriptionID               string `json:"subscription_id"`
+	TermsID                      string `json:"terms_id"`
+	ProviderSubjectRef           string `json:"provider_subject_ref"`
+	ExpectedSubjectVersion       string `json:"expected_subject_version"`
+	CredentialProfileID          string `json:"credential_profile_id"`
+	CredentialRef                string `json:"credential_ref"`
+	ExpectedCredentialGeneration string `json:"expected_credential_generation"`
+	RotationMode                 string `json:"rotation_mode"`
+	NotBeforeAt                  int64  `json:"not_before_at"`
+	CredentialExpiresAt          int64  `json:"credential_expires_at"`
+}
+
+type RotateResult struct {
+	AccessSubjectID       string `json:"access_subject_id"`
+	ProviderSubjectRef    string `json:"provider_subject_ref"`
+	CredentialProfileID   string `json:"credential_profile_id"`
+	CredentialRef         string `json:"credential_ref"`
+	CredentialGeneration  string `json:"credential_generation"`
+	IssuedAt              int64  `json:"issued_at"`
+	NotBeforeAt           int64  `json:"not_before_at"`
+	CredentialExpiresAt   int64  `json:"credential_expires_at"`
+	PreviousCredentialRef string `json:"previous_credential_ref"`
+	PreviousGeneration    string `json:"previous_generation"`
+	PreviousValidUntil    int64  `json:"previous_valid_until"`
+	RotationMode          string `json:"rotation_mode"`
+}
+
+func (r RotateResult) current() IssueResult {
+	return IssueResult{r.AccessSubjectID, r.ProviderSubjectRef, r.CredentialProfileID, r.CredentialRef,
+		r.CredentialGeneration, r.IssuedAt, r.NotBeforeAt, r.CredentialExpiresAt}
+}
+
 type RevokeInput struct {
 	InstallationID        string `json:"installation_id"`
 	AccessSubjectID       string `json:"access_subject_id"`
@@ -220,6 +255,23 @@ func parseRequest(raw []byte, now time.Time) (Request, error) {
 		return req, errInvalidEnvelope
 	}
 	switch req.Operation {
+	case "rotate":
+		var value RotateInput
+		if !exactFields(input, "installation_id", "access_subject_id", "subscription_id", "terms_id", "provider_subject_ref",
+			"expected_subject_version", "credential_profile_id", "credential_ref", "expected_credential_generation",
+			"rotation_mode", "not_before_at", "credential_expires_at") ||
+			!integerField(input, "not_before_at") || !integerField(input, "credential_expires_at") ||
+			json.Unmarshal(req.Input, &value) != nil || !uuidPattern.MatchString(value.InstallationID) ||
+			!positiveDecimal(value.AccessSubjectID) || !positiveDecimal(value.SubscriptionID) ||
+			!positiveDecimal(value.TermsID) || !subjectPattern.MatchString(value.ProviderSubjectRef) ||
+			!positiveDecimal(value.ExpectedSubjectVersion) || !credentialPattern.MatchString(value.CredentialRef) ||
+			!positiveDecimal(value.ExpectedCredentialGeneration) || value.ExpectedCredentialGeneration == "9223372036854775807" ||
+			value.RotationMode != "immediate" ||
+			(value.CredentialProfileID != "vless-uuid/v1" && value.CredentialProfileID != "vmess-uuid/v1") ||
+			value.NotBeforeAt < 0 || value.CredentialExpiresAt <= value.NotBeforeAt ||
+			value.CredentialExpiresAt-value.NotBeforeAt > 31*24*60*60 {
+			return req, errInvalidEnvelope
+		}
 	case "issue":
 		var value IssueInput
 		if !exactFields(input, "installation_id", "access_subject_id", "subscription_id",
