@@ -58,7 +58,7 @@ func NewReporter(session Session, spool *Spool, transport Transport) (*Reporter,
 	}
 	reporter := &Reporter{session: copySession, spool: spool, transport: transport}
 	for _, record := range records {
-		if record.LocalQuarantine != nil && record.Receipt == nil {
+		if nativeQuarantined(record) {
 			reporter.quarantined.Add(1)
 		}
 	}
@@ -161,9 +161,9 @@ func (r *Reporter) DeliverPage(ctx context.Context, limit int) error {
 	return r.deliverPage(ctx, limit, false, nil)
 }
 
-// DeliverNativePage preserves an explicitly rejected old authorization interval
-// locally. Queries may discover a real receipt later; a quarantined capture is
-// never automatically submitted again or rewritten under current authority.
+// DeliverNativePage preserves original authorization evidence and durable Core
+// quarantine receipts. Older 422 refusals retain their local marker until a
+// query discovers a real receipt; neither capture is rewritten or resubmitted.
 func (r *Reporter) DeliverNativePage(ctx context.Context, limit int, refused func(Record)) error {
 	return r.deliverPage(ctx, limit, true, refused)
 }
@@ -233,13 +233,18 @@ func (r *Reporter) deliverPage(ctx context.Context, limit int, native bool, refu
 		if err := receipt.Validate(record.Session, record.Submission); err != nil {
 			return err
 		}
-		recoveredQuarantine := record.LocalQuarantine != nil && record.Receipt == nil
+		wasQuarantined := nativeQuarantined(record)
 		record.Receipt = &receipt
 		if err := r.spool.Save(record); err != nil {
 			return err
 		}
-		if recoveredQuarantine {
+		if quarantined := nativeQuarantined(record); quarantined && !wasQuarantined {
+			r.quarantined.Add(1)
+		} else if !quarantined && wasQuarantined {
 			r.quarantined.Add(-1)
+		}
+		if native && nativeCutoffReceipt(record.Receipt) && refused != nil {
+			refused(record)
 		}
 		r.cursor = recordName(record)
 	}

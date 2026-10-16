@@ -27,13 +27,19 @@ remain individual intents. A refresh stops old I/O and drains the old Session
 before admitting the next revision. A restart recovers completed old evidence
 and requires a higher signed revision; it never resumes the crashed timeline.
 
-An authenticated Core `422 USAGE_NATIVE_AUTHORIZATION_CUTOFF` means the old
-interval crossed a proved revocation boundary. Node preserves that complete
-original record with `local_quarantine`, binding a SHA-256 digest of its schema,
-Session and Submission. `receipt` remains absent. This is not persisted or
-settled acknowledgement and does not authorize dropping, splitting or
-relabeling the bytes. Querying the original batch may discover a real receipt;
-automatic resubmission under another key or Session is forbidden.
+A proved later revocation boundary can produce a real Core receipt with
+`receipt_status="persisted"`, `settlement_status="quarantined"` and
+`reason_code="USAGE_NATIVE_AUTHORIZATION_CUTOFF"`. Node saves that receipt
+with the complete original Session and Submission. Core reserves the original
+Period's validated bytes even while settlement is pending or quarantined;
+credential rotation does not restore that available quota.
+
+Older authenticated `422 USAGE_NATIVE_AUTHORIZATION_CUTOFF` responses remain
+supported. Node preserves that complete original record with
+`local_quarantine`, binding a SHA-256 digest of its schema, Session and
+Submission. Until a query discovers a real Core receipt, `receipt` remains
+absent. Neither response authorizes dropping, splitting or relabeling the
+bytes. Automatic resubmission under another key or Session is forbidden.
 
 If that rejection identifies the currently applied grant, Node immediately
 closes its I/O and requests a higher signed revision. A rejected historical

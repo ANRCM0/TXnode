@@ -3,6 +3,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -239,61 +240,99 @@ func TestNativeBillingRotationAndShutdownSealPriorCredentialEvidence(t *testing.
 	}
 }
 
-type nativeRefusalTransport struct{ submits int }
+type nativeRefusalTransport struct {
+	submits int
+	session usagev2.Session
+	receipt *usagev2.Receipt
+}
 
-func (*nativeRefusalTransport) Get(context.Context, usagev2.Query) (usagev2.Receipt, bool, error) {
+func (t *nativeRefusalTransport) Get(context.Context, usagev2.Query) (usagev2.Receipt, bool, error) {
+	if t.receipt != nil {
+		return *t.receipt, true, nil
+	}
 	return usagev2.Receipt{}, false, nil
 }
-func (t *nativeRefusalTransport) Submit(context.Context, usagev2.Submission) (usagev2.Receipt, error) {
+func (t *nativeRefusalTransport) Submit(_ context.Context, submission usagev2.Submission) (usagev2.Receipt, error) {
 	t.submits++
+	if t.session.NodeID != "" {
+		t.receipt = &usagev2.Receipt{
+			ProtocolVersion: 2, CoreInstanceID: t.session.CoreInstanceID, ReceiptGeneration: t.session.ReceiptGeneration,
+			NodeID: submission.Payload.NodeID, SourceEpoch: submission.Payload.SourceEpoch,
+			BatchID: submission.Payload.BatchID, PayloadDigest: submission.PayloadDigest, ReceiptID: "native-cutoff-receipt",
+			ReceiptStatus: "persisted", SettlementStatus: "quarantined", ReasonCode: usagev2.NativeCutoffCode,
+			AcceptedAt: time.Now().Unix(),
+		}
+		return *t.receipt, nil
+	}
 	return usagev2.Receipt{}, &usagev2.HTTPError{Status: 422, Code: usagev2.NativeCutoffCode}
 }
 
 func TestNativeCutoffClosesAffectedAdmissionAndHigherRevisionRecoversWithoutReposting(t *testing.T) {
-	s, kernel, plane := nativeBillingService(t)
-	current := s.authorization.Current()
-	session := *current.Payload.UsageV2
-	submission, err := session.Build(session.IssuedAt, session.IssuedAt+1, map[int][2]int64{7: {13, 17}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.nativeUsage.spool.Save(usagev2.Record{SchemaVersion: 1, Session: session, Submission: submission}); err != nil {
-		t.Fatal(err)
-	}
-	transport := &nativeRefusalTransport{}
-	s.nativeUsage.reporter, err = usagev2.NewReporter(session, s.nativeUsage.spool, transport)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := s.nativeUsage.reporter.DeliverNativePage(context.Background(), 16, s.quarantineNativeUsage); err != nil {
-		t.Fatal(err)
-	}
-	if !s.nativeUsage.refreshNeeded.Load() || s.nativeUsage.failed.Load() ||
-		s.nativeUsage.collector.Load().BeginIO(7, "upload", 1) != nil {
-		t.Fatal("current rejected authority remained usable or permanently poisoned Service")
-	}
-	select {
-	case <-s.nativeUsageRefreshChannel():
-	default:
-		t.Fatal("cutoff failed to request fresh signed authority")
-	}
-	replay := controlplane.Snapshot{Users: model.UserSpecsFromPanel(current.Users), Authorization: current}
-	if err := s.applyNativeAuthorization(context.Background(), replay, false); err != nil {
-		t.Fatal(err)
-	}
-	if !s.nativeUsage.refreshNeeded.Load() || s.startKernel(s.lastConfig, s.users.Users()) {
-		t.Fatal("same signed revision reopened rejected admission")
-	}
-	if err := s.applyNativeAuthorization(context.Background(), plane.snapshot(t), false); err != nil {
-		t.Fatal(err)
-	}
-	if !kernel.running || kernel.startCalls != 2 || s.nativeUsage.refreshNeeded.Load() {
-		t.Fatal("higher signed revision could not recover legal admission")
-	}
-	if err := s.nativeUsage.reporter.DeliverNativePage(context.Background(), 16, s.quarantineNativeUsage); err != nil {
-		t.Fatal(err)
-	}
-	if transport.submits != 1 || s.nativeUsage.refreshNeeded.Load() || s.nativeUsage.collector.Load().CheckCurrent() != nil {
-		t.Fatal("old quarantined history blocked or was relabeled into the new grant")
+	for _, persisted := range []bool{false, true} {
+		name := "legacy422"
+		if persisted {
+			name = "persisted receipt"
+		}
+		t.Run(name, func(t *testing.T) {
+			s, kernel, plane := nativeBillingService(t)
+			current := s.authorization.Current()
+			session := *current.Payload.UsageV2
+			submission, err := session.Build(session.IssuedAt, session.IssuedAt+1, map[int][2]int64{7: {13, 17}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.nativeUsage.spool.Save(usagev2.Record{SchemaVersion: 1, Session: session, Submission: submission}); err != nil {
+				t.Fatal(err)
+			}
+			transport := &nativeRefusalTransport{}
+			if persisted {
+				transport.session = session
+			}
+			s.nativeUsage.reporter, err = usagev2.NewReporter(session, s.nativeUsage.spool, transport)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.nativeUsage.reporter.DeliverNativePage(context.Background(), 16, s.quarantineNativeUsage); err != nil {
+				t.Fatal(err)
+			}
+			if !s.nativeUsage.refreshNeeded.Load() || s.nativeUsage.failed.Load() ||
+				s.nativeUsage.collector.Load().BeginIO(7, "upload", 1) != nil {
+				t.Fatal("current rejected authority remained usable or permanently poisoned Service")
+			}
+			select {
+			case <-s.nativeUsageRefreshChannel():
+			default:
+				t.Fatal("cutoff failed to request fresh signed authority")
+			}
+			replay := controlplane.Snapshot{Users: model.UserSpecsFromPanel(current.Users), Authorization: current}
+			if err := s.applyNativeAuthorization(context.Background(), replay, false); err != nil {
+				t.Fatal(err)
+			}
+			if !s.nativeUsage.refreshNeeded.Load() || s.startKernel(s.lastConfig, s.users.Users()) {
+				t.Fatal("same signed revision reopened rejected admission")
+			}
+			if err := s.applyNativeAuthorization(context.Background(), plane.snapshot(t), false); err != nil {
+				t.Fatal(err)
+			}
+			if !kernel.running || kernel.startCalls != 2 || s.nativeUsage.refreshNeeded.Load() {
+				t.Fatal("higher signed revision could not recover legal admission")
+			}
+			if err := s.nativeUsage.reporter.DeliverNativePage(context.Background(), 16, s.quarantineNativeUsage); err != nil {
+				t.Fatal(err)
+			}
+			if transport.submits != 1 || s.nativeUsage.refreshNeeded.Load() || s.nativeUsage.collector.Load().CheckCurrent() != nil {
+				t.Fatal("old quarantined history blocked or was relabeled into the new grant")
+			}
+			records, err := s.nativeUsage.spool.Records()
+			if err != nil || len(records) != 1 || records[0].Submission.PayloadDigest != submission.PayloadDigest ||
+				!bytes.Equal(mustNativeC2JSON(t, records[0].Session), mustNativeC2JSON(t, session)) ||
+				(persisted && (records[0].Receipt == nil || records[0].LocalQuarantine != nil ||
+					records[0].Receipt.SettlementStatus != "quarantined" ||
+					records[0].Receipt.ReasonCode != usagev2.NativeCutoffCode)) ||
+				(!persisted && (records[0].Receipt != nil || records[0].LocalQuarantine == nil)) ||
+				s.nativeUsage.reporter.NativeQuarantinedCount() != 1 {
+				t.Fatal("cutoff recovery changed original capture or confused Core receipt with local refusal", err)
+			}
+		})
 	}
 }

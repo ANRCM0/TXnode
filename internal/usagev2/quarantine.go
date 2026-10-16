@@ -37,7 +37,20 @@ func validateLocalQuarantine(record Record) error {
 	return nil
 }
 
-// QuarantinedCount excludes records subsequently confirmed by a real receipt.
+func nativeCutoffReceipt(receipt *Receipt) bool {
+	return receipt != nil && receipt.ReceiptStatus == "persisted" &&
+		receipt.SettlementStatus == "quarantined" && receipt.ReasonCode == NativeCutoffCode
+}
+
+func nativeQuarantined(record Record) bool {
+	if record.Receipt != nil {
+		return nativeCutoffReceipt(record.Receipt)
+	}
+	return record.LocalQuarantine != nil
+}
+
+// QuarantinedCount counts each retained cutoff capture once, including real
+// Core quarantine receipts. A later settled receipt releases that count.
 func (s *Spool) QuarantinedCount() (int, error) {
 	records, err := s.Records()
 	if err != nil {
@@ -45,7 +58,7 @@ func (s *Spool) QuarantinedCount() (int, error) {
 	}
 	count := 0
 	for _, record := range records {
-		if record.LocalQuarantine != nil && record.Receipt == nil {
+		if nativeQuarantined(record) {
 			count++
 		}
 	}

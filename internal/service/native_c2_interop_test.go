@@ -120,6 +120,19 @@ func TestNativeC2RuntimeEndToEnd(t *testing.T) {
 		}
 		return manager.Current()
 	}
+	echo := func(stream net.Conn) {
+		t.Helper()
+		_ = stream.SetDeadline(time.Now().Add(4 * time.Second))
+		body := bytes.Repeat([]byte("native-c2-real-billable-traffic"), 256)
+		if _, err := stream.Write(body); err != nil {
+			t.Fatal("native C2 VLESS write refused", err)
+		}
+		received := make([]byte, len(body))
+		if _, err := io.ReadFull(stream, received); err != nil || !bytes.Equal(body, received) {
+			t.Fatal("native C2 VLESS echo failed", err)
+		}
+		_ = stream.SetDeadline(time.Time{})
+	}
 	connect := func(svc *Service, port int) (net.Conn, string) {
 		t.Helper()
 		current := snapshot(svc)
@@ -132,16 +145,7 @@ func TestNativeC2RuntimeEndToEnd(t *testing.T) {
 			uuid, M.ParseSocksaddr(origin.Addr().String()))
 		t.Cleanup(func() { raw.Close() })
 		t.Cleanup(func() { stream.Close() })
-		_ = stream.SetDeadline(time.Now().Add(4 * time.Second))
-		body := bytes.Repeat([]byte("native-c2-real-billable-traffic"), 256)
-		if _, err := stream.Write(body); err != nil {
-			t.Fatal("native C2 VLESS write refused", err)
-		}
-		echo := make([]byte, len(body))
-		if _, err := io.ReadFull(stream, echo); err != nil || !bytes.Equal(body, echo) {
-			t.Fatal("native C2 VLESS echo failed", err)
-		}
-		_ = stream.SetDeadline(time.Time{})
+		echo(stream)
 		return stream, uuid
 	}
 	waitGeneration := func(svc *Service, done <-chan error, old string) {
@@ -233,6 +237,7 @@ func TestNativeC2RuntimeEndToEnd(t *testing.T) {
 	if err := os.Remove(filepath.Join(directory, "offline")); err != nil {
 		t.Fatal(err)
 	}
+	_ = os.Remove(filepath.Join(directory, "offline-ready"))
 	// Restart after the reset: old batches must keep their original Session,
 	// period and digest, while new traffic receives the new period.
 	restarted, cancelRestarted, doneRestarted := start(cfg, fixture.Port)
@@ -294,10 +299,118 @@ func TestNativeC2RuntimeEndToEnd(t *testing.T) {
 	beforeRenew := snapshot(restarted).Users[0].UUID
 	command("renew")
 	waitGeneration(restarted, doneRestarted, beforeRenew)
+	liveProtocolWait(t, doneRestarted, 10*time.Second, func() bool {
+		return snapshot(restarted).Payload.ExpiresAt-time.Now().Unix() >= 20
+	})
+	if err := os.WriteFile(filepath.Join(directory, "offline"), []byte("offline"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	liveProtocolWait(t, doneRestarted, 10*time.Second, func() bool {
+		_, err := os.Stat(filepath.Join(directory, "offline-ready"))
+		return err == nil
+	})
+	liveProtocolWait(t, doneRestarted, 5*time.Second, func() bool {
+		return !restarted.authorizationRefresh.Load() && restarted.kernel.IsRunning()
+	})
+	if snapshot(restarted).Payload.ExpiresAt-time.Now().Unix() < 10 {
+		t.Fatal("authority drain left insufficient finite lease for real rotation")
+	}
+	// Only a newly refused users refresh can acknowledge the offline barrier,
+	// after the main loop finished its prior response/material handoff. The
+	// old finite lease can now meter I/O across the real rotation.
 	renewedStream, renewedUUID := connect(restarted, fixture.Port)
+	restarted.nativeUsage.admissionMu.Lock()
+	rotationSession := restarted.nativeUsage.session
+	rotationSession.Grants = append([]usagev2.Grant(nil), rotationSession.Grants...)
+	restarted.nativeUsage.admissionMu.Unlock()
+	var rotation struct {
+		Cutoffs []struct {
+			AuthSnapshotID string `json:"auth_snapshot_id"`
+			CutoffAt       int64  `json:"cutoff_at"`
+			UsagePeriodID  string `json:"usage_period_id"`
+			SourceEpoch    string `json:"source_epoch"`
+		} `json:"cutoffs"`
+	}
+	if err := json.Unmarshal(command("rotate"), &rotation); err != nil || len(rotation.Cutoffs) == 0 {
+		t.Fatal("real rotation cutoff evidence missing", err)
+	}
+	cutoffs := make(map[string]int64)
+	for _, cutoff := range rotation.Cutoffs {
+		for _, grant := range rotationSession.Grants {
+			if cutoff.AuthSnapshotID == grant.AuthSnapshotID && cutoff.SourceEpoch == rotationSession.SourceEpoch &&
+				cutoff.UsagePeriodID == grant.UsagePeriodID {
+				cutoffs[cutoff.AuthSnapshotID] = cutoff.CutoffAt
+			}
+		}
+	}
+	if len(cutoffs) != len(rotationSession.Grants) || len(cutoffs) != 1 {
+		t.Fatal("rotation failed to cut off the actual original signed grant")
+	}
+	if snapshot(restarted).Payload.ExpiresAt-time.Now().Unix() < 5 {
+		t.Fatal("real rotation consumed the remaining finite lease")
+	}
+	echo(renewedStream)
 	renewedStream.Close()
-	command("rotate")
+	cutoffCaptures := make(map[string]usagev2.Record)
+	liveProtocolWait(t, doneRestarted, 5*time.Second, func() bool {
+		records, err := restarted.nativeUsage.spool.Records()
+		if err != nil {
+			t.Fatal("native C2 cutoff capture unreadable", err)
+		}
+		for _, record := range records {
+			for _, entry := range record.Submission.Payload.Entries {
+				cutoff, exists := cutoffs[entry.AuthSnapshotID]
+				if exists && record.Session.SourceEpoch == rotationSession.SourceEpoch &&
+					record.Submission.Payload.EndedAt > cutoff {
+					if record.Receipt != nil || record.LocalQuarantine != nil ||
+						record.Submission.Payload.EndedAt > record.Session.Grants[0].LeaseExpiresAt {
+						t.Fatal("offline real cutoff capture invented a receipt or exceeded its original lease")
+					}
+					cutoffCaptures[record.Submission.Payload.BatchID] = record
+				}
+			}
+		}
+		return len(cutoffCaptures) > 0
+	})
+	if err := os.Remove(filepath.Join(directory, "offline")); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(filepath.Join(directory, "offline-ready"))
 	waitGeneration(restarted, doneRestarted, renewedUUID)
+	var quarantined []usagev2.Record
+	liveProtocolWait(t, doneRestarted, 12*time.Second, func() bool {
+		records, err := restarted.nativeUsage.spool.Records()
+		if err != nil {
+			t.Fatal("native C2 Core quarantine receipt unreadable", err)
+		}
+		quarantined = nil
+		for _, record := range records {
+			original, exists := cutoffCaptures[record.Submission.Payload.BatchID]
+			if !exists {
+				continue
+			}
+			if !bytes.Equal(mustNativeC2JSON(t, original.Session), mustNativeC2JSON(t, record.Session)) ||
+				!bytes.Equal(mustNativeC2JSON(t, original.Submission), mustNativeC2JSON(t, record.Submission)) ||
+				record.LocalQuarantine != nil {
+				t.Fatal("persisted cutoff receipt relabeled original evidence or fabricated local quarantine")
+			}
+			if record.Receipt != nil {
+				if record.Receipt.ReceiptStatus != "persisted" || record.Receipt.SettlementStatus != "quarantined" ||
+					record.Receipt.ReasonCode != usagev2.NativeCutoffCode || record.Receipt.SettledAt != nil {
+					t.Fatal("cross-cutoff traffic received an incorrect settlement receipt")
+				}
+				quarantined = append(quarantined, record)
+			}
+		}
+		return len(quarantined) == len(cutoffCaptures)
+	})
+	if err := os.WriteFile(filepath.Join(directory, "rotation-quarantine.json"),
+		mustNativeC2JSON(t, quarantined), 0600); err != nil {
+		t.Fatal("cannot retain original Core quarantine receipt evidence")
+	}
+	if restarted.nativeUsage.reporter.NativeQuarantinedCount() < int64(len(quarantined)) {
+		t.Fatal("native C2 health omitted real Core quarantine receipts")
+	}
 	rotatedStream, rotatedUUID := connect(restarted, fixture.Port)
 	rotatedStream.Close()
 	if rotatedUUID == originalUUID || rotatedUUID == renewedUUID {
@@ -353,7 +466,7 @@ func TestNativeC2RuntimeEndToEnd(t *testing.T) {
 			t.Fatal("native C2 authorization state unreadable", err)
 		}
 	}
-	t.Log("Production native activation, HTTP identity/checkout, real queued fulfillment, recipient render, VLESS, durable billing, offline expiry, original-period restart replay, reset, renewal, rotation and revoke passed.")
+	t.Log("Production native activation, HTTP identity/checkout, real queued fulfillment, recipient render, VLESS, durable billing, offline expiry, original-period restart replay, reset, renewal, rotation with real reserved cutoff receipts and revoke passed.")
 }
 
 func mustNativeC2JSON(t *testing.T, value any) []byte {
