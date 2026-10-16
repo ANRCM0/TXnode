@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/ANRCM0/TX-Node/internal/config"
+	"github.com/ANRCM0/TX-Node/internal/credentialdelivery"
 	"github.com/ANRCM0/TX-Node/internal/panel"
 )
 
@@ -44,20 +45,21 @@ type Target struct {
 	MachineID *int
 }
 type Payload struct {
-	ProtocolVersion int          `json:"protocol_version"`
-	Audience        string       `json:"audience"`
-	PolicyVersion   string       `json:"policy_version"`
-	CoreInstanceID  string       `json:"core_instance_id"`
-	NodeID          int          `json:"node_id"`
-	MachineID       *int         `json:"machine_id"`
-	Revision        string       `json:"revision"`
-	KeyID           string       `json:"key_id"`
-	KeyEpoch        string       `json:"key_epoch"`
-	IssuedAt        int64        `json:"issued_at"`
-	NotBefore       int64        `json:"not_before"`
-	ExpiresAt       int64        `json:"expires_at"`
-	Complete        bool         `json:"complete"`
-	Users           []panel.User `json:"users"`
+	ProtocolVersion int                                 `json:"protocol_version"`
+	Audience        string                              `json:"audience"`
+	PolicyVersion   string                              `json:"policy_version"`
+	CoreInstanceID  string                              `json:"core_instance_id"`
+	NodeID          int                                 `json:"node_id"`
+	MachineID       *int                                `json:"machine_id"`
+	Revision        string                              `json:"revision"`
+	KeyID           string                              `json:"key_id"`
+	KeyEpoch        string                              `json:"key_epoch"`
+	IssuedAt        int64                               `json:"issued_at"`
+	NotBefore       int64                               `json:"not_before"`
+	ExpiresAt       int64                               `json:"expires_at"`
+	Complete        bool                                `json:"complete"`
+	Users           []panel.User                        `json:"users"`
+	Provider        *credentialdelivery.ProviderBinding `json:"provider,omitempty"`
 }
 
 // Snapshot metadata is copied at acceptance. The verified envelope remains
@@ -106,8 +108,11 @@ var keyIDRE = regexp.MustCompile(`\A[A-Za-z0-9_-]{1,64}\z`)
 var instanceRE = regexp.MustCompile(`\A[A-Za-z0-9:_-]{8,80}\z`)
 
 func NewManager(cfg config.AuthorizationConfig, target Target) (*Manager, error) {
-	if target.NodeID <= 0 || target.MachineID != nil && *target.MachineID <= 0 || cfg.StateDir == "" || !filepath.IsAbs(cfg.StateDir) || !instanceRE.MatchString(cfg.CoreInstanceID) || !keyIDRE.MatchString(cfg.KeyID) || !positiveDecimal(cfg.KeyEpoch) || cfg.PolicyVersion != config.NativeAuthorizationPolicyVersion || cfg.MaxClockSkew < 0 || cfg.MaxClockSkew > 30 {
+	if target.NodeID <= 0 || target.MachineID != nil && *target.MachineID <= 0 || cfg.StateDir == "" || !filepath.IsAbs(cfg.StateDir) || !instanceRE.MatchString(cfg.CoreInstanceID) || !keyIDRE.MatchString(cfg.KeyID) || !positiveDecimal(cfg.KeyEpoch) || cfg.PolicyVersion != config.NativeAuthorizationPolicyVersion && cfg.PolicyVersion != config.NativeProviderAuthorizationPolicyVersion || cfg.MaxClockSkew < 0 || cfg.MaxClockSkew > 30 {
 		return nil, refuse("CONFIGURATION_INVALID")
+	}
+	if err := cfg.ValidateProvider(); err != nil {
+		return nil, err
 	}
 	if _, err := decodeKey(cfg.PublicKey); err != nil {
 		return nil, err
@@ -187,6 +192,9 @@ func (m *Manager) Verify(env Envelope, users []panel.User, now time.Time) (*Snap
 	if err != nil {
 		return nil, err
 	}
+	if err := m.checkProviderBinding(snap.Payload.Provider); err != nil {
+		return nil, err
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err := m.checkHighWater(snap, now, false); err != nil {
@@ -228,6 +236,16 @@ func (m *Manager) checkHighWater(snap *Snapshot, now time.Time, applying bool) e
 	return nil
 }
 func (m *Manager) AcceptVerified(candidate *Snapshot, now time.Time) (*Snapshot, error) {
+	return m.acceptVerified(candidate, nil, now)
+}
+
+// AcceptVerifiedForProtocol binds a runtime cohort to the configuration that
+// will actually be applied, after re-verifying the private signed envelope.
+func (m *Manager) AcceptVerifiedForProtocol(candidate *Snapshot, protocol string, now time.Time) (*Snapshot, error) {
+	return m.acceptVerified(candidate, &protocol, now)
+}
+
+func (m *Manager) acceptVerified(candidate *Snapshot, protocol *string, now time.Time) (*Snapshot, error) {
 	if candidate == nil {
 		return nil, refuse("SNAPSHOT_REQUIRED")
 	}
@@ -236,6 +254,11 @@ func (m *Manager) AcceptVerified(candidate *Snapshot, now time.Time) (*Snapshot,
 	snap, err := m.Verify(candidate.envelope, candidate.Users, now)
 	if err != nil {
 		return nil, err
+	}
+	if protocol != nil {
+		if err := ValidateProtocol(snap, *protocol); err != nil {
+			return nil, err
+		}
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -265,6 +288,9 @@ func (m *Manager) AcceptVerified(candidate *Snapshot, now time.Time) (*Snapshot,
 }
 
 func Verify(env Envelope, outerUsers []panel.User, trust Trust, target Target, policy string, now time.Time, skew int) (*Snapshot, error) {
+	if policy == config.NativeProviderAuthorizationPolicyVersion {
+		return verifyProviderSnapshot(env, outerUsers, trust, target, now, skew)
+	}
 	if policy != config.NativeAuthorizationPolicyVersion || skew < 0 || skew > 30 || target.NodeID <= 0 || trust.ProtocolVersion != 1 || trust.Algorithm != "Ed25519" {
 		return nil, refuse("INVALID")
 	}
@@ -390,6 +416,11 @@ func cloneSnapshot(s *Snapshot) *Snapshot {
 	out.Users = cloneUsers(s.Users)
 	out.Payload.Users = cloneUsers(s.Payload.Users)
 	out.Payload.MachineID = cloneInt(s.Payload.MachineID)
+	if s.Payload.Provider != nil {
+		provider := *s.Payload.Provider
+		provider.Subjects = append([]credentialdelivery.Subject{}, provider.Subjects...)
+		out.Payload.Provider = &provider
+	}
 	out.PayloadBytes = append([]byte(nil), s.PayloadBytes...)
 	return &out
 }

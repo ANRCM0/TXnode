@@ -359,7 +359,7 @@ func configBaseDir(configPath string) string {
 }
 
 func (rc *RootConfig) validateRoot() error {
-	if len(rc.Instances) > 0 && rc.Config.Authorization.Enabled {
+	if len(rc.Instances) > 0 && (rc.Config.Authorization.Enabled || rc.Config.Authorization.Provider != (AuthorizationProviderConfig{})) {
 		return fmt.Errorf("NODE_AUTHORIZATION_EXPLICIT_INSTANCE_REQUIRED")
 	}
 	if len(rc.Instances) > 0 && rc.Config.UsageV2.Enabled {
@@ -391,7 +391,7 @@ func (rc *RootConfig) validateRoot() error {
 }
 
 func (rc *RootConfig) NormalizeInstances() ([]*Config, error) {
-	if len(rc.Instances) > 0 && rc.Config.Authorization.Enabled {
+	if len(rc.Instances) > 0 && (rc.Config.Authorization.Enabled || rc.Config.Authorization.Provider != (AuthorizationProviderConfig{})) {
 		return nil, fmt.Errorf("NODE_AUTHORIZATION_EXPLICIT_INSTANCE_REQUIRED")
 	}
 	if len(rc.Instances) == 0 {

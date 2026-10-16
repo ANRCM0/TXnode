@@ -117,3 +117,65 @@ func TestLoadRootPreservesExplicitPerInstanceAuthorization(t *testing.T) {
 		t.Fatal("explicit authority was implicitly inherited")
 	}
 }
+
+func TestProviderAuthorizationRequiresExplicitCompletePinnedConfiguration(t *testing.T) {
+	root := t.TempDir()
+	key := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	base := Config{Panel: PanelConfig{Provider: "txboard", URL: "https://core.example.test", NodeID: 42}, Kernel: KernelConfig{ConfigDir: root},
+		Authorization: AuthorizationConfig{Enabled: true, StateDir: filepath.Join(root, "state"), CoreInstanceID: "1b32d316-8cb8-4b46-8d49-e281c28d5169", KeyID: "native-key", KeyEpoch: "1", PublicKey: base64.RawURLEncoding.EncodeToString(key.Public().(ed25519.PublicKey)), PolicyVersion: NativeProviderAuthorizationPolicyVersion,
+			Provider: AuthorizationProviderConfig{Endpoint: "https://provider.example.test", ProviderID: "primary-provider", ProviderInstanceEpoch: "1", CAFile: filepath.Join(root, "ca.pem"), ClientCert: filepath.Join(root, "node.pem"), ClientKey: filepath.Join(root, "node.key")}}}
+	if err := base.ValidateAuthorization(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"disabled", "old_policy", "empty", "http", "userinfo", "query", "fragment", "path", "provider", "epoch", "overflow", "ca", "cert", "key", "relative", "usage_v2"} {
+		t.Run(name, func(t *testing.T) {
+			cfg := base
+			switch name {
+			case "disabled":
+				cfg.Authorization.Enabled = false
+			case "old_policy":
+				cfg.Authorization.PolicyVersion = NativeAuthorizationPolicyVersion
+			case "empty":
+				cfg.Authorization.Provider = AuthorizationProviderConfig{}
+			case "http":
+				cfg.Authorization.Provider.Endpoint = "http://provider.example.test"
+			case "userinfo":
+				cfg.Authorization.Provider.Endpoint = "https://secret@provider.example.test"
+			case "query":
+				cfg.Authorization.Provider.Endpoint += "?identity=other"
+			case "fragment":
+				cfg.Authorization.Provider.Endpoint += "#other"
+			case "path":
+				cfg.Authorization.Provider.Endpoint += "/credentials"
+			case "provider":
+				cfg.Authorization.Provider.ProviderID = "Wrong.ID"
+			case "epoch":
+				cfg.Authorization.Provider.ProviderInstanceEpoch = "01"
+			case "overflow":
+				cfg.Authorization.Provider.ProviderInstanceEpoch = "9999999999999999999"
+			case "ca":
+				cfg.Authorization.Provider.CAFile = ""
+			case "cert":
+				cfg.Authorization.Provider.ClientCert = ""
+			case "key":
+				cfg.Authorization.Provider.ClientKey = ""
+			case "relative":
+				cfg.Authorization.Provider.ClientKey = "node.key"
+			case "usage_v2":
+				cfg.UsageV2.Enabled = true
+			}
+			if cfg.ValidateAuthorization() == nil {
+				t.Fatal("unsafe Provider authorization config accepted")
+			}
+		})
+	}
+	rootConfig := RootConfig{Config: Config{Authorization: AuthorizationConfig{Provider: base.Authorization.Provider}}, Instances: []Config{base}}
+	if _, err := rootConfig.NormalizeInstances(); err == nil {
+		t.Fatal("root Provider config silently disappeared across instance expansion")
+	}
+	child := Config{}
+	child.inheritFrom(&base)
+	if child.Authorization.Provider != (AuthorizationProviderConfig{}) {
+		t.Fatal("Machine-independent instance inherited a Provider identity")
+	}
+}

@@ -2,14 +2,16 @@
 
 This separate executable implements the C2-C1 control contract in
 [`native-issuance-v1.md`](../../contracts/v2/credential-provider/native-issuance-v1.md).
-It is not started by the existing TX-Node executable. Native Core activation,
-Node credential consumption, subscription rendering and rotation are not
-implemented by this batch.
+It is not started by the existing TX-Node executable. Optional C2-C2 material
+delivery is described in [Node consumption](native-provider-node.md). Native
+Core activation, subscription rendering and rotation remain separate work.
 
 The Provider generates real UUIDv4 material for `vless-uuid/v1` and
 `vmess-uuid/v1`. Material remains in its private bbolt database; the control
 endpoint exposes only non-secret issue, query and subject-revocation receipts.
-There is no credential export endpoint.
+The control identity cannot export credentials. With separate Node identities
+and pinned Core trust, `/credentials` can deliver material directly to the
+authorized Node under a finite Core-signed snapshot.
 
 ## Build and run
 
@@ -49,7 +51,7 @@ cannot select files, endpoints, credentials or commands. The executable prints
 failures print bounded error codes, without paths or raw transport errors.
 SIGTERM and SIGINT stop admission and allow up to five seconds for shutdown.
 
-Only `POST /operations` is registered. TLS 1.3, a verified client certificate,
+Without the delivery options, only `POST /operations` is registered. TLS 1.3, a verified client certificate,
 and its configured SHA-256 leaf fingerprint are mandatory. HTTP plaintext,
 TLS 1.2, an untrusted certificate, and a different certificate from the same CA
 are refused. Core must independently verify the server CA and hostname.
@@ -136,3 +138,13 @@ identity binding, concurrent idempotency, permanent pre-issue tombstones,
 revocation monotonicity, closed-wire validation, body limits and secret-free
 response diagnostics. Core-to-Provider process interoperability is validated
 separately at the batch integration boundary.
+
+C2-C2 adds an atomic private `issue_evidence` index for delivery. On the first
+startup of an existing C2-C1 store, the runtime validates original issue
+receipts, idempotency mappings and private Subject bindings before committing
+the index. It preserves UUIDs and receipts. Damaged, missing or ambiguous
+evidence refuses startup with a bounded error; it must not be repaired by
+deleting history or regenerating credentials. Do not run an older writer on
+an upgraded store. Stop the process and preserve a matching private backup
+before upgrading; coordinated Core/Provider rollback and restore protection
+are not supplied by this additive index.

@@ -86,7 +86,7 @@ func (s *Service) applySyncResult(ctx context.Context, result nodesync.Result) {
 		s.schedulePoll(ctx)
 		return
 	}
-	if err := s.acceptAuthorization(result.Authorization, result.Users); err != nil {
+	if err := s.acceptAuthorization(result.Authorization, result.Users, result.Config); err != nil {
 		s.refuseAuthorization(err)
 		return
 	}

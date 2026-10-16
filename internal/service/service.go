@@ -369,7 +369,7 @@ func (s *Service) initialSetup(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := s.acceptAuthorization(bootstrap.Authorization, bootstrap.Users); err != nil {
+	if err := s.acceptAuthorization(bootstrap.Authorization, bootstrap.Users, bootstrap.Config); err != nil {
 		return err
 	}
 

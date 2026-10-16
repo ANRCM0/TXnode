@@ -87,6 +87,15 @@ func (p *TXBoardControlPlane) snapshot(ctx context.Context) (Snapshot, error) {
 			return Snapshot{}, err
 		}
 	}
+	if auth != nil {
+		protocol := ""
+		if spec != nil {
+			protocol = spec.Protocol
+		}
+		if err := authorization.ValidateProtocol(auth, protocol); err != nil {
+			return Snapshot{}, err
+		}
+	}
 	return Snapshot{Config: spec, Users: model.UserSpecsFromPanel(users), Authorization: auth}, nil
 }
 func (p *TXBoardControlPlane) Initial(ctx context.Context, metricsFn func() map[string]interface{}, events chan<- Event, statuses chan<- StatusChange) (Bootstrap, error) {

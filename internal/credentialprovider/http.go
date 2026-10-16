@@ -19,14 +19,16 @@ import (
 )
 
 type Config struct {
-	Listen             string
-	StorePath          string
-	ProviderID         string
-	Epoch              string
-	TLSCert            string
-	TLSKey             string
-	ClientCA           string
-	ClientFingerprints []string
+	Listen                 string
+	StorePath              string
+	ProviderID             string
+	Epoch                  string
+	TLSCert                string
+	TLSKey                 string
+	ClientCA               string
+	ClientFingerprints     []string
+	DeliveryTrust          string
+	NodeClientFingerprints []string
 }
 
 func fingerprintSet(values []string) (map[string]bool, error) {
@@ -56,6 +58,21 @@ func LoadTLSConfig(config Config) (*tls.Config, error) {
 	allowed, err := fingerprintSet(config.ClientFingerprints)
 	if err != nil {
 		return nil, err
+	}
+	if (config.DeliveryTrust == "") != (len(config.NodeClientFingerprints) == 0) {
+		return nil, errors.New("DELIVERY_CONFIG_INVALID")
+	}
+	if config.DeliveryTrust != "" {
+		nodes, err := fingerprintSet(config.NodeClientFingerprints)
+		if err != nil {
+			return nil, err
+		}
+		for fingerprint := range nodes {
+			if allowed[fingerprint] {
+				return nil, errors.New("CLIENT_ROLE_OVERLAP")
+			}
+			allowed[fingerprint] = true
+		}
 	}
 	certificate, err := tls.LoadX509KeyPair(config.TLSCert, config.TLSKey)
 	if err != nil {
@@ -168,6 +185,16 @@ func Run(ctx context.Context, config Config, ready func(net.Addr)) error {
 	handler, err := NewHandler(store, config.ClientFingerprints)
 	if err != nil {
 		return err
+	}
+	if config.DeliveryTrust != "" {
+		trust, err := loadDeliveryTrust(config.DeliveryTrust)
+		if err != nil {
+			return err
+		}
+		handler, err = NewDeliveryHandler(store, config.ClientFingerprints, config.NodeClientFingerprints, trust)
+		if err != nil {
+			return err
+		}
 	}
 	listener, err := net.Listen("tcp", config.Listen)
 	if err != nil {

@@ -22,6 +22,8 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/authorization"
 	"github.com/ANRCM0/TX-Node/internal/config"
 	"github.com/ANRCM0/TX-Node/internal/controlerror"
+	"github.com/ANRCM0/TX-Node/internal/credentialdelivery"
+	"github.com/ANRCM0/TX-Node/internal/credentialdeliveryclient"
 	"github.com/ANRCM0/TX-Node/internal/panel"
 )
 
@@ -479,7 +481,26 @@ func (c *Client) AuthorizedUsersSnapshot(m *authorization.Manager) ([]panel.User
 	if data.ProtocolVersion != 1 || data.NodeID != c.nodeID || data.Users == nil {
 		return nil, nil, errors.New("NODE_AUTHORIZATION_RESPONSE_INVALID")
 	}
-	snap, err := m.Verify(authorization.Envelope{Payload: data.Authorization.Payload, Signature: data.Authorization.Signature}, data.Users, time.Now())
+	envelope := authorization.Envelope{Payload: data.Authorization.Payload, Signature: data.Authorization.Signature}
+	users := data.Users
+	if m.Config().PolicyVersion == config.NativeProviderAuthorizationPolicyVersion {
+		grant, err := m.VerifyProviderGrant(envelope, users, time.Now())
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(users) > 0 {
+			delivery, err := credentialdeliveryclient.New(m.Config().Provider)
+			if err != nil {
+				return nil, nil, err
+			}
+			defer delivery.Close()
+			users, err = delivery.Resolve(context.Background(), credentialdelivery.Envelope{Payload: envelope.Payload, Signature: envelope.Signature}, grant)
+			if err != nil {
+				return nil, nil, err
+			}
+		}
+	}
+	snap, err := m.Verify(envelope, users, time.Now())
 	if err != nil {
 		return nil, nil, err
 	}

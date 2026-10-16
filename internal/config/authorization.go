@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -16,23 +17,61 @@ import (
 // deliberately opt-in so existing bearer-only and Xboard installations retain
 // their current behavior and do not accidentally claim an offline guarantee.
 type AuthorizationConfig struct {
-	Enabled         bool   `yaml:"enabled"`
-	StateDir        string `yaml:"state_dir,omitempty"`
-	PublicKey       string `yaml:"public_key,omitempty"`
-	KeyID           string `yaml:"key_id,omitempty"`
-	KeyEpoch        string `yaml:"key_epoch,omitempty"`
-	CoreInstanceID  string `yaml:"core_instance_id,omitempty"`
-	PolicyVersion   string `yaml:"policy_version,omitempty"`
-	RefreshInterval int    `yaml:"refresh_interval,omitempty"`
-	MaxClockSkew    int    `yaml:"max_clock_skew,omitempty"`
+	Enabled         bool                        `yaml:"enabled"`
+	StateDir        string                      `yaml:"state_dir,omitempty"`
+	PublicKey       string                      `yaml:"public_key,omitempty"`
+	KeyID           string                      `yaml:"key_id,omitempty"`
+	KeyEpoch        string                      `yaml:"key_epoch,omitempty"`
+	CoreInstanceID  string                      `yaml:"core_instance_id,omitempty"`
+	PolicyVersion   string                      `yaml:"policy_version,omitempty"`
+	RefreshInterval int                         `yaml:"refresh_interval,omitempty"`
+	MaxClockSkew    int                         `yaml:"max_clock_skew,omitempty"`
+	Provider        AuthorizationProviderConfig `yaml:"provider,omitempty"`
+}
+
+type AuthorizationProviderConfig struct {
+	Endpoint              string `yaml:"endpoint,omitempty"`
+	ProviderID            string `yaml:"provider_id,omitempty"`
+	ProviderInstanceEpoch string `yaml:"provider_instance_epoch,omitempty"`
+	CAFile                string `yaml:"ca_file,omitempty"`
+	ClientCert            string `yaml:"client_cert,omitempty"`
+	ClientKey             string `yaml:"client_key,omitempty"`
 }
 
 const (
-	DefaultAuthorizationRefreshSeconds    = 30
-	DefaultAuthorizationMaxOfflineSeconds = 120
-	DefaultAuthorizationClockSkewSeconds  = 5
-	NativeAuthorizationPolicyVersion      = "native-node-authorization/v1"
+	DefaultAuthorizationRefreshSeconds       = 30
+	DefaultAuthorizationMaxOfflineSeconds    = 120
+	DefaultAuthorizationClockSkewSeconds     = 5
+	NativeAuthorizationPolicyVersion         = "native-node-authorization/v1"
+	NativeProviderAuthorizationPolicyVersion = "native-provider-authorization/v1"
 )
+
+// ValidateProvider keeps material delivery opt-in and binds its address and
+// TLS identity to local operator configuration, never a Core response.
+func (c AuthorizationConfig) ValidateProvider() error {
+	hasProvider := c.Provider != (AuthorizationProviderConfig{})
+	if c.PolicyVersion != NativeProviderAuthorizationPolicyVersion {
+		if hasProvider {
+			return errors.New("NODE_AUTHORIZATION_PROVIDER_POLICY_REQUIRED")
+		}
+		return nil
+	}
+	p := c.Provider
+	u, err := url.Parse(p.Endpoint)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" && u.Path != "/" || u.Opaque != "" {
+		return errors.New("NODE_AUTHORIZATION_PROVIDER_ENDPOINT_INVALID")
+	}
+	_, epochErr := strconv.ParseInt(p.ProviderInstanceEpoch, 10, 64)
+	if !regexp.MustCompile(`\A[a-z][a-z0-9_-]{0,63}\z`).MatchString(p.ProviderID) || !regexp.MustCompile(`\A[1-9][0-9]{0,18}\z`).MatchString(p.ProviderInstanceEpoch) || epochErr != nil {
+		return errors.New("NODE_AUTHORIZATION_PROVIDER_IDENTITY_INVALID")
+	}
+	for _, path := range []string{p.CAFile, p.ClientCert, p.ClientKey} {
+		if path == "" || !filepath.IsAbs(path) {
+			return errors.New("NODE_AUTHORIZATION_PROVIDER_TLS_REQUIRED")
+		}
+	}
+	return nil
+}
 
 func (c *AuthorizationConfig) applyDefaults(configDir string) {
 	if c.RefreshInterval == 0 {
@@ -50,7 +89,13 @@ func (c *AuthorizationConfig) applyDefaults(configDir string) {
 }
 
 func (c *Config) ValidateAuthorization() error {
-	if c == nil || !c.Authorization.Enabled {
+	if c == nil {
+		return nil
+	}
+	if !c.Authorization.Enabled {
+		if c.Authorization.Provider != (AuthorizationProviderConfig{}) {
+			return errors.New("NODE_AUTHORIZATION_PROVIDER_POLICY_REQUIRED")
+		}
 		return nil
 	}
 	a := &c.Authorization
@@ -80,8 +125,11 @@ func (c *Config) ValidateAuthorization() error {
 	if err != nil || len(key) != ed25519.PublicKeySize || base64.RawURLEncoding.EncodeToString(key) != a.PublicKey {
 		return errors.New("NODE_AUTHORIZATION_PUBLIC_KEY_INVALID")
 	}
-	if a.PolicyVersion != NativeAuthorizationPolicyVersion || a.RefreshInterval < 1 || a.RefreshInterval > 30 || a.MaxClockSkew < 0 || a.MaxClockSkew > 30 {
+	if a.PolicyVersion != NativeAuthorizationPolicyVersion && a.PolicyVersion != NativeProviderAuthorizationPolicyVersion || a.RefreshInterval < 1 || a.RefreshInterval > 30 || a.MaxClockSkew < 0 || a.MaxClockSkew > 30 {
 		return errors.New("NODE_AUTHORIZATION_POLICY_INVALID")
+	}
+	if err := a.ValidateProvider(); err != nil {
+		return err
 	}
 	if info, err := os.Stat(a.StateDir); err == nil && !info.IsDir() {
 		return fmt.Errorf("NODE_AUTHORIZATION_STATE_DIR_NOT_DIRECTORY")

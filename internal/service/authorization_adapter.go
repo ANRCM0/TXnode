@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ANRCM0/TX-Node/internal/authorization"
+	"github.com/ANRCM0/TX-Node/internal/config"
 	"github.com/ANRCM0/TX-Node/internal/controlerror"
 	"github.com/ANRCM0/TX-Node/internal/controlplane"
 	"github.com/ANRCM0/TX-Node/internal/model"
@@ -63,19 +64,28 @@ func (s *Service) authorizationValid() bool {
 	defer s.authorizationAdmissionMu.Unlock()
 	return !s.authorizationExpired.Load() && !s.authorizationDeadline.IsZero() && time.Now().Before(s.authorizationDeadline)
 }
-func (s *Service) acceptAuthorization(snapshot *authorization.Snapshot, users []model.UserSpec) error {
+func (s *Service) acceptAuthorization(snapshot *authorization.Snapshot, users []model.UserSpec, node *model.NodeSpec) error {
 	if !s.authorizationEnabled() {
 		return nil
 	}
 	if snapshot == nil || users == nil || nodesync.UserHash(model.UserSpecsFromPanel(snapshot.Users)) != nodesync.UserHash(users) {
 		return errors.New("NODE_AUTHORIZATION_USERS_MISMATCH")
 	}
+	if node == nil {
+		node = s.lastConfig
+	}
+	protocol := ""
+	if node != nil {
+		protocol = node.Protocol
+	}
 	// Withdraw the prior cohort before a changed snapshot can extend the
 	// authority deadline. The final meter retains its old period bindings.
-	if s.kernel.IsRunning() && nodesync.UserHash(users) != s.users.Hash() {
+	if s.kernel.IsRunning() && (nodesync.UserHash(users) != s.users.Hash() ||
+		s.authorization.Config().PolicyVersion == config.NativeProviderAuthorizationPolicyVersion &&
+			(s.lastConfig == nil || s.lastConfig.Protocol != protocol)) {
 		s.stopUncertainKernel()
 	}
-	_, err := s.authorization.AcceptVerified(snapshot, time.Now())
+	_, err := s.authorization.AcceptVerifiedForProtocol(snapshot, protocol, time.Now())
 	if err == nil {
 		deadline := s.authorization.Expiry()
 		s.authorizationAdmissionMu.Lock()
@@ -192,7 +202,12 @@ func (s *Service) signedUsersAllowed(users []model.UserSpec) bool {
 		return false
 	}
 	snapshot := s.authorization.Current()
-	return snapshot != nil && nodesync.UserHash(model.UserSpecsFromPanel(snapshot.Users)) == nodesync.UserHash(users)
+	protocol := ""
+	if s.lastConfig != nil {
+		protocol = s.lastConfig.Protocol
+	}
+	return snapshot != nil && authorization.ValidateProtocol(snapshot, protocol) == nil &&
+		nodesync.UserHash(model.UserSpecsFromPanel(snapshot.Users)) == nodesync.UserHash(users)
 }
 
 // A terminal auth error uses the already proved close-before-checkpoint path.

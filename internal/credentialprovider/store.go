@@ -9,23 +9,26 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	bolt "github.com/sagernet/bbolt"
 )
 
 var (
-	metadataBucket   = []byte("metadata")
-	operationsBucket = []byte("operations")
-	keysBucket       = []byte("idempotency")
-	subjectsBucket   = []byte("subjects")
-	subjectIDsBucket = []byte("subject_ids")
+	metadataBucket      = []byte("metadata")
+	operationsBucket    = []byte("operations")
+	keysBucket          = []byte("idempotency")
+	subjectsBucket      = []byte("subjects")
+	subjectIDsBucket    = []byte("subject_ids")
+	issueEvidenceBucket = []byte("issue_evidence")
 )
 
 type Store struct {
 	db         *bolt.DB
 	providerID string
 	epoch      string
+	deliveryMu sync.RWMutex
 }
 
 type storedOperation struct {
@@ -84,7 +87,7 @@ func OpenStore(path, providerID, epoch string) (*Store, error) {
 	}
 	store := &Store{db: db, providerID: providerID, epoch: epoch}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{metadataBucket, operationsBucket, keysBucket, subjectsBucket, subjectIDsBucket} {
+		for _, name := range [][]byte{metadataBucket, operationsBucket, keysBucket, subjectsBucket, subjectIDsBucket, issueEvidenceBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
@@ -95,14 +98,17 @@ func OpenStore(path, providerID, epoch string) (*Store, error) {
 			if string(current) != expected {
 				return errors.New("STORE_IDENTITY_MISMATCH")
 			}
-			return nil
-		}
-		for _, name := range [][]byte{operationsBucket, keysBucket, subjectsBucket, subjectIDsBucket} {
-			if key, _ := tx.Bucket(name).Cursor().First(); key != nil {
-				return errors.New("STORE_IDENTITY_MISMATCH")
+		} else {
+			for _, name := range [][]byte{operationsBucket, keysBucket, subjectsBucket, subjectIDsBucket, issueEvidenceBucket} {
+				if key, _ := tx.Bucket(name).Cursor().First(); key != nil {
+					return errors.New("STORE_IDENTITY_MISMATCH")
+				}
+			}
+			if err := metadata.Put([]byte("identity"), []byte(expected)); err != nil {
+				return err
 			}
 		}
-		return metadata.Put([]byte("identity"), []byte(expected))
+		return backfillIssueEvidence(tx, providerID, epoch)
 	})
 	if err != nil {
 		_ = db.Close()
@@ -138,6 +144,10 @@ func randomUUID() (string, error) {
 func (s *Store) execute(ctx context.Context, req Request, now time.Time) Response {
 	if req.ProviderID != s.providerID || req.ProviderInstanceEpoch != s.epoch {
 		return responseFor(req, "rejected", "PROVIDER_IDENTITY_MISMATCH", false)
+	}
+	if req.Operation != "query" {
+		s.deliveryMu.Lock()
+		defer s.deliveryMu.Unlock()
 	}
 	result := responseFor(req, "unknown", "STORE_UNAVAILABLE", true)
 	run := s.db.Update
@@ -211,6 +221,15 @@ func (s *Store) execute(ctx context.Context, req Request, now time.Time) Respons
 		}
 		if err = operations.Put([]byte(req.OperationID), record); err != nil {
 			return err
+		}
+		if req.Operation == "issue" && result.Status == "succeeded" {
+			var receipt IssueResult
+			if json.Unmarshal(result.Result, &receipt) != nil {
+				return errInvalidStoredReceipt
+			}
+			if err = tx.Bucket(issueEvidenceBucket).Put([]byte(receipt.ProviderSubjectRef), []byte(req.OperationID)); err != nil {
+				return err
+			}
 		}
 		return keys.Put([]byte(req.IdempotencyKey), []byte(req.OperationID))
 	})

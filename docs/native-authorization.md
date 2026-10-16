@@ -2,6 +2,12 @@
 
 The signed finite authorization contract is `contracts/node-protocol/native-authorization-lease-v1.md`. Core signs a complete child-scoped snapshot with its independent Ed25519 key. Enrolled Node pins public trust, verifies scope and finite time, persists revision high-water before admission, and closes new and established sessions when renewal expires. Restart requires fresh online verification; neither cached users nor an ETag304 renews authorization.
 
+The separate `native-provider-authorization/v1` policy reuses this enforcement
+with Core-signed non-secret commitments and direct Provider material delivery.
+See [Provider-backed Node consumption](native-provider-node.md) for identities,
+configuration and remaining native activation/usage gates. Old-policy pins do
+not automatically opt into this consumer.
+
 The dedicated real acceptance runner is `scripts/tests/node-native-authorization/run.py`. Its synthetic fixture verifies actual VLESS/VMess admission, unsigned WS hints, a signed empty-user revocation, sibling isolation, finite offline survival, cutoff, distinct-process restart and unchanged original traffic-spool replay. The caller provisions a new empty dedicated database, freezes aligned Core/Node sources and supplies a new evidence directory. The runner never resets existing databases or evidence.
 
 Local real acceptance has passed with both sing-box and Xray, each exercising actual VLESS and VMess streams. The accepted runs produced two original traffic-batch replays per kernel, with all observed existing-stream closures within about two milliseconds of signed expiry and listener observations within thirteen milliseconds. The two-second allowed observation tolerance remains explicit; these measurements are fixture evidence, not a general production latency promise.
