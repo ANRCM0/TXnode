@@ -1,3 +1,5 @@
+> Retirement update (2026-10-16): isolated Usage Service, unsigned TXBoard user snapshots, old User UUID signing and delta/device pushes are retired. This document preserves earlier implementation evidence; current runtime uses [Provider delivery](native-provider-node.md) and [native subscription usage](native-subscription-usage.md). Shared kernel, finite authority, receipt and recovery safeguards remain.
+
 # Isolated Service usage-v2 mode
 
 Status: verified isolated Service integration. Production v2 admission and authority
@@ -44,7 +46,7 @@ source epoch cannot restart a live collector after normal close or SIGKILL. Only
 separately authorized newer Core source epoch can begin another process timeline.
 Old receipt/payload/session identities remain immutable and queryable.
 
-The [fixture runner](../../scripts/tests/node-service-usage/README.md) executes actual
+The retired fixture runner `scripts/tests/node-service-usage` executes actual
 Service.Run with native Core handshake/config/users, memory TCP through the production
 enforcing ConnTracker, existing Reporter HTTPTransport and real Laravel/MariaDB.
 Its kernel lifecycle is injected to avoid a live proxy listener. Actual full

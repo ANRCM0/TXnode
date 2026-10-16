@@ -11,20 +11,17 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/nlog"
 	"github.com/ANRCM0/TX-Node/internal/panel"
 	"github.com/ANRCM0/TX-Node/internal/txboard"
-	"github.com/ANRCM0/TX-Node/internal/usagev2"
 )
 
-// TXBoardControlPlane speaks the native node/v1 protocol. Xboard transport
-// stays independent so existing deployments retain their wire contract.
+// TXBoardControlPlane requires signed Provider authorization for every user snapshot.
 type TXBoardControlPlane struct {
-	client          *txboard.Client
-	kernel          config.KernelConfig
-	ws              config.WSConfig
-	machine         bool
-	sharedPush      PushClient
-	register        func(chan<- StatusChange) *NodeMailbox
-	isolatedUsageV2 bool
-	authorization   *authorization.Manager
+	client        *txboard.Client
+	kernel        config.KernelConfig
+	ws            config.WSConfig
+	machine       bool
+	sharedPush    PushClient
+	register      func(chan<- StatusChange) *NodeMailbox
+	authorization *authorization.Manager
 }
 
 func NewTXBoardControlPlane(p config.PanelConfig, ws config.WSConfig, kernel config.KernelConfig) *TXBoardControlPlane {
@@ -63,17 +60,14 @@ func (p *TXBoardControlPlane) ResetSnapshotCache() {
 }
 
 func (p *TXBoardControlPlane) snapshot(ctx context.Context) (Snapshot, error) {
+	if p.authorization == nil {
+		return Snapshot{}, errors.New("NODE_AUTHORIZATION_MANAGER_REQUIRED")
+	}
 	cfg, err := p.client.ConfigSnapshot()
 	if err != nil {
 		return Snapshot{}, err
 	}
-	var users []panel.User
-	var auth *authorization.Snapshot
-	if p.authorization != nil {
-		users, auth, err = p.client.AuthorizedUsersSnapshot(p.authorization)
-	} else {
-		users, err = p.client.UsersSnapshot()
-	}
+	users, auth, err := p.client.AuthorizedUsersSnapshot(p.authorization)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -99,6 +93,9 @@ func (p *TXBoardControlPlane) snapshot(ctx context.Context) (Snapshot, error) {
 	return Snapshot{Config: spec, Users: model.UserSpecsFromPanel(users), Authorization: auth}, nil
 }
 func (p *TXBoardControlPlane) Initial(ctx context.Context, metricsFn func() map[string]interface{}, events chan<- Event, statuses chan<- StatusChange) (Bootstrap, error) {
+	if p.authorization == nil {
+		return Bootstrap{}, errors.New("NODE_AUTHORIZATION_MANAGER_REQUIRED")
+	}
 	p.client.ResetETags()
 	hs, err := p.client.Handshake()
 	if err != nil {
@@ -121,15 +118,6 @@ func (p *TXBoardControlPlane) Initial(ctx context.Context, metricsFn func() map[
 		return Bootstrap{}, errors.New("TXBoard initial config not available")
 	}
 	b := Bootstrap{PushInterval: hs.Settings.PushInterval, PullInterval: hs.Settings.PullInterval, Config: snapshot.Config, Users: snapshot.Users, Authorization: snapshot.Authorization}
-	if p.isolatedUsageV2 {
-		session, transport, err := p.client.ServiceUsageV2(hs)
-		if err != nil {
-			return Bootstrap{}, err
-		}
-		b.UsageV2Session = session
-		b.UsageV2Transport = transport
-		b.UsageV2NativeHTTP = true
-	}
 	if p.authorization != nil && p.authorization.Config().PolicyVersion == config.NativeProviderUsagePolicyVersion {
 		if snapshot.Authorization == nil || snapshot.Authorization.Payload.UsageV2 == nil {
 			return Bootstrap{}, errors.New("NATIVE_USAGE_SIGNED_SESSION_REQUIRED")
@@ -238,16 +226,6 @@ func (p *TXBoardControlPlane) Report(payload ReportPayload) error {
 }
 func (p *TXBoardControlPlane) ReportDevices(_ PushClient, _ map[int][]string) {}
 
-// UsageV2Reporter negotiates a fresh authenticated handshake explicitly for a
-// bounded v2 collector. It never changes the existing v1 Service report path.
-func (p *TXBoardControlPlane) UsageV2Reporter(spoolDir, legacyPendingPath string, countersEmpty bool) (*usagev2.Reporter, error) {
-	hs, err := p.client.Handshake()
-	if err != nil {
-		return nil, err
-	}
-	return p.client.NewUsageV2Reporter(hs, spoolDir, legacyPendingPath, countersEmpty)
-}
-
 // TranslateTXBoardEvent turns native frame data into the runtime's provider-neutral model.
 func TranslateTXBoardEvent(raw txboard.Event, k config.KernelConfig) (Event, error) {
 	var event Event
@@ -266,35 +244,16 @@ func TranslateTXBoardEvent(raw txboard.Event, k config.KernelConfig) (Event, err
 		event = Event{Type: EventSyncConfig, Config: spec}
 	case "sync.users":
 		var data struct {
-			Users []panel.User `json:"users"`
+			RefreshRequired bool `json:"refresh_required"`
+			NodeID          *int `json:"node_id,omitempty"`
 		}
-		if err := json.Unmarshal(raw.Data, &data); err != nil {
-			return event, err
+		if err := authorization.ValidateJSON(raw.Data, &data); err != nil || !data.RefreshRequired ||
+			data.NodeID != nil && (*data.NodeID <= 0 || raw.NodeID > 0 && *data.NodeID != raw.NodeID) {
+			return event, errors.New("NODE_AUTHORIZATION_REFRESH_REQUIRED")
 		}
-		if data.Users == nil {
-			data.Users = make([]panel.User, 0)
-		}
-		event = Event{Type: EventSyncUsers, Users: model.UserSpecsFromPanel(data.Users)}
-	case "sync.user.delta":
-		var data struct {
-			Action string       `json:"action"`
-			Users  []panel.User `json:"users"`
-		}
-		if err := json.Unmarshal(raw.Data, &data); err != nil {
-			return event, err
-		}
-		if data.Action != "add" && data.Action != "remove" {
-			return event, errors.New("invalid user delta action")
-		}
-		event = Event{Type: EventSyncUserDelta, DeltaAction: data.Action, DeltaUsers: model.UserSpecsFromPanel(data.Users)}
-	case "sync.devices":
-		var data struct {
-			Users map[int][]string `json:"users"`
-		}
-		if err := json.Unmarshal(raw.Data, &data); err != nil {
-			return event, err
-		}
-		event = Event{Type: EventSyncDevices, DeviceUsers: data.Users}
+		event = Event{Type: EventSyncUsers}
+	case "sync.user.delta", "sync.devices":
+		return event, errors.New("retired native user push")
 	default:
 		if len(raw.Name) > 4 && raw.Name[:4] == "ops." {
 			return event, errors.New("retired node operation")
@@ -303,28 +262,20 @@ func TranslateTXBoardEvent(raw txboard.Event, k config.KernelConfig) (Event, err
 	return event, nil
 }
 
-func (p *TXBoardControlPlane) PrepareIsolatedUsageV2(caFile string) error {
-	if p == nil || p.machine || p.client == nil {
-		return errors.New("USAGE_V2_NATIVE_HTTP_REQUIRED")
-	}
-	if err := p.client.PrepareIsolatedUsageV2TLS(caFile); err != nil {
-		return err
-	}
-	p.isolatedUsageV2 = true
-	return nil
-}
-
 func (p *TXBoardControlPlane) PrepareNativeUsageV2(caFile string) error {
 	if p == nil || p.client == nil {
 		return errors.New("NATIVE_USAGE_TRANSPORT_REQUIRED")
 	}
-	return p.client.PrepareIsolatedUsageV2TLS(caFile)
+	return p.client.PrepareNativeUsageTLS(caFile)
 }
 
 // ConfigureAuthorization supplies per-child durable authority after Machine expansion.
 func (p *TXBoardControlPlane) ConfigureAuthorization(m *authorization.Manager) error {
 	if m == nil {
 		return errors.New("NODE_AUTHORIZATION_MANAGER_REQUIRED")
+	}
+	if !config.ProviderAuthorizationPolicy(m.Config().PolicyVersion) {
+		return errors.New("NODE_AUTHORIZATION_PROVIDER_POLICY_REQUIRED")
 	}
 	p.authorization = m
 	return nil

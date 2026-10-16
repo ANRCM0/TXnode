@@ -16,11 +16,6 @@ func (s *Service) stopForAuthorityDenial(denial error) error {
 		s.stopKernelObserved(false)
 		return denial
 	}
-	if s.usageMode() {
-		s.failUsageV2()
-		s.stopKernelObserved(false)
-		return errors.Join(denial, errUsageV2)
-	}
 	if s.reporter == nil {
 		s.stopKernelObserved(false)
 		return errors.Join(denial, errors.New("NATIVE_AUTHORITY_CHECKPOINT_FAILED"))

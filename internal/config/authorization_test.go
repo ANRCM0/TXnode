@@ -13,11 +13,11 @@ import (
 func TestNativeAuthorizationConfigurationIsExplicitAndBounded(t *testing.T) {
 	key := ed25519.NewKeyFromSeed(make([]byte, 32))
 	root := t.TempDir()
-	base := Config{Panel: PanelConfig{Provider: "txboard", URL: "https://panel.example.test", NodeID: 42}, Kernel: KernelConfig{Type: "singbox", ConfigDir: root}, Authorization: AuthorizationConfig{Enabled: true, StateDir: filepath.Join(root, "auth"), PublicKey: base64.RawURLEncoding.EncodeToString(key.Public().(ed25519.PublicKey)), KeyID: "native-key", KeyEpoch: "1", CoreInstanceID: "core-instance-fixture"}}
+	base := Config{Panel: PanelConfig{Provider: "txboard", URL: "https://panel.example.test", NodeID: 42}, Kernel: KernelConfig{Type: "singbox", ConfigDir: root}, Authorization: AuthorizationConfig{Enabled: true, StateDir: filepath.Join(root, "auth"), PublicKey: base64.RawURLEncoding.EncodeToString(key.Public().(ed25519.PublicKey)), KeyID: "native-key", KeyEpoch: "1", CoreInstanceID: "core-instance-fixture", Provider: AuthorizationProviderConfig{Endpoint: "https://provider.example.test", ProviderID: "primary-provider", ProviderInstanceEpoch: "1", CAFile: filepath.Join(root, "ca.pem"), ClientCert: filepath.Join(root, "node.pem"), ClientKey: filepath.Join(root, "node.key")}}}
 	if err := base.ValidateAuthorization(); err != nil {
 		t.Fatal(err)
 	}
-	if base.Authorization.RefreshInterval != 30 || base.Authorization.PolicyVersion != NativeAuthorizationPolicyVersion {
+	if base.Authorization.RefreshInterval != 30 || base.Authorization.PolicyVersion != NativeProviderAuthorizationPolicyVersion {
 		t.Fatal("unsafe defaults")
 	}
 	for _, name := range []string{"xboard", "http", "standalone", "usage_v2", "missing_pin", "query", "long_refresh", "bad_epoch", "relative_state", "bad_policy"} {
@@ -49,6 +49,7 @@ func TestNativeAuthorizationConfigurationIsExplicitAndBounded(t *testing.T) {
 				t.Fatal("unsafe authorization configuration accepted")
 			}
 			c.Authorization.Enabled = false
+			c.Authorization.Provider = AuthorizationProviderConfig{}
 			if err := c.ValidateAuthorization(); err != nil {
 				t.Fatal("disabled mode changed behavior", err)
 			}
@@ -86,7 +87,7 @@ func TestLoadRootRefusesTopLevelAuthorizationWithInstancesWithoutSilentDowngrade
 func TestLoadRootPreservesExplicitPerInstanceAuthorization(t *testing.T) {
 	key := ed25519.NewKeyFromSeed(make([]byte, 32))
 	public := base64.RawURLEncoding.EncodeToString(key.Public().(ed25519.PublicKey))
-	signed := Config{Panel: PanelConfig{Provider: "txboard", URL: "https://panel.example.test", Token: "synthetic-node-token", NodeID: 42}, Kernel: KernelConfig{Type: "singbox", ConfigDir: filepath.Join(t.TempDir(), "signed")}, Authorization: AuthorizationConfig{Enabled: true, StateDir: filepath.Join(t.TempDir(), "authority"), CoreInstanceID: "core-instance-fixture", KeyID: "native-key", KeyEpoch: "1", PublicKey: public}}
+	signed := Config{Panel: PanelConfig{Provider: "txboard", URL: "https://panel.example.test", Token: "synthetic-node-token", NodeID: 42}, Kernel: KernelConfig{Type: "singbox", ConfigDir: filepath.Join(t.TempDir(), "signed")}, Authorization: AuthorizationConfig{Enabled: true, StateDir: filepath.Join(t.TempDir(), "authority"), CoreInstanceID: "core-instance-fixture", KeyID: "native-key", KeyEpoch: "1", PublicKey: public, Provider: AuthorizationProviderConfig{Endpoint: "https://provider.example.test", ProviderID: "primary-provider", ProviderInstanceEpoch: "1", CAFile: filepath.Join(t.TempDir(), "ca.pem"), ClientCert: filepath.Join(t.TempDir(), "node.pem"), ClientKey: filepath.Join(t.TempDir(), "node.key")}}}
 	ordinary := Config{Panel: PanelConfig{Provider: "txboard", URL: "https://panel.example.test", Token: "synthetic-other-node", NodeID: 43}, Kernel: KernelConfig{Type: "xray", ConfigDir: filepath.Join(t.TempDir(), "ordinary")}}
 	root := RootConfig{Instances: []Config{signed, ordinary}}
 	body, err := yaml.Marshal(root)
@@ -105,7 +106,7 @@ func TestLoadRootPreservesExplicitPerInstanceAuthorization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(instances) != 2 || !instances[0].Authorization.Enabled || instances[0].Authorization.PublicKey != public || instances[0].Authorization.RefreshInterval != 30 || instances[0].Authorization.PolicyVersion != NativeAuthorizationPolicyVersion {
+	if len(instances) != 2 || !instances[0].Authorization.Enabled || instances[0].Authorization.PublicKey != public || instances[0].Authorization.RefreshInterval != 30 || instances[0].Authorization.PolicyVersion != NativeProviderAuthorizationPolicyVersion {
 		t.Fatal("explicit enrolled child lost trust or finite policy")
 	}
 	if instances[1].Authorization.Enabled || instances[1].Authorization.PublicKey != "" {

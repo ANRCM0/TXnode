@@ -1,3 +1,5 @@
+> Retirement update (2026-10-16): isolated Usage Service, unsigned TXBoard user snapshots, old User UUID signing and delta/device pushes are retired. This document preserves earlier implementation evidence; current runtime uses [Provider delivery](native-provider-node.md) and [native subscription usage](native-subscription-usage.md). Shared kernel, finite authority, receipt and recovery safeguards remain.
+
 # Node Usage v2 第一运行切片
 
 状态：实现受限 schema 的批次编码、独立持久 spool、HTTP 接收确认与状态恢复；默认运行路径仍为 v1。此切片不宣称完成授权租约、撤销或内核采集分段。

@@ -22,10 +22,10 @@ func (s *Service) startKernel(config *model.NodeSpec, users []model.UserSpec) bo
 	if s.nativeUsageMode() && s.nativeUsage.refreshNeeded.Load() {
 		return false
 	}
-	if !s.meteredUsageMode() && s.kernel.IsRunning() {
+	if !s.nativeUsageMode() && s.kernel.IsRunning() {
 		s.stopUncertainKernel()
 	}
-	if !s.meteredUsageMode() && s.tracker != nil && s.tracker.PeriodModeChanged(users) && s.cfg != nil && s.cfg.Panel.Provider == "txboard" {
+	if !s.nativeUsageMode() && s.tracker != nil && s.tracker.PeriodModeChanged(users) && s.cfg != nil && s.cfg.Panel.Provider == "txboard" {
 		// A legacy-to-signed upgrade cannot leave a mixed uncheckpointed cohort.
 		// Old immutable bodies are replayed as-is, then unsigned pending bytes get
 		// their own durable ID before new signed-period listeners are admitted.
@@ -48,12 +48,12 @@ func (s *Service) startKernel(config *model.NodeSpec, users []model.UserSpec) bo
 		return false
 	}
 	var previousPeriods tracker.PeriodBindings
-	if !s.meteredUsageMode() && s.tracker != nil {
+	if !s.nativeUsageMode() && s.tracker != nil {
 		previousPeriods = s.tracker.BindPeriods(users)
 	}
 	s.observeBoundary("KERNEL_START_BEGIN", true)
 	if err := s.kernelLife.Start(config, users, s.certs.TLSCert()); err != nil {
-		if !s.meteredUsageMode() && s.tracker != nil {
+		if !s.nativeUsageMode() && s.tracker != nil {
 			s.tracker.RestorePeriodBindings(previousPeriods)
 		}
 		s.markApplicationPending("KERNEL_START_FAILED")
@@ -68,7 +68,7 @@ func (s *Service) startKernel(config *model.NodeSpec, users []model.UserSpec) bo
 	if s.nativeUsageMode() && s.tracker != nil {
 		s.tracker.BeginCumulativeGeneration()
 	}
-	if !s.meteredUsageMode() && s.tracker != nil {
+	if !s.nativeUsageMode() && s.tracker != nil {
 		if lifecycle, ok := s.kernel.(interface{ ResetsCumulativeTrafficOnStart() bool }); ok && lifecycle.ResetsCumulativeTrafficOnStart() {
 			s.tracker.BeginCumulativeGeneration()
 		}
@@ -134,7 +134,7 @@ func (s *Service) confirmAppliedUsers(users []model.UserSpec) {
 // Stop admission and preserve the native cumulative tail before a later rebuild.
 func (s *Service) stopUncertainKernel() {
 	s.stopKernelObserved(false)
-	if !s.meteredUsageMode() && s.tracker != nil {
+	if !s.nativeUsageMode() && s.tracker != nil {
 		traffic, alive, count, err := s.kernel.GetUserTraffic(context.Background())
 		if err == nil {
 			s.tracker.Process(traffic, alive, count)
@@ -159,10 +159,6 @@ func (s *Service) applyDesiredState(ctx context.Context) {
 			// retries or certificate/config changes can open another kernel.
 			s.requestAuthorizationPoll(ctx)
 		}
-		return
-	}
-	if s.usageMode() {
-		s.failUsageV2()
 		return
 	}
 	users := s.users.Users()

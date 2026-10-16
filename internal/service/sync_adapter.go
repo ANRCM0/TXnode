@@ -79,15 +79,8 @@ func (s *Service) applySyncResult(ctx context.Context, result nodesync.Result) {
 		}
 		return
 	}
-	if s.usageMode() && (result.CertChanged || result.Config != nil && result.ConfigHash != s.lastConfigHash || result.Users != nil && result.UserHash != s.users.Hash()) {
-		s.failUsageV2()
-		return
-	}
 	if s.syncer != nil {
 		s.syncer.CompleteResync()
-	}
-	if s.usageMode() {
-		return
 	}
 	if result.HasGeneration && result.Generation != s.desiredGeneration {
 		s.resetSnapshotCache()

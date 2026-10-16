@@ -113,7 +113,7 @@ func nativeBillingService(t *testing.T) (*Service, *nativeBillingKernel, *native
 	s := NewWithControlPlane(original.cfg, plane)
 	kernel := &nativeBillingKernel{fakeKernel: &fakeKernel{}}
 	s.kernel, s.kernelLife = kernel, kernellifecycle.New(kernel)
-	if err := s.preflightUsageV2(); err != nil {
+	if err := s.preflightNativeUsage(); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.initAuthorization(); err != nil {

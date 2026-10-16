@@ -12,7 +12,7 @@ import (
 func (s *Service) prepareReportBatch() reporting.Batch {
 	var traffic map[int][2]int64
 	var segments []model.TrafficSegment
-	if !s.meteredUsageMode() {
+	if !s.nativeUsageMode() {
 		traffic, segments = s.tracker.FlushBatch()
 	}
 	aliveIPs := s.tracker.FlushAliveIPs()
@@ -32,7 +32,7 @@ func (s *Service) prepareReportBatch() reporting.Batch {
 			Disk:    [2]uint64{status.DiskTotal, status.DiskUsed},
 			Metrics: metrics,
 		},
-		MoreTraffic:  !s.meteredUsageMode() && s.tracker.HasTraffic(),
+		MoreTraffic:  !s.nativeUsageMode() && s.tracker.HasTraffic(),
 		TrafficCount: len(traffic),
 		OnlineCount:  len(online),
 	}
@@ -64,7 +64,7 @@ func (s *Service) pushReportSync() error {
 	if s == nil || s.reporter == nil {
 		return nil
 	}
-	if !s.meteredUsageMode() && s.cfg != nil && s.cfg.Panel.Provider == "txboard" && s.tracker.HasPeriodAttribution() {
+	if !s.nativeUsageMode() && s.cfg != nil && s.cfg.Panel.Provider == "txboard" && s.tracker.HasPeriodAttribution() {
 		// A graceful signed-period shutdown also closes/samples before final reports;
 		// any failed delivery leaves all remaining chunks in one durable tail bundle.
 		s.stopUncertainKernel()

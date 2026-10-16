@@ -1,3 +1,5 @@
+> Retirement update (2026-10-16): isolated Usage Service, unsigned TXBoard user snapshots, old User UUID signing and delta/device pushes are retired. This document preserves earlier implementation evidence; current runtime uses [Provider delivery](native-provider-node.md) and [native subscription usage](native-subscription-usage.md). Shared kernel, finite authority, receipt and recovery safeguards remain.
+
 # Native finite authorization
 
 The signed finite authorization contract is `contracts/node-protocol/native-authorization-lease-v1.md`. Core signs a complete child-scoped snapshot with its independent Ed25519 key. Enrolled Node pins public trust, verifies scope and finite time, persists revision high-water before admission, and closes new and established sessions when renewal expires. Restart requires fresh online verification; neither cached users nor an ETag304 renews authorization.

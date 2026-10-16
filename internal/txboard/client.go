@@ -41,7 +41,6 @@ type Handshake struct {
 		Path    string `json:"path"`
 	} `json:"websocket"`
 	// Optional capability; the explicit v2 reporter validates it. Service remains v1.
-	UsageV2            json.RawMessage           `json:"usage_v2,omitempty"`
 	AuthorizationTrust *panel.AuthorizationTrust `json:"authorization_trust,omitempty"`
 }
 type NodeList struct {
@@ -49,16 +48,15 @@ type NodeList struct {
 	BaseConfig panel.MachineBaseConfig `json:"base_config"`
 }
 type Client struct {
-	baseURL, token                    string
-	nodeID, machineID                 int
-	http                              *http.Client
-	mu                                sync.Mutex
-	configETag, usersETag             string
-	cachedConfig                      *panel.NodeConfig
-	cachedUsers                       []panel.User
-	configGeneration, usersGeneration uint64
-	configReadMu, usersReadMu         sync.Mutex
-	success, failure                  atomic.Uint64
+	baseURL, token    string
+	nodeID, machineID int
+	http              *http.Client
+	mu                sync.Mutex
+	configETag        string
+	cachedConfig      *panel.NodeConfig
+	configGeneration  uint64
+	configReadMu      sync.Mutex
+	success, failure  atomic.Uint64
 }
 
 func NewClient(cfg config.PanelConfig) *Client {
@@ -80,10 +78,9 @@ func (c *Client) ResetConfigETag() {
 }
 func (c *Client) ResetETags() {
 	c.mu.Lock()
-	c.configETag, c.usersETag = "", ""
-	c.cachedConfig, c.cachedUsers = nil, nil
+	c.configETag = ""
+	c.cachedConfig = nil
 	c.configGeneration++
-	c.usersGeneration++
 	c.mu.Unlock()
 }
 func (c *Client) Metrics() (uint64, uint64) { return c.success.Load(), c.failure.Load() }
@@ -427,18 +424,14 @@ func cloneConfigSnapshot(cfg *panel.NodeConfig) (*panel.NodeConfig, error) {
 	return &cloned, nil
 }
 
-// A nil slice means304; an allocated empty slice means a valid empty user set.
-func (c *Client) GetUsers() ([]panel.User, error) { return c.readUsers(false) }
-
-// UsersSnapshot returns an independent complete desired user set. A legitimate
-// empty set remains allocated; missing cached content is never invented empty.
-func (c *Client) UsersSnapshot() ([]panel.User, error) { return c.readUsers(true) }
-
 // AuthorizedUsersSnapshot fetches a complete signed users snapshot. It never
 // uses ETag/304 because a cached unsigned body cannot renew finite authority.
 func (c *Client) AuthorizedUsersSnapshot(m *authorization.Manager) ([]panel.User, *authorization.Snapshot, error) {
 	if m == nil {
 		return nil, nil, errors.New("NODE_AUTHORIZATION_MANAGER_REQUIRED")
+	}
+	if !config.ProviderAuthorizationPolicy(m.Config().PolicyVersion) {
+		return nil, nil, errors.New("NODE_AUTHORIZATION_PROVIDER_POLICY_REQUIRED")
 	}
 	endpoint, err := url.Parse(c.baseURL)
 	if err != nil || endpoint.Scheme != "https" || endpoint.User != nil {
@@ -505,64 +498,6 @@ func (c *Client) AuthorizedUsersSnapshot(m *authorization.Manager) ([]panel.User
 		return nil, nil, err
 	}
 	return cloneUsersSnapshot(snap.Users), snap, nil
-}
-
-func (c *Client) readUsers(complete bool) ([]panel.User, error) {
-	c.usersReadMu.Lock()
-	defer c.usersReadMu.Unlock()
-	for attempt := 0; attempt < 2; attempt++ {
-		c.mu.Lock()
-		etag, generation := c.usersETag, c.usersGeneration
-		c.mu.Unlock()
-		resp, err := c.request("GET", "/users", nil, etag)
-		if err != nil {
-			return nil, err
-		}
-		if resp.StatusCode == http.StatusNotModified {
-			resp.Body.Close()
-			c.mu.Lock()
-			if generation != c.usersGeneration {
-				c.mu.Unlock()
-				return nil, errors.New("TXBoard users cache invalidated during read")
-			}
-			if !complete {
-				c.mu.Unlock()
-				return nil, nil
-			}
-			if c.cachedUsers != nil {
-				users := cloneUsersSnapshot(c.cachedUsers)
-				c.mu.Unlock()
-				return users, nil
-			}
-			c.usersETag = ""
-			c.mu.Unlock()
-			if attempt == 0 {
-				continue
-			}
-			return nil, errors.New("TXBoard users304 without matching snapshot")
-		}
-		var data struct {
-			ProtocolVersion int          `json:"protocol_version"`
-			NodeID          int          `json:"node_id"`
-			Users           []panel.User `json:"users"`
-		}
-		if err := decode(resp, &data, 200); err != nil {
-			return nil, err
-		}
-		if data.ProtocolVersion != 1 || data.NodeID != c.nodeID || data.Users == nil {
-			return nil, errors.New("invalid TXBoard users snapshot")
-		}
-		cached := cloneUsersSnapshot(data.Users)
-		c.mu.Lock()
-		if generation != c.usersGeneration {
-			c.mu.Unlock()
-			return nil, errors.New("TXBoard users cache invalidated during read")
-		}
-		c.cachedUsers, c.usersETag = cached, resp.Header.Get("ETag")
-		c.mu.Unlock()
-		return data.Users, nil
-	}
-	return nil, errors.New("TXBoard users snapshot unavailable")
 }
 
 func cloneUsersSnapshot(users []panel.User) []panel.User {

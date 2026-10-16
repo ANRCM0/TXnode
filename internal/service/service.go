@@ -30,7 +30,6 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/pushsync"
 	"github.com/ANRCM0/TX-Node/internal/reporting"
 	"github.com/ANRCM0/TX-Node/internal/tracker"
-	"github.com/ANRCM0/TX-Node/internal/usagebucket"
 	"github.com/ANRCM0/TX-Node/internal/usageobserver"
 	"github.com/ANRCM0/TX-Node/internal/userstate"
 )
@@ -67,9 +66,7 @@ type Service struct {
 	reporter                 *reporting.Controller
 	reporterInitErr          error
 	legacyPendingPath        string
-	usageV2                  *isolatedUsageRuntime
 	nativeUsage              *nativeUsageRuntime
-	usageOwner               *usagebucket.ProcessOwner
 	authorization            *authorization.Manager
 	authorizationWorkers     sync.WaitGroup
 	authorizationResults     chan authorizationResult
@@ -178,10 +175,10 @@ func (s *Service) Run(ctx context.Context) error {
 	if s.reporterInitErr != nil {
 		return fmt.Errorf("durable traffic report spool initialization failed: %w", s.reporterInitErr)
 	}
-	if err := s.preflightUsageV2(); err != nil {
+	if err := s.preflightNativeUsage(); err != nil {
 		return err
 	}
-	defer s.closeUsageV2()
+	defer s.closeNativeUsage()
 	s.initUsageObserver()
 	defer s.closeUsageObserver()
 	s.initLocalEventConsumer()
@@ -198,9 +195,7 @@ func (s *Service) Run(ctx context.Context) error {
 		return fmt.Errorf("initial setup: %w", err)
 	}
 	defer s.stopKernelObserved(false)
-	s.startUsageV2Worker()
-	usageLease, stopUsageLease := s.usageLeaseChannel()
-	defer stopUsageLease()
+	s.startNativeUsageWorker()
 
 	// Set up tickers
 	trackTicker := time.NewTicker(time.Duration(s.cfg.Node.TrackInterval) * time.Second)
@@ -278,20 +273,15 @@ func (s *Service) Run(ctx context.Context) error {
 			}
 			if s.nativeUsageMode() {
 				s.stopNativeUsageIO()
-			} else if s.usageMode() {
-				s.usageV2.tracker.StopBoundedUsageTraffic()
 			}
 			if err := s.pushReportSync(); err != nil {
 				return err
 			}
 			return nil
 
-		case <-s.usageFailureChannel():
-			s.failUsageV2()
-			return errUsageV2
-		case <-usageLease:
-			s.failUsageV2()
-			return errUsageV2
+		case <-s.nativeUsageFailureChannel():
+			s.failNativeUsage()
+			return errNativeUsage
 		case <-trackTicker.C:
 			if cause := context.Cause(ctx); controlerror.IsAuthoritativeStopCause(cause) {
 				return s.stopForAuthorityDenial(cause)
@@ -337,9 +327,7 @@ func (s *Service) Run(ctx context.Context) error {
 			if cause := context.Cause(ctx); controlerror.IsAuthoritativeStopCause(cause) {
 				return s.stopForAuthorityDenial(cause)
 			}
-			if !s.usageMode() {
-				s.discoverPush(ctx)
-			}
+			s.discoverPush(ctx)
 
 		case status := <-s.push.Statuses():
 			if cause := context.Cause(ctx); controlerror.IsAuthoritativeStopCause(cause) {
@@ -431,8 +419,10 @@ func (s *Service) initialSetup(ctx context.Context) error {
 		}
 	}
 
-	if err := s.initUsageV2(ctx, bootstrap); err != nil {
-		return err
+	if s.nativeUsageConfigured() {
+		if err := s.initNativeUsage(ctx, bootstrap); err != nil {
+			return err
+		}
 	}
 	s.metricsMu.Lock()
 	s.lastConfig = bootstrap.Config
@@ -515,28 +505,6 @@ func (s *Service) handleWSEvent(ctx context.Context, event controlplane.Event) {
 			return
 		}
 	}
-	if s.usageMode() {
-		switch event.Type {
-		case controlplane.EventSyncConfig:
-			if event.Config != nil && computeConfigHash(event.Config) != s.lastConfigHash {
-				s.failUsageV2()
-				return
-			}
-		case controlplane.EventSyncUsers:
-			if event.Users != nil && computeUserHash(event.Users) != s.users.Hash() {
-				s.failUsageV2()
-				return
-			}
-		case controlplane.EventSyncUserDelta:
-			if len(event.DeltaUsers) > 0 {
-				s.failUsageV2()
-				return
-			}
-		}
-	}
-	if s.usageMode() {
-		return
-	}
 	if s.authorityTerminal(ctx) {
 		return
 	}
@@ -583,8 +551,8 @@ func (s *Service) trackAndEnforce(ctx context.Context) {
 
 	traffic, aliveIPs, connCount, err := s.kernel.GetUserTraffic(ctx)
 	if err != nil {
-		if s.meteredUsageMode() {
-			s.failUsageV2()
+		if s.nativeUsageMode() {
+			s.failNativeUsage()
 			return
 		}
 		nlog.Core().Debug("get user traffic failed", "error", err)
@@ -592,9 +560,9 @@ func (s *Service) trackAndEnforce(ctx context.Context) {
 		return
 	}
 
-	if s.meteredUsageMode() {
+	if s.nativeUsageMode() {
 		if !s.tracker.ProcessUsageV2Metrics(traffic, aliveIPs, connCount) {
-			s.failUsageV2()
+			s.failNativeUsage()
 			return
 		}
 	} else {

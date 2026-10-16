@@ -12,9 +12,9 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/usagev2"
 )
 
-// PrepareIsolatedUsageV2TLS runs once before bootstrap, never during request
+// PrepareNativeUsageTLS runs once before bootstrap, never during request
 // handling. Credentials remain in the native client, and trust is explicit.
-func (c *Client) PrepareIsolatedUsageV2TLS(caFile string) error {
+func (c *Client) PrepareNativeUsageTLS(caFile string) error {
 	if c == nil {
 		return errors.New("USAGE_V2_NATIVE_HTTP_REQUIRED")
 	}
@@ -36,23 +36,6 @@ func (c *Client) PrepareIsolatedUsageV2TLS(caFile string) error {
 	return nil
 }
 
-func (c *Client) ServiceUsageV2(hs *Handshake) (*usagev2.Session, usagev2.Transport, error) {
-	if hs == nil || hs.ProtocolVersion != 1 || hs.WebSocket.Enabled || c == nil || c.machineID != 0 || len(hs.UsageV2) == 0 {
-		return nil, nil, errors.New("USAGE_V2_NATIVE_HTTP_REQUIRED")
-	}
-	var session usagev2.Session
-	if usagev2.StrictDecode(hs.UsageV2, &session, usagev2.MaxPayloadBytes) != nil || session.Validate() != nil || session.NodeID != strconv.Itoa(c.nodeID) {
-		return nil, nil, errors.New("USAGE_V2_CAPABILITY_INVALID")
-	}
-	transport, err := usagev2.NewHTTPTransport(c.baseURL, c.token, session.NodeID, 0, c.http)
-	if err != nil {
-		return nil, nil, errors.New("USAGE_V2_TRANSPORT_INVALID")
-	}
-	return &session, transport, nil
-}
-
-// NativeUsageTransport receives the Session only from the verified v2 signed
-// authorization; an unrelated handshake mapping is never used for billing.
 func (c *Client) NativeUsageTransport(session *usagev2.Session) (usagev2.Transport, error) {
 	if c == nil || session == nil || session.Validate() != nil || session.NodeID != strconv.Itoa(c.nodeID) {
 		return nil, errors.New("NATIVE_USAGE_SESSION_INVALID")

@@ -24,14 +24,12 @@ func TestNativeUsageRequiresV2SignedAuthorityAndKeepsMachineChildIdentity(t *tes
 	if err := base.ValidateUsageV2(); err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"v1", "isolated", "no_usage", "no_authority", "xray", "observer", "http"} {
+	for _, mode := range []string{"v1", "no_usage", "no_authority", "xray", "observer", "http"} {
 		t.Run(mode, func(t *testing.T) {
 			cfg := base
 			switch mode {
 			case "v1":
 				cfg.Authorization.PolicyVersion = NativeProviderAuthorizationPolicyVersion
-			case "isolated":
-				cfg.UsageV2.IsolatedCopy = true
 			case "no_usage":
 				cfg.UsageV2.Enabled = false
 			case "no_authority":

@@ -1,3 +1,5 @@
+> Retirement update (2026-10-16): isolated Usage Service, unsigned TXBoard user snapshots, old User UUID signing and delta/device pushes are retired. This document preserves earlier implementation evidence; current runtime uses [Provider delivery](native-provider-node.md) and [native subscription usage](native-subscription-usage.md). Shared kernel, finite authority, receipt and recovery safeguards remain.
+
 # Explicit direct TCP usage interval bridge
 
 Status: verified isolated prototype. This joins actual sing-box ConnTracker

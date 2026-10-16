@@ -300,6 +300,9 @@ func retryableUsageError(err error) bool {
 }
 
 func (s *Service) startNativeUsageWorker() {
+	if !s.nativeUsageMode() {
+		return
+	}
 	runtime := s.nativeUsage
 	ctx, cancel := context.WithCancel(context.Background())
 	runtime.cancel, runtime.workerStarted = cancel, true
@@ -339,6 +342,9 @@ func (s *Service) startNativeUsageWorker() {
 }
 
 func (s *Service) closeNativeUsage() {
+	if !s.nativeUsageMode() {
+		return
+	}
 	runtime := s.nativeUsage
 	s.stopNativeUsageIO()
 	if runtime.workerStarted {
@@ -361,4 +367,25 @@ func (s *Service) closeNativeUsage() {
 	cancel()
 	_ = runtime.store.Close()
 	_ = runtime.reporter.Close()
+}
+
+func (s *Service) preflightNativeUsage() error {
+	if s.cfg == nil || !s.cfg.UsageV2.Enabled {
+		return nil
+	}
+	if s.cfg.ValidateUsageV2() != nil || !s.nativeUsageConfigured() {
+		return errNativeUsage
+	}
+	prepare, ok := s.source.(interface{ PrepareNativeUsageV2(string) error })
+	if !ok || prepare.PrepareNativeUsageV2(s.cfg.UsageV2.CAFile) != nil {
+		return errNativeUsage
+	}
+	return nil
+}
+
+func (s *Service) nativeUsageFailureChannel() <-chan error {
+	if s.nativeUsageMode() {
+		return s.nativeUsage.failure
+	}
+	return nil
 }

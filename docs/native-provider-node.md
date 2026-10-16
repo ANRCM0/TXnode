@@ -5,8 +5,9 @@ The C2-C2 consumer uses the
 Core signs current native entitlement and credential SHA-256 commitments.
 Node retrieves UUIDs directly from a separate Provider, checks their hashes,
 then passes them to the existing runtime. Core never receives plaintext
-proxy credentials. This is an explicit new authorization policy; the existing
-`native-node-authorization/v1` policy retains its previous behavior.
+proxy credentials. This is the required TXBoard user-delivery path. Bare UUID snapshots,
+unsigned user caching, old signed User UUID delivery and native user delta
+pushes are retired. Xboard transport remains an independent provider.
 
 ## Provisioned identities
 

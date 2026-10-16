@@ -12,7 +12,6 @@ authorization:
   policy_version: native-provider-authorization/v2
 usage_v2:
   enabled: true
-  isolated_copy: false
   directory: /var/lib/tx-node/usage
   ca_file: /etc/tx-node/core-ca.pem
   max_bytes: 67108864

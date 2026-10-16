@@ -13,9 +13,8 @@ import (
 	"strings"
 )
 
-// AuthorizationConfig enables finite, signed native Node authorization. It is
-// deliberately opt-in so existing bearer-only and Xboard installations retain
-// their current behavior and do not accidentally claim an offline guarantee.
+// AuthorizationConfig pins finite native authority and Provider material delivery.
+// External Xboard configuration is independent of TXBoard native authorization.
 type AuthorizationConfig struct {
 	Enabled         bool                        `yaml:"enabled"`
 	StateDir        string                      `yaml:"state_dir,omitempty"`
@@ -86,7 +85,7 @@ func (c *AuthorizationConfig) applyDefaults(configDir string) {
 		c.MaxClockSkew = DefaultAuthorizationClockSkewSeconds
 	}
 	if c.PolicyVersion == "" {
-		c.PolicyVersion = NativeAuthorizationPolicyVersion
+		c.PolicyVersion = NativeProviderAuthorizationPolicyVersion
 	}
 	if c.StateDir == "" && configDir != "" {
 		c.StateDir = filepath.Join(configDir, "authorization")
@@ -111,7 +110,7 @@ func (c *Config) ValidateAuthorization() error {
 	if c.UsageV2.Enabled && a.PolicyVersion != NativeProviderUsagePolicyVersion {
 		return errors.New("NODE_AUTHORIZATION_USAGE_V2_INCOMPATIBLE")
 	}
-	if a.PolicyVersion == NativeProviderUsagePolicyVersion && (!c.UsageV2.Enabled || c.UsageV2.IsolatedCopy) {
+	if a.PolicyVersion == NativeProviderUsagePolicyVersion && !c.UsageV2.Enabled {
 		return errors.New("NODE_AUTHORIZATION_NATIVE_USAGE_REQUIRED")
 	}
 	if strings.TrimSpace(c.Kernel.ConfigDir) == "" || !filepath.IsAbs(c.Kernel.ConfigDir) || strings.TrimSpace(a.StateDir) == "" || !filepath.IsAbs(a.StateDir) {

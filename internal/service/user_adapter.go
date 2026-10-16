@@ -91,12 +91,6 @@ func (s *Service) applyUserUpdate(ctx context.Context, users []model.UserSpec, n
 	if !s.signedUsersAllowed(users) {
 		return
 	}
-	if s.usageMode() {
-		if computeUserHash(users) != s.users.Hash() {
-			s.failUsageV2()
-		}
-		return
-	}
 	if s.authorityTerminal(ctx) {
 		return
 	}
@@ -148,12 +142,6 @@ func (s *Service) rebuildDesiredUsers(ctx context.Context) {
 func (s *Service) applyUserDelta(ctx context.Context, action string, deltaUsers []model.UserSpec) {
 	if s.authorizationEnabled() {
 		s.requestAuthorizationPoll(ctx)
-		return
-	}
-	if s.usageMode() {
-		if len(deltaUsers) > 0 {
-			s.failUsageV2()
-		}
 		return
 	}
 	if s.authorityTerminal(ctx) || len(deltaUsers) == 0 || (action != "add" && action != "remove") {

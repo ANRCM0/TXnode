@@ -1,3 +1,5 @@
+> Retirement update (2026-10-16): isolated Usage Service, unsigned TXBoard user snapshots, old User UUID signing and delta/device pushes are retired. This document preserves earlier implementation evidence; current runtime uses [Provider delivery](native-provider-node.md) and [native subscription usage](native-subscription-usage.md). Shared kernel, finite authority, receipt and recovery safeguards remain.
+
 # Native snapshots and confirmed kernel application
 
 The [current contract](../../contracts/node-protocol/native-snapshot-application-v1.md) preserves a complete native snapshot beside its transport ETag. A valid304 can redeliver complete cached content; it never invents an empty user set. Configuration received before a later user request failure remains available on the next poll. Missing-cache304 retries once without a conditional header, then reports failure. Cached bodies are cloned and bound to one configured identity.

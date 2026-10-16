@@ -1,3 +1,5 @@
+> Retirement update (2026-10-16): isolated Usage Service, unsigned TXBoard user snapshots, old User UUID signing and delta/device pushes are retired. This document preserves earlier implementation evidence; current runtime uses [Provider delivery](native-provider-node.md) and [native subscription usage](native-subscription-usage.md). Shared kernel, finite authority, receipt and recovery safeguards remain.
+
 # Native traffic and quota closure
 
 The [traffic contract](../../contracts/node-protocol/native-traffic-quota-v1.md) and [observed-period contract](../../contracts/node-protocol/native-traffic-period-v1.md) reuse existing Node meters, durable report IDs, Core traffic hooks, the atomic TrafficBatchJob and reset service. No isolated Usage-v2 or global migration authority is activated.
