@@ -26,7 +26,7 @@ func (s *Spool) ConfirmCapture(r Record) (bool, error) {
 	path := filepath.Join(s.dir, recordName(r))
 	old, err := readRecord(path)
 	if os.IsNotExist(err) {
-		return false, nil
+		return s.retired(r)
 	}
 	if err != nil {
 		return false, err

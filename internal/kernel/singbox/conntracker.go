@@ -149,7 +149,8 @@ type ConnTracker struct {
 	auditor *audit.Reporter
 	// Fixed at construction; nil on the ordinary runtime path.
 	eventBuckets   *usagebucket.Meter
-	boundedUsage   *usageinterval.Collector
+	boundedUsage   boundedCollector
+	nativeUsage    bool
 	enforceBounded bool
 }
 
@@ -758,19 +759,32 @@ func (c *trackedConn) Read(b []byte) (int, error) {
 	var bounded *usageinterval.Operation
 	if c.tracker.boundedUsage != nil {
 		if c.boundedClosed.Load() {
+			if c.tracker.nativeUsage {
+				return 0, usageinterval.ErrUnknown
+			}
 			c.tracker.boundedUsage.Fail()
 		}
-		bounded = c.tracker.boundedUsage.Begin(c.userID)
+		if native, ok := c.tracker.boundedUsage.(*usageinterval.NativeCollector); ok {
+			bounded = native.BeginIO(c.userID, "upload", int64(len(b)))
+		} else {
+			bounded = c.tracker.boundedUsage.Begin(c.userID)
+		}
 		if bounded == nil && c.tracker.enforceBounded {
 			return 0, usageinterval.ErrUnknown
 		}
 	}
 	n, err := c.Conn.Read(b)
 	if c.tracker.boundedUsage != nil {
-		if c.boundedClosed.Load() {
+		if c.boundedClosed.Load() && !c.tracker.nativeUsage {
 			c.tracker.boundedUsage.Fail()
 		}
-		c.tracker.boundedUsage.Complete(bounded, "upload", int64(n), err != nil)
+		if native, ok := c.tracker.boundedUsage.(*usageinterval.NativeCollector); ok {
+			if durableErr := native.CompleteIO(bounded, "upload", int64(n), err != nil); durableErr != nil {
+				err = durableErr
+			}
+		} else {
+			c.tracker.boundedUsage.Complete(bounded, "upload", int64(n), err != nil)
+		}
 	}
 	if n > 0 {
 		if c.us != nil {
@@ -834,19 +848,32 @@ func (c *trackedConn) Write(b []byte) (int, error) {
 	var bounded *usageinterval.Operation
 	if c.tracker.boundedUsage != nil {
 		if c.boundedClosed.Load() {
+			if c.tracker.nativeUsage {
+				return 0, usageinterval.ErrUnknown
+			}
 			c.tracker.boundedUsage.Fail()
 		}
-		bounded = c.tracker.boundedUsage.Begin(c.userID)
+		if native, ok := c.tracker.boundedUsage.(*usageinterval.NativeCollector); ok {
+			bounded = native.BeginIO(c.userID, "download", int64(len(b)))
+		} else {
+			bounded = c.tracker.boundedUsage.Begin(c.userID)
+		}
 		if bounded == nil && c.tracker.enforceBounded {
 			return 0, usageinterval.ErrUnknown
 		}
 	}
 	n, err := c.Conn.Write(b)
 	if c.tracker.boundedUsage != nil {
-		if c.boundedClosed.Load() {
+		if c.boundedClosed.Load() && !c.tracker.nativeUsage {
 			c.tracker.boundedUsage.Fail()
 		}
-		c.tracker.boundedUsage.Complete(bounded, "download", int64(n), err != nil)
+		if native, ok := c.tracker.boundedUsage.(*usageinterval.NativeCollector); ok {
+			if durableErr := native.CompleteIO(bounded, "download", int64(n), err != nil); durableErr != nil {
+				err = durableErr
+			}
+		} else {
+			c.tracker.boundedUsage.Complete(bounded, "download", int64(n), err != nil)
+		}
 	}
 	if n > 0 && c.us != nil {
 		c.us.download.Add(int64(n)) // 向入站写入 = 用户下载

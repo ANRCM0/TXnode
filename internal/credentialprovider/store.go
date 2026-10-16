@@ -16,12 +16,13 @@ import (
 )
 
 var (
-	metadataBucket      = []byte("metadata")
-	operationsBucket    = []byte("operations")
-	keysBucket          = []byte("idempotency")
-	subjectsBucket      = []byte("subjects")
-	subjectIDsBucket    = []byte("subject_ids")
-	issueEvidenceBucket = []byte("issue_evidence")
+	metadataBucket           = []byte("metadata")
+	operationsBucket         = []byte("operations")
+	keysBucket               = []byte("idempotency")
+	subjectsBucket           = []byte("subjects")
+	subjectIDsBucket         = []byte("subject_ids")
+	issueEvidenceBucket      = []byte("issue_evidence")
+	generationEvidenceBucket = []byte("credential_evidence")
 )
 
 type Store struct {
@@ -87,28 +88,40 @@ func OpenStore(path, providerID, epoch string) (*Store, error) {
 	}
 	store := &Store{db: db, providerID: providerID, epoch: epoch}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{metadataBucket, operationsBucket, keysBucket, subjectsBucket, subjectIDsBucket, issueEvidenceBucket} {
+		for _, name := range [][]byte{metadataBucket, operationsBucket, keysBucket, subjectsBucket, subjectIDsBucket, issueEvidenceBucket, generationEvidenceBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return err
 			}
 		}
 		metadata := tx.Bucket(metadataBucket)
-		expected := "native-provider-store/1:" + providerID + ":" + epoch
+		expected := "native-provider-store/2:" + providerID + ":" + epoch
+		previous := "native-provider-store/1:" + providerID + ":" + epoch
+		upgrade := true
 		if current := metadata.Get([]byte("identity")); current != nil {
-			if string(current) != expected {
+			if string(current) != expected && string(current) != previous {
 				return errors.New("STORE_IDENTITY_MISMATCH")
 			}
+			upgrade = string(current) == previous
 		} else {
 			for _, name := range [][]byte{operationsBucket, keysBucket, subjectsBucket, subjectIDsBucket, issueEvidenceBucket} {
 				if key, _ := tx.Bucket(name).Cursor().First(); key != nil {
 					return errors.New("STORE_IDENTITY_MISMATCH")
 				}
 			}
-			if err := metadata.Put([]byte("identity"), []byte(expected)); err != nil {
+		}
+		if upgrade {
+			if err := backfillIssueEvidence(tx, providerID, epoch); err != nil {
 				return err
 			}
+			if err := upgradeGenerationEvidence(tx, providerID, epoch); err != nil {
+				return err
+			}
+			return metadata.Put([]byte("identity"), []byte(expected))
 		}
-		return backfillIssueEvidence(tx, providerID, epoch)
+		if string(metadata.Get([]byte("credential_evidence_version"))) != "1" {
+			return errDeliveryState
+		}
+		return nil
 	})
 	if err != nil {
 		_ = db.Close()
@@ -201,6 +214,8 @@ func (s *Store) execute(ctx context.Context, req Request, now time.Time) Respons
 		switch req.Operation {
 		case "issue":
 			result, applyErr = issue(tx, req, now)
+		case "rotate":
+			result, applyErr = s.rotate(tx, req, now)
 		case "revoke":
 			result, applyErr = revoke(tx, req, now)
 		default:
@@ -222,12 +237,22 @@ func (s *Store) execute(ctx context.Context, req Request, now time.Time) Respons
 		if err = operations.Put([]byte(req.OperationID), record); err != nil {
 			return err
 		}
-		if req.Operation == "issue" && result.Status == "succeeded" {
+		if (req.Operation == "issue" || req.Operation == "rotate") && result.Status == "succeeded" {
 			var receipt IssueResult
-			if json.Unmarshal(result.Result, &receipt) != nil {
+			if req.Operation == "rotate" {
+				var rotated RotateResult
+				if json.Unmarshal(result.Result, &rotated) != nil {
+					return errInvalidStoredReceipt
+				}
+				receipt = rotated.current()
+			} else if json.Unmarshal(result.Result, &receipt) != nil {
 				return errInvalidStoredReceipt
 			}
 			if err = tx.Bucket(issueEvidenceBucket).Put([]byte(receipt.ProviderSubjectRef), []byte(req.OperationID)); err != nil {
+				return err
+			}
+			if err = saveGenerationEvidence(tx, receipt.ProviderSubjectRef, receipt.CredentialGeneration,
+				generationEvidence{OperationID: req.OperationID, Input: append(json.RawMessage(nil), req.Input...)}); err != nil {
 				return err
 			}
 		}

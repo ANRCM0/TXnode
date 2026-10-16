@@ -19,11 +19,13 @@ import (
 	"unicode/utf8"
 
 	"github.com/ANRCM0/TX-Node/internal/panel"
+	"github.com/ANRCM0/TX-Node/internal/usagev2"
 )
 
 const (
 	ContractVersion = "credential-delivery/1"
 	PolicyVersion   = "native-provider-authorization/v1"
+	PolicyVersionV2 = "native-provider-authorization/v2"
 	Audience        = "tx-node-native-authorization-v1"
 	MaxMessageBytes = 1 << 20
 	MaxSubjects     = 128
@@ -64,21 +66,22 @@ type Subject struct {
 }
 
 type Payload struct {
-	ProtocolVersion int             `json:"protocol_version"`
-	Audience        string          `json:"audience"`
-	PolicyVersion   string          `json:"policy_version"`
-	CoreInstanceID  string          `json:"core_instance_id"`
-	NodeID          int             `json:"node_id"`
-	MachineID       *int            `json:"machine_id"`
-	Revision        string          `json:"revision"`
-	KeyID           string          `json:"key_id"`
-	KeyEpoch        string          `json:"key_epoch"`
-	IssuedAt        int64           `json:"issued_at"`
-	NotBefore       int64           `json:"not_before"`
-	ExpiresAt       int64           `json:"expires_at"`
-	Complete        bool            `json:"complete"`
-	Users           []panel.User    `json:"users"`
-	Provider        ProviderBinding `json:"provider"`
+	ProtocolVersion int              `json:"protocol_version"`
+	Audience        string           `json:"audience"`
+	PolicyVersion   string           `json:"policy_version"`
+	CoreInstanceID  string           `json:"core_instance_id"`
+	NodeID          int              `json:"node_id"`
+	MachineID       *int             `json:"machine_id"`
+	Revision        string           `json:"revision"`
+	KeyID           string           `json:"key_id"`
+	KeyEpoch        string           `json:"key_epoch"`
+	IssuedAt        int64            `json:"issued_at"`
+	NotBefore       int64            `json:"not_before"`
+	ExpiresAt       int64            `json:"expires_at"`
+	Complete        bool             `json:"complete"`
+	Users           []panel.User     `json:"users"`
+	Provider        ProviderBinding  `json:"provider"`
+	UsageV2         *usagev2.Session `json:"usage_v2,omitempty"`
 }
 
 type Grant struct {
@@ -213,7 +216,13 @@ func VerifyGrant(env Envelope, trust Trust, now time.Time, skew int) (*Grant, er
 	if DecodeStrict(raw, &p) != nil {
 		return nil, refusal("INVALID")
 	}
-	if p.ProtocolVersion != 1 || p.Audience != Audience || p.PolicyVersion != PolicyVersion ||
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &fields)
+	_, hasUsage := fields["usage_v2"]
+	if p.ProtocolVersion != 1 || p.Audience != Audience ||
+		(p.PolicyVersion != PolicyVersion && p.PolicyVersion != PolicyVersionV2) ||
+		(p.PolicyVersion == PolicyVersion && hasUsage) ||
+		(p.PolicyVersion == PolicyVersionV2 && p.UsageV2 == nil) ||
 		p.CoreInstanceID != trust.CoreInstanceID || p.KeyID != trust.KeyID || p.KeyEpoch != trust.KeyEpoch ||
 		p.NodeID <= 0 || p.NodeID > 2147483647 ||
 		(p.MachineID != nil && (*p.MachineID <= 0 || *p.MachineID > 2147483647)) ||
@@ -249,6 +258,22 @@ func VerifyGrant(env Envelope, trust Trust, now time.Time, skew int) (*Grant, er
 		previous = u.ID
 		seenSubjects[s.AccessSubjectID], seenRefs[s.ProviderSubjectRef] = true, true
 		seenCredentials[s.CredentialRef], seenHashes[u.UUID] = true, true
+	}
+	if p.UsageV2 != nil {
+		session := p.UsageV2
+		if session.Validate() != nil || session.CoreInstanceID != p.CoreInstanceID ||
+			session.NodeID != strconv.Itoa(p.NodeID) || session.IssuedAt != p.IssuedAt ||
+			len(session.Grants) != len(p.Users) {
+			return nil, refusal("USAGE_INVALID")
+		}
+		for i, usage := range session.Grants {
+			if usage.UserID != strconv.Itoa(p.Users[i].ID) ||
+				usage.AccessSubjectID != p.Provider.Subjects[i].AccessSubjectID ||
+				usage.TermsID != p.Provider.Subjects[i].TermsID ||
+				usage.IssuedAt != p.IssuedAt || usage.LeaseExpiresAt != p.ExpiresAt {
+				return nil, refusal("USAGE_INVALID")
+			}
+		}
 	}
 	digest := sha256.Sum256(raw)
 	return &Grant{Payload: p, PayloadBytes: append([]byte(nil), raw...), Digest: hex.EncodeToString(digest[:])}, nil

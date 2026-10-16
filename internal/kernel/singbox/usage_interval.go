@@ -10,6 +10,24 @@ import (
 	singM "github.com/sagernet/sing/common/metadata"
 )
 
+type boundedCollector interface {
+	Begin(int) *usageinterval.Operation
+	Complete(*usageinterval.Operation, string, int64, bool)
+	Flush() (*usagev2.Submission, error)
+	Close()
+	Fail()
+	Unknown() bool
+	CheckCurrent() error
+	CheckUsers(map[string]int)
+}
+
+func NewNativeUsageTracker(collector *usageinterval.NativeCollector, users map[string]int) *ConnTracker {
+	tracker := NewConnTracker(0)
+	tracker.SetUserMap(users)
+	tracker.boundedUsage, tracker.nativeUsage = collector, true
+	return tracker
+}
+
 // NewConnTrackerWithBoundedUsage is a prototype producer/consumer opt-in. No
 // Service calls it and it does not install credentials or authorize admission.
 func NewConnTrackerWithBoundedUsage(session usagev2.Session, users map[string]int, journal *usageinterval.Journal) (*ConnTracker, error) {
@@ -116,6 +134,19 @@ func (s *SingBox) SetBoundedUsageTracker(tracker *ConnTracker) bool {
 		return false
 	}
 	s.boundedPrepared = tracker
+	return true
+}
+
+// A native replacement is installed only after the prior box has closed and
+// Service has durably retired its collector. The isolated one-shot API remains.
+func (s *SingBox) SetNativeUsageTracker(tracker *ConnTracker) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if tracker == nil || !tracker.nativeUsage || !tracker.enforceBounded || s.box != nil ||
+		s.localEventConsumer != nil || s.boundedPrepared != nil && (!s.boundedPrepared.nativeUsage || !s.boundedPrepared.boundedUsage.Unknown()) {
+		return false
+	}
+	s.boundedPrepared, s.connTracker, s.boundedStarted = tracker, nil, false
 	return true
 }
 func (s *SingBox) FlushBoundedUsage() (*usagev2.Submission, error) {

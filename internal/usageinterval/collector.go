@@ -39,6 +39,7 @@ type Evidence struct {
 
 type Operation struct {
 	owner    *Collector
+	native   *NativeCollector
 	sequence uint64
 	user     string
 	started  stamp
@@ -200,7 +201,7 @@ func (c *Collector) Begin(userID int) *Operation {
 		return nil
 	}
 	c.sequence++
-	op := &Operation{c, c.sequence, user, at}
+	op := &Operation{owner: c, sequence: c.sequence, user: user, started: at}
 	c.inflight[op.sequence] = op
 	return op
 }

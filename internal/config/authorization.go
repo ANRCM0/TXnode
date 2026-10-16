@@ -44,13 +44,18 @@ const (
 	DefaultAuthorizationClockSkewSeconds     = 5
 	NativeAuthorizationPolicyVersion         = "native-node-authorization/v1"
 	NativeProviderAuthorizationPolicyVersion = "native-provider-authorization/v1"
+	NativeProviderUsagePolicyVersion         = "native-provider-authorization/v2"
 )
+
+func ProviderAuthorizationPolicy(policy string) bool {
+	return policy == NativeProviderAuthorizationPolicyVersion || policy == NativeProviderUsagePolicyVersion
+}
 
 // ValidateProvider keeps material delivery opt-in and binds its address and
 // TLS identity to local operator configuration, never a Core response.
 func (c AuthorizationConfig) ValidateProvider() error {
 	hasProvider := c.Provider != (AuthorizationProviderConfig{})
-	if c.PolicyVersion != NativeProviderAuthorizationPolicyVersion {
+	if !ProviderAuthorizationPolicy(c.PolicyVersion) {
 		if hasProvider {
 			return errors.New("NODE_AUTHORIZATION_PROVIDER_POLICY_REQUIRED")
 		}
@@ -103,8 +108,11 @@ func (c *Config) ValidateAuthorization() error {
 	if c.Panel.Provider != "txboard" || c.IsStandalone() {
 		return errors.New("NODE_AUTHORIZATION_REQUIRES_TXBOARD_NONSTANDALONE")
 	}
-	if c.UsageV2.Enabled {
+	if c.UsageV2.Enabled && a.PolicyVersion != NativeProviderUsagePolicyVersion {
 		return errors.New("NODE_AUTHORIZATION_USAGE_V2_INCOMPATIBLE")
+	}
+	if a.PolicyVersion == NativeProviderUsagePolicyVersion && (!c.UsageV2.Enabled || c.UsageV2.IsolatedCopy) {
+		return errors.New("NODE_AUTHORIZATION_NATIVE_USAGE_REQUIRED")
 	}
 	if strings.TrimSpace(c.Kernel.ConfigDir) == "" || !filepath.IsAbs(c.Kernel.ConfigDir) || strings.TrimSpace(a.StateDir) == "" || !filepath.IsAbs(a.StateDir) {
 		return errors.New("NODE_AUTHORIZATION_STATE_DIR_REQUIRED")
@@ -125,7 +133,7 @@ func (c *Config) ValidateAuthorization() error {
 	if err != nil || len(key) != ed25519.PublicKeySize || base64.RawURLEncoding.EncodeToString(key) != a.PublicKey {
 		return errors.New("NODE_AUTHORIZATION_PUBLIC_KEY_INVALID")
 	}
-	if a.PolicyVersion != NativeAuthorizationPolicyVersion && a.PolicyVersion != NativeProviderAuthorizationPolicyVersion || a.RefreshInterval < 1 || a.RefreshInterval > 30 || a.MaxClockSkew < 0 || a.MaxClockSkew > 30 {
+	if a.PolicyVersion != NativeAuthorizationPolicyVersion && !ProviderAuthorizationPolicy(a.PolicyVersion) || a.RefreshInterval < 1 || a.RefreshInterval > 30 || a.MaxClockSkew < 0 || a.MaxClockSkew > 30 {
 		return errors.New("NODE_AUTHORIZATION_POLICY_INVALID")
 	}
 	if err := a.ValidateProvider(); err != nil {

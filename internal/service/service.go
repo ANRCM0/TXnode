@@ -68,6 +68,7 @@ type Service struct {
 	reporterInitErr          error
 	legacyPendingPath        string
 	usageV2                  *isolatedUsageRuntime
+	nativeUsage              *nativeUsageRuntime
 	usageOwner               *usagebucket.ProcessOwner
 	authorization            *authorization.Manager
 	authorizationWorkers     sync.WaitGroup
@@ -253,6 +254,8 @@ func (s *Service) Run(ctx context.Context) error {
 			return s.stopForAuthorization(fmt.Errorf("NODE_AUTHORIZATION_EXPIRED"))
 		case <-authorizationRefresh:
 			s.requestAuthorization(ctx)
+		case <-s.nativeUsageRefreshChannel():
+			s.requestAuthorizationPoll(ctx)
 		case result := <-s.authorizationResults:
 			s.authorizationRefresh.Store(false)
 			if err := s.applyAuthorizationResult(ctx, result); err != nil {
@@ -273,7 +276,9 @@ func (s *Service) Run(ctx context.Context) error {
 					return s.stopForAuthorityDenial(cause)
 				}
 			}
-			if s.usageMode() {
+			if s.nativeUsageMode() {
+				s.stopNativeUsageIO()
+			} else if s.usageMode() {
 				s.usageV2.tracker.StopBoundedUsageTraffic()
 			}
 			if err := s.pushReportSync(); err != nil {
@@ -578,7 +583,7 @@ func (s *Service) trackAndEnforce(ctx context.Context) {
 
 	traffic, aliveIPs, connCount, err := s.kernel.GetUserTraffic(ctx)
 	if err != nil {
-		if s.usageMode() {
+		if s.meteredUsageMode() {
 			s.failUsageV2()
 			return
 		}
@@ -587,7 +592,7 @@ func (s *Service) trackAndEnforce(ctx context.Context) {
 		return
 	}
 
-	if s.usageMode() {
+	if s.meteredUsageMode() {
 		if !s.tracker.ProcessUsageV2Metrics(traffic, aliveIPs, connCount) {
 			s.failUsageV2()
 			return
@@ -648,6 +653,12 @@ func (s *Service) buildMetrics(status monitor.Status) map[string]interface{} {
 		"users_applied": desiredUsersHash != "" && desiredUsersHash == s.appliedUserHash,
 	}
 	s.metricsMu.RUnlock()
+	if s.nativeUsageMode() {
+		m["native_usage"] = map[string]interface{}{"policy": config.NativeProviderUsagePolicyVersion,
+			"quarantined_collectors":         s.nativeUsage.store.QuarantinedCollectors(),
+			"quarantined_batches":            s.nativeUsage.reporter.NativeQuarantinedCount(),
+			"replacement_authority_required": s.nativeUsage.refreshNeeded.Load(), "legacy_billing": false}
+	}
 
 	// Speed
 	m["inbound_speed"] = s.tracker.InboundSpeed()

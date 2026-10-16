@@ -29,6 +29,9 @@ type Config struct {
 	ClientFingerprints     []string
 	DeliveryTrust          string
 	NodeClientFingerprints []string
+	SubscriptionListen     string
+	SubscriptionTLSCert    string
+	SubscriptionTLSKey     string
 }
 
 func fingerprintSet(values []string) (map[string]bool, error) {
@@ -107,7 +110,7 @@ func NewHandler(store *Store, fingerprints []string) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		if !peerAllowed(r.TLS, allowed) {
@@ -153,7 +156,8 @@ func NewHandler(store *Store, fingerprints []string) (http.Handler, error) {
 		ctx, cancel := context.WithDeadline(r.Context(), time.Unix(req.DeadlineAt, 0))
 		defer cancel()
 		writeResponse(w, http.StatusOK, store.execute(ctx, req, time.Now()))
-	}), nil
+	})
+	return withCapabilities(handler, store, fingerprints, false, false), nil
 }
 
 func writeResponse(w http.ResponseWriter, status int, response Response) {
@@ -201,6 +205,7 @@ func Run(ctx context.Context, config Config, ready func(net.Addr)) error {
 		return errors.New("LISTEN_UNAVAILABLE")
 	}
 	defer listener.Close()
+	listeners := []net.Listener{listener}
 	server := &http.Server{
 		Handler: handler, TLSConfig: tlsConfig,
 		ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second,
@@ -209,13 +214,51 @@ func Run(ctx context.Context, config Config, ready func(net.Addr)) error {
 		// net/http's default TLS diagnostics include peer certificate details.
 		ErrorLog: log.New(io.Discard, "", 0),
 	}
-	serveResult := make(chan error, 1)
-	go func() { serveResult <- server.ServeTLS(listener, "", "") }()
+	servers := []*http.Server{server}
+	if config.SubscriptionListen != "" || config.SubscriptionTLSCert != "" || config.SubscriptionTLSKey != "" {
+		if config.SubscriptionListen == "" || config.SubscriptionTLSCert == "" || config.SubscriptionTLSKey == "" || config.DeliveryTrust == "" {
+			return errors.New("RENDER_CONFIG_INVALID")
+		}
+		cert, err := tls.LoadX509KeyPair(config.SubscriptionTLSCert, config.SubscriptionTLSKey)
+		if err != nil {
+			return errors.New("RENDER_CONFIG_INVALID")
+		}
+		trust, err := loadDeliveryTrust(config.DeliveryTrust)
+		if err != nil {
+			return err
+		}
+		renderHandler, err := NewRenderHandler(store, trust)
+		if err != nil {
+			return err
+		}
+		renderListener, err := net.Listen("tcp", config.SubscriptionListen)
+		if err != nil {
+			return errors.New("RENDER_LISTEN_UNAVAILABLE")
+		}
+		defer renderListener.Close()
+		listeners = append(listeners, renderListener)
+		servers = append(servers, &http.Server{Handler: renderHandler,
+			TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert}},
+			ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 35 * time.Second,
+			IdleTimeout: 30 * time.Second, MaxHeaderBytes: 8 << 10, ErrorLog: log.New(io.Discard, "", 0)})
+	}
+	serveResult := make(chan error, len(servers))
+	server.Handler = withCapabilities(handler, store, config.ClientFingerprints, config.DeliveryTrust != "", len(servers) > 1)
+	for i, current := range servers {
+		bound := listeners[i]
+		go func() { serveResult <- current.ServeTLS(bound, "", "") }()
+	}
 	if ready != nil {
 		ready(listener.Addr())
 	}
 	select {
 	case err := <-serveResult:
+		for _, current := range servers {
+			_ = current.Close()
+		}
+		for i := 1; i < len(servers); i++ {
+			<-serveResult
+		}
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
@@ -223,10 +266,14 @@ func Run(ctx context.Context, config Config, ready func(net.Addr)) error {
 	case <-ctx.Done():
 		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := server.Shutdown(shutdown); err != nil {
-			_ = server.Close()
+		for _, current := range servers {
+			if err := current.Shutdown(shutdown); err != nil {
+				_ = current.Close()
+			}
 		}
-		<-serveResult
+		for range servers {
+			<-serveResult
+		}
 		return nil
 	}
 }

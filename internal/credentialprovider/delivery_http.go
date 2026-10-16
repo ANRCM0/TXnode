@@ -54,7 +54,7 @@ func NewDeliveryHandler(store *Store, controlFingerprints, nodeFingerprints []st
 	if err != nil {
 		return nil, err
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/credential-metadata" && r.URL.Path != "/credentials" {
 			operations.ServeHTTP(w, r)
 			return
@@ -144,7 +144,8 @@ func NewDeliveryHandler(store *Store, controlFingerprints, nodeFingerprints []st
 			return
 		}
 		writeDeliveryResponse(w, result, grant.Payload.ExpiresAt)
-	}), nil
+	})
+	return withCapabilities(handler, store, controlFingerprints, true, false), nil
 }
 
 func writeDeliveryResponse(w http.ResponseWriter, response any, expiresAt int64) {

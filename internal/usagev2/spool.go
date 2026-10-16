@@ -16,10 +16,11 @@ import (
 const DefaultSpoolBytes int64 = 64 << 20
 
 type Record struct {
-	SchemaVersion int        `json:"schema_version"`
-	Session       Session    `json:"session"`
-	Submission    Submission `json:"submission"`
-	Receipt       *Receipt   `json:"receipt,omitempty"`
+	SchemaVersion   int              `json:"schema_version"`
+	Session         Session          `json:"session"`
+	Submission      Submission       `json:"submission"`
+	Receipt         *Receipt         `json:"receipt,omitempty"`
+	LocalQuarantine *LocalQuarantine `json:"local_quarantine,omitempty"`
 }
 
 type Spool struct {
@@ -117,6 +118,9 @@ func (r Record) Validate() error {
 	if r.Session.NodeID != r.Submission.Payload.NodeID || r.Session.SourceEpoch != r.Submission.Payload.SourceEpoch {
 		return ErrReceiptMismatch
 	}
+	if err := validateLocalQuarantine(r); err != nil {
+		return err
+	}
 	if r.Receipt != nil {
 		return r.Receipt.Validate(r.Session, r.Submission)
 	}
@@ -207,6 +211,9 @@ func (s *Spool) Save(r Record) error {
 		if string(oldSession) != string(newSession) {
 			return errors.New("cannot change immutable usage batch session")
 		}
+		if old.LocalQuarantine != nil && (r.LocalQuarantine == nil || *old.LocalQuarantine != *r.LocalQuarantine) {
+			return ErrRecoveryRequired
+		}
 		if r.Receipt == nil && old.Receipt != nil {
 			return errors.New("cannot discard stored usage receipt")
 		}
@@ -222,6 +229,8 @@ func (s *Spool) Save(r Record) error {
 			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	} else if retired, err := s.retired(r); err != nil || retired {
 		return err
 	}
 	encoded, err := json.Marshal(r)

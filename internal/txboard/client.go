@@ -483,7 +483,7 @@ func (c *Client) AuthorizedUsersSnapshot(m *authorization.Manager) ([]panel.User
 	}
 	envelope := authorization.Envelope{Payload: data.Authorization.Payload, Signature: data.Authorization.Signature}
 	users := data.Users
-	if m.Config().PolicyVersion == config.NativeProviderAuthorizationPolicyVersion {
+	if config.ProviderAuthorizationPolicy(m.Config().PolicyVersion) {
 		grant, err := m.VerifyProviderGrant(envelope, users, time.Now())
 		if err != nil {
 			return nil, nil, err

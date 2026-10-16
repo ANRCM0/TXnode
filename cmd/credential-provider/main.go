@@ -26,6 +26,9 @@ func main() {
 	flag.StringVar(&fingerprints, "client-fingerprint", "", "Comma-separated lowercase SHA-256 client leaf fingerprints")
 	flag.StringVar(&config.DeliveryTrust, "delivery-trust", "", "Absolute path to the pinned Core public trust JSON")
 	flag.StringVar(&nodeFingerprints, "node-client-fingerprint", "", "Comma-separated Node leaf fingerprints, separate from control clients")
+	flag.StringVar(&config.SubscriptionListen, "subscription-listen", "", "Optional separate public subscriber TLS listen address")
+	flag.StringVar(&config.SubscriptionTLSCert, "subscription-tls-cert", "", "Public subscriber server certificate PEM")
+	flag.StringVar(&config.SubscriptionTLSKey, "subscription-tls-key", "", "Public subscriber server private key PEM")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "INVALID_ARGUMENTS")

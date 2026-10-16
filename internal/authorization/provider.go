@@ -11,6 +11,7 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/config"
 	"github.com/ANRCM0/TX-Node/internal/credentialdelivery"
 	"github.com/ANRCM0/TX-Node/internal/panel"
+	"github.com/ANRCM0/TX-Node/internal/usagev2"
 )
 
 var materialUUIDRE = regexp.MustCompile(`\A[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\z`)
@@ -21,7 +22,7 @@ func ValidateProtocol(snapshot *Snapshot, protocol string) error {
 	if snapshot == nil {
 		return refuse("SNAPSHOT_REQUIRED")
 	}
-	if snapshot.Payload.PolicyVersion != config.NativeProviderAuthorizationPolicyVersion {
+	if !config.ProviderAuthorizationPolicy(snapshot.Payload.PolicyVersion) {
 		return nil
 	}
 	if snapshot.Payload.Provider == nil {
@@ -47,7 +48,7 @@ func ValidateProtocol(snapshot *Snapshot, protocol string) error {
 // In particular, a stale revision cannot cause material retrieval before the
 // durable high-water and the Machine child target have been checked.
 func (m *Manager) VerifyProviderGrant(env Envelope, users []panel.User, now time.Time) (*credentialdelivery.Grant, error) {
-	if m.cfg.PolicyVersion != config.NativeProviderAuthorizationPolicyVersion {
+	if !config.ProviderAuthorizationPolicy(m.cfg.PolicyVersion) {
 		return nil, refuse("PROVIDER_POLICY_REQUIRED")
 	}
 	m.mu.Lock()
@@ -56,6 +57,9 @@ func (m *Manager) VerifyProviderGrant(env Envelope, users []panel.User, now time
 	grant, err := verifyProviderGrant(env, trust, m.target, now, m.cfg.MaxClockSkew)
 	if err != nil {
 		return nil, err
+	}
+	if grant.Payload.PolicyVersion != m.cfg.PolicyVersion {
+		return nil, refuse("POLICY_MISMATCH")
 	}
 	if !sameUsers(grant.Payload.Users, users) {
 		return nil, refuse("USERS_MISMATCH")
@@ -72,7 +76,7 @@ func (m *Manager) VerifyProviderGrant(env Envelope, users []panel.User, now time
 }
 
 func (m *Manager) checkProviderBinding(binding *credentialdelivery.ProviderBinding) error {
-	if m.cfg.PolicyVersion != config.NativeProviderAuthorizationPolicyVersion {
+	if !config.ProviderAuthorizationPolicy(m.cfg.PolicyVersion) {
 		if binding != nil {
 			return refuse("PROVIDER_POLICY_REQUIRED")
 		}
@@ -137,6 +141,15 @@ func providerPayload(p credentialdelivery.Payload) Payload {
 		CoreInstanceID: p.CoreInstanceID, NodeID: p.NodeID, MachineID: cloneInt(p.MachineID),
 		Revision: p.Revision, KeyID: p.KeyID, KeyEpoch: p.KeyEpoch, IssuedAt: p.IssuedAt,
 		NotBefore: p.NotBefore, ExpiresAt: p.ExpiresAt, Complete: p.Complete,
-		Users: cloneUsers(p.Users), Provider: &provider,
+		Users: cloneUsers(p.Users), Provider: &provider, UsageV2: cloneUsageSession(p.UsageV2),
 	}
+}
+
+func cloneUsageSession(session *usagev2.Session) *usagev2.Session {
+	if session == nil {
+		return nil
+	}
+	copy := *session
+	copy.Grants = append([]usagev2.Grant{}, session.Grants...)
+	return &copy
 }

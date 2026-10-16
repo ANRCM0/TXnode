@@ -17,6 +17,7 @@ import (
 
 const HTTPPrefix = "/txapi/node/v2/usage"
 
+var ErrTransportUnavailable = errors.New("usage v2 transport unavailable; retain original batch")
 var errorCodePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]*$`)
 
 type HTTPTransport struct {
@@ -103,12 +104,12 @@ func (t *HTTPTransport) request(ctx context.Context, path string, body any, quer
 	req.Header.Set("Content-Type", "application/json")
 	response, err := t.client.Do(req)
 	if err != nil {
-		return Receipt{}, false, errors.New("usage v2 transport failed; query before same-batch replay")
+		return Receipt{}, false, ErrTransportUnavailable
 	}
 	defer response.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(response.Body, MaxPayloadBytes+1))
 	if err != nil {
-		return Receipt{}, false, errors.New("usage v2 response interrupted")
+		return Receipt{}, false, ErrTransportUnavailable
 	}
 	var envelope struct {
 		Data      json.RawMessage `json:"data,omitempty"`
