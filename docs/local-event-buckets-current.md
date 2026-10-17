@@ -42,7 +42,7 @@ The initial slice recorded a pinned sing 0.8.2 writer coverage gap:
 `UnwrapCountPacketWriter` first unwraps replaceable writers, which bypassed the
 trackedPacketConn counter. Its historical report proves a delivered UDP packet
 with zero writer totals and events. The separate
-[UDP writer traversal fix](udp-writer-accounting-current.md) now keeps that boundary
+[UDP accounting boundary](controlplane.md#udp-accounting-boundary) now keeps that boundary
 and restores ordinary `CopyPacket` counting in the existing legacy upload
 direction. Current tests assert one writer callback per successful packet. The
 initial verification report remains the evidence for the original slice; this

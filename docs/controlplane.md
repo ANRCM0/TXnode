@@ -1,120 +1,159 @@
-# TX-Node control-plane architecture
+# TX-Node control plane and runtime safety
 
-TX-Node core code is intentionally independent from any single panel protocol. Remote and local management systems connect to the node through the `internal/controlplane` abstraction.
+TX-Node runs the Data Plane, not Core business authority. Service and kernels
+consume the provider-neutral `ControlPlane` (`Source` + `Sink`), `NodeSpec` and
+`UserSpec`. Protocol JSON, credentials, HTTP paths and WebSocket frames belong
+in adapters.
 
-## Boundary
+## Adapters and ownership
 
-The core service consumes only the `ControlPlane` contract (`Source` + `Sink`) and TX-native models such as `model.NodeSpec` and `model.UserSpec`.
+- `TXBoardControlPlane` uses `/txapi/node/v1`, Bearer authentication and explicit
+  Node/Machine identity headers. HTTP polling works without optional native WS.
+- `XboardControlPlane` and `MachineXboardControlPlane` remain supported product
+  adapters for Xboard REST/WS. Xboard support is not TX-Node's runtime identity.
+- `LocalControlPlane` reads standalone configuration and performs no remote
+  reporting.
 
-```text
-                         TX-Node core
-                             |
-                        ControlPlane
-                 +-----------+-----------+
-                 |                       |
-          LocalControlPlane        remote adapters
-                                         |
-                              +----------+----------+
-                              |                     |
-                     XboardControlPlane      TXBoardControlPlane
-                                               (future adapters separately)
-```
+Normal services use `controlplane.NewForConfig`; checked factories reject
+unsupported providers. Machine orchestration owns the shared transport and
+injects each child's control plane through `service.NewWithControlPlane`.
+Optional provider features use capability interfaces rather than panel-specific
+branches in Service or kernels. Native Provider delivery and signed usage are
+specified in [Node authorization](native-provider-node.md) and
+[Subscription usage](native-subscription-usage.md).
 
-Protocol-specific JSON, authentication fields, REST paths and websocket event formats must be translated inside their adapter before data reaches service or kernel code.
+Agent/MCP and per-node AI `ops.*` executors are retired. They must not reenter
+runtime state. Ordinary configuration, user synchronization, reporting and the
+separately authenticated Installer-owned machine update remain supported.
 
-## Current adapters
+## Native authority denial
 
-### LocalControlPlane
+Only a completed bounded JSON `401 NODE_UNAUTHORIZED` or a node-scoped
+`404 NODE_NOT_FOUND` on the supported handshake/config/users/discovery requests
+is an authority withdrawal. Supported requests are `POST /handshake`,
+`GET /config`, `GET /users` and `GET /machine/nodes`. The 404 requires a configured Node ID and is never
+inferred from `/machine/nodes`. Network/TLS failures, redirects, HTML/proxy
+responses, other status/code combinations and report refusals are not revocation
+proof. They do not extend any finite authorization deadline either.
 
-Local standalone mode is panel-free. Node configuration and users are read from the local TX-Node configuration and no remote reporting is performed.
+A Node denial stops that listener. Machine credential denial cancels and joins
+all children without a child waiting on itself; a child-scoped 404 stops only
+that child. A denied credential is not reused for a final report. Current
+credentials must recover original pending/tail records before reopening.
 
-### TXBoardControlPlane
+## Desired and applied snapshots
 
-`TXBoardControlPlane` handles native `/txapi/node/v1` Bearer + identity headers, HTTP handshake/config/users/report and optional versioned WebSocket. Machine mode uses an independent transport with per-node adapters and the existing mailbox/mux. Successful traffic HTTP 202 means queued, not SQL committed; the durable retry spool and TXBoard ledger must be verified together in staging.
+Keep desired configuration/users separate from successfully applied hashes.
+Start, Reload and user mutation confirm applied state only after success. A
+failed request remains retryable; a partially failed user mutation stops an
+uncertain kernel rather than claiming revoked users have disappeared. Empty
+desired users close the listener. Configuration and certificate failures stay
+visible until the corresponding application succeeds.
 
-### XboardControlPlane
+A transport 304 can redeliver only complete cached content bound to the same
+configured identity. A missing-cache 304 retries once without a conditional
+header; it cannot invent empty users. Cache bodies are cloned, and a config
+received before a later users failure remains available for retry. An ETag or
+cached body never renews signed authority.
 
-`XboardControlPlane` is the canonical name for the existing Xboard-compatible adapter. It preserves compatibility with Xboard REST/WebSocket APIs and translates panel objects into TX-native `NodeSpec` / `UserSpec` values.
+Asynchronous polls capture the local event generation. Newer accepted WS state
+invalidates older ordinary poll results and schedules a fresh read; terminal
+authority denials still apply. Reconnect/drop invalidates transport caches.
+This is local ordering, not an atomic Core config/users transaction or a global
+applied-revision acknowledgement. Provider policies accept WS changes as refresh
+hints, not unsigned credential or authorization updates.
 
-Machine mode uses `MachineXboardControlPlane`, with the shared websocket owned by the machine orchestrator.
+## Kernel application and connection closure
 
-The historical Go names `PanelControlPlane` and `MachinePanelControlPlane` remain implementation/source-compatibility names during the migration window; new TX-Node code should use the Xboard-specific constructors.
+sing-box compares the complete generated construction, independently of its
+user list. Routing/outbounds, DNS, protocol, listeners and TLS changes require
+stop and full reconstruction. Same-construction user updates retain replay
+protection and meters. Invalid route/detour/selector/DNS references fail before
+mutation; a failed replacement cannot be marked applied. Trackers and coherent
+authentication indexes are installed before listeners open.
 
-## Factory rule
+sing-box registers tracked TCP/UDP sessions with their authenticated identity.
+Admission recheck and insertion share the user-map change lock. Explicit user
+close terminates registered sessions but does not itself remove future user
+authorization; identity removal/reassignment does both. Closers and canceled
+limiter waits run outside the registry lock. Final cumulative counters remain
+readable under the original user even after removal.
 
-Normal node services obtain their control plane through `controlplane.NewForConfig`. Service and kernel packages should not instantiate a concrete remote adapter directly.
+Xray advertises `ForceCloseUser=false`: it has no individual established-session
+termination capability. Subset removal or UUID replacement therefore stops and
+reconstructs the whole instance. Full desired users are validated first; partial
+manager failure cannot advance applied users/hashes. Restart releases the old
+port and retains final meters. This can interrupt unaffected streams, which must
+authenticate again under current desired users. Do not describe either backend
+as supporting a stronger revocation capability than it actually exposes.
 
-Machine orchestration is the exception because it owns the shared transport and therefore injects a per-node `ControlPlane` explicitly through `service.NewWithControlPlane`.
+## Machine synchronization
 
-## Retired Agent operations
+Current authenticated membership governs the shared socket. A valid empty list
+is not malformed/missing membership, and transport failure does not withdraw a
+child. Removal closes and checkpoints only that child; credential denial closes
+the whole Machine. Each child keeps independent runtime, mailbox and durable
+state.
 
-The AI Agent operation executor, adapters and mailbox operations were removed on2026-10-13. Native and legacy per-node `ops.*` restart/reload/network/log events are rejected or ignored without entering runtime state. Ordinary configuration/user/device synchronization and durable usage reporting remain.
+Publish committed configuration changes only. Registry replacement installs the
+successor Machine and current mappings before closing the old registry entry.
+Redis events identify changed domains; Workerman rereads current enabled state,
+ownership and credentials before producing snapshots. Delayed hints cannot
+restore revoked access or disclose reassigned credentials. Empty device maps
+retain object encoding.
 
-The separately authenticated `ops.machine.runtime.update` is an Installer-owned machine lifecycle request and remains available under its own contract.
+## Durable reporting
 
-## Optional capabilities
+Persist immutable counters and a stable `traffic_batch_id` before sending.
+Timeouts/restarts replay the same ID, body, identity and period attribution, not
+current users or a new epoch. The writable `kernel.config_dir` must survive
+container replacement; Installer owns host data mounts and any migration.
+TX-Node never depends on Core database table names.
 
-Protocol-specific extensions that are not universal control-plane operations must be exposed as optional capability interfaces rather than by teaching core service code about a concrete panel.
+Recovery sends pending batches first and terminal-tail records second, before
+new listeners open. Partial acknowledgement leaves original bundle bytes intact;
+only acknowledged records can clear their slots. Corrupt, missing, changed,
+unwritable or capacity-exhausted storage fails closed, not by dropping a slot or
+falling back to another billing path. One process owns each identity/state
+directory. Final unsealed RAM bytes after an abrupt crash remain unknown, not
+reconstructed usage.
 
-The first capability is `AuditTargetProvider`. Xboard adapters implement it to expose the remote identity required by the embedded access-audit reporter; `LocalControlPlane` intentionally does not. The service resolves the capability through `controlplane.AuditTargetOf` and therefore never reads Xboard panel credentials directly.
+An HTTP 202 or `queued` response is not settlement. Native
+`receipt_status=persisted` proves durable reception only; queue wakeups, ledger
+settlement and deduplication remain Core responsibilities. The signed native
+Subscription path has stricter receipt/retention rules in
+[native-subscription-usage.md](native-subscription-usage.md); ordinary cumulative
+reporting cannot substitute for it or charge the same bytes twice.
 
-The TXBoard native adapter currently omits the legacy audit capability: its API does not implement Xboard plugin audit routes. Keep `audit.enabled: false` in native deployments. Future adapters may implement audit only after defining their own supported audit API and authentication. New protocol-specific features should follow the same pattern when they do not belong in the base `ControlPlane` contract.
+## UDP accounting boundary
 
-## Extending with another control plane
+The generic sing packet unwrap must not bypass `trackedPacketConn`:
+`WriterReplaceable()` is false. Counter-aware `UnwrapPacketWriter` returns the
+underlying writer and exactly one callback, never the same wrapper. Cached
+packet traversal must not add another counter owner. The original counter is
+invoked only for a successful write, not attempted bytes on failure.
 
-Additional panel protocols should be implemented as independent adapters, not by adding panel-specific branches throughout Service or kernel code. The intended path is:
+| Meter site | Physical direction | Existing cumulative counter |
+| --- | --- | --- |
+| Direct `ReadPacket` | upload | upload |
+| Direct `WritePacket` | download | download |
+| sing reader callback | upload | download |
+| sing writer callback | download | upload |
 
-```text
-New panel API / WS
-      |
-NewPanelControlPlane
-      |
-TX NodeSpec / UserSpec / Event / ReportPayload
-      |
-TX-Node service
-```
+These callback mappings are intentional existing behavior. Optional observers
+retain physical/counter directions and `DirectionMismatch`; a callback supplies
+completion time but no proven I/O start. Counter-aware writer limiting happens
+after writing and is canceled by close, not a strict pre-write lease gate.
+Generic traversal retains the tracked direct writer and its pre-write limiter.
+Explicit raw `Upstream()` access is not an authorization-safe bypass; signed
+bounded TCP uses a private nonreplaceable I/O view instead. UDP observations do
+not establish native Subscription billing coverage.
 
-Before enabling another provider, define its authentication, bootstrap, configuration/user synchronization, reporting and push-event semantics, then add provider selection in the ControlPlane factory/config layer. Provider-specific extensions should use optional capability interfaces where possible.
+## Machine runtime updates
 
-## Compatibility principle
-
-Xboard support is a protocol compatibility feature, not the identity of TX-Node. Removing Xboard compatibility is not required for TX-Node to evolve independently; keeping that compatibility isolated behind an adapter is the goal.
-
-
-## Machine Runtime Update v1
-
-Machine-mode deployments can optionally expose a bounded runtime update bridge installed by **TXBoard-Deploy's Node installer**.
-
-The control flow is:
-
-```text
-TXBoard Machine Admin
-  -> machine-scoped WebSocket event
-  -> TX-Node runtimeupdate.Manager
-  -> fixed /run/txnode-update request
-  -> Installer-owned host bridge
-  -> Installer upgrade / verification / rollback
-```
-
-TX-Node does not receive the Docker socket and does not execute a control-plane supplied command. The only v1 target is `latest`.
-
-The machine WebSocket event is:
-
-```text
-ops.machine.runtime.update
-```
-
-with:
-
-```json
-{
-  "request_id": "mup_...",
-  "target": "latest"
-}
-```
-
-When the Installer capability marker is absent, TX-Node reports `updater_available=false` and rejects the request without writing an update file.
-
-Machine status reports runtime-derived metadata additively via native `POST /txapi/node/v1/machine/status` (or the Xboard compatibility endpoint in xboard mode), including current build version, updater availability, and the bounded last Installer update status.
-
-This is separate from per-node Node Ops. A machine runtime update restarts the TX-Node deployment and can briefly disconnect every node hosted by that machine.
+`ops.machine.runtime.update` delegates only `{request_id,target:"latest"}` to
+the fixed `/run/txnode-update` bridge supplied by TXBoard-Deploy. Without the
+Installer capability marker, reject without writing an update request. No
+Docker socket, arbitrary command, SSH or host management authority is granted.
+Machine status includes bounded runtime/updater state through its own adapter.
+An update can briefly disconnect every child on that Machine.

@@ -1,23 +1,22 @@
-# Provider-backed native Node consumption
+# Provider-backed native Node authorization
 
-The C2-C2 consumer uses the
-[native Node delivery contract](../../contracts/v2/credential-provider/native-node-delivery-v1.md).
-Core signs current native entitlement and credential SHA-256 commitments.
-Node retrieves UUIDs directly from a separate Provider, checks their hashes,
-then passes them to the existing runtime. Core never receives plaintext
-proxy credentials. This is the required TXBoard user-delivery path. Bare UUID snapshots,
-unsigned user caching, old signed User UUID delivery and native user delta
-pushes are retired. Xboard transport remains an independent provider.
+The [native Node delivery contract](../../contracts/v2/credential-provider/native-node-delivery-v1.md)
+keeps Core entitlement authority separate from Provider secret storage. Core
+signs current entitlement and credential SHA-256 commitments; Node retrieves
+UUID material directly from the separate Provider, verifies every commitment
+and applies it through the existing runtime. Core does not receive plaintext
+proxy credentials. Bare UUID snapshots, unsigned user caches, old signed User
+UUID delivery and native user deltas are not this authorization path. Xboard
+remains a separate supported adapter.
 
-## Provisioned identities
+## Provisioned identities and trust
 
-Provision a separate Node client certificate and key. Its SHA-256 fingerprint
-is computed over the certificate DER. The Provider must trust its issuing CA,
-but CA membership alone does not authorize access: its leaf fingerprint must
-be on the Node allowlist and in the signed Core snapshot. Core and Node
-fingerprint sets cannot overlap.
+Provision a separate Node client certificate/key. Its leaf fingerprint is the
+lowercase SHA-256 digest of certificate DER. A trusted issuing CA alone is not
+authorization: the leaf must be on the Provider Node allowlist and in the
+Core-signed snapshot. Core and Node fingerprint sets cannot overlap.
 
-Provide the Provider a public JSON trust file with exactly these fields:
+Give the Provider an operator-owned public trust file with exactly these fields:
 
 ```json
 {
@@ -30,30 +29,27 @@ Provide the Provider a public JSON trust file with exactly these fields:
 }
 ```
 
-Add both flags to the existing Provider invocation:
+Add these delivery flags to the existing Provider invocation:
 
 ```sh
 --delivery-trust /etc/tx-credential-provider/core-trust.json \
 --node-client-fingerprint '<64-lowercase-hex-Node-leaf-sha256>'
 ```
 
-`--client-fingerprint` continues to select Core control identities. The new
-Node identities can call only the delivery endpoint. `/credential-metadata`
-returns non-secret commitments to Core; `/credentials` releases typed UUID
-material only to a matching Node certificate and signed grant. Both endpoints
-are disabled when the new options are absent.
+`--client-fingerprint` selects Core control identities, not Node delivery.
+`/credential-metadata` supplies non-secret commitments to Core; `/credentials`
+releases typed material only to the matching Node certificate and signed grant.
+The delivery endpoints are disabled without their explicit options. Provider
+startup, private store and TLS provisioning remain in
+[native-credential-provider.md](native-credential-provider.md).
 
-## Core preparation
+## Core and Node configuration
 
-The registered Provider configuration from C2-C1 stays authoritative. Set
-`NATIVE_NODE_AUTHORIZATION_POLICY_VERSION=native-provider-authorization/v1`
-and `NATIVE_PROVIDER_NODE_PROVIDER_ID` to that registration. The existing
-dedicated signing seed and public identity are reused, but
+Use the registered Provider configuration, not a caller-selected endpoint or
+key. `NATIVE_PROVIDER_NODE_PROVIDER_ID` selects that registration and
 `NATIVE_NODE_AUTHORIZATION_CORE_INSTANCE_ID` must equal the persisted native
-installation UUID.
-
-Provision `native_provider_node.recipients` in operator-owned Core
-configuration before caching it, for example:
+installation UUID. Provision `native_provider_node.recipients` before caching
+Core configuration:
 
 ```php
 'recipients' => [
@@ -64,20 +60,12 @@ configuration before caching it, for example:
 ],
 ```
 
-Use the exact integer Machine ID instead of null for a Machine child. Missing
-recipients, changed membership, disabled Machine or changed bearer credentials
-refuse issuance. Core rechecks the authenticated credential against locked
-current storage after Provider metadata retrieval, avoiding a stale request
-cache during rotation. Neither an HTTP caller nor Provider response selects
-the endpoint, recipient or trust key.
+Use the exact integer Machine ID for a child. Missing recipients, changed
+membership, disabled Machine or changed bearer credentials refuse issuance.
+Core rechecks locked current storage after Provider metadata retrieval; a stale
+request cache cannot authorize rotated credentials.
 
-These settings do not activate native Core. Its persisted authority remains
-`initializing` until the remaining production integration gates are complete.
-
-## Node configuration
-
-Keep the existing Node/Machine bearer configuration and provision an explicit
-authorization block inside each instance:
+Keep Node/Machine Bearer configuration and provision each instance explicitly:
 
 ```yaml
 authorization:
@@ -99,45 +87,64 @@ authorization:
     client_key: /etc/tx-node/provider-client.key
 ```
 
-`endpoint` is an HTTPS origin, without a path, query or user information.
-Private keys belong in protected files, not YAML, URLs or logs. Node verifies
-Core signature, target and revision before contacting the Provider, verifies
-every returned commitment and profile, and repeats verification at the kernel
-application boundary. An inconsistent Node protocol cannot reuse a cohort.
-Persistent authorization state records only non-secret digests and revisions.
-No empty, partial or unverified response can supply substitute credentials.
+`endpoint` is an HTTPS origin with no path, query or user information. Private
+keys belong in protected files, never YAML contents, URLs or logs. The v1 policy
+is credential consumption; [Subscription usage](native-subscription-usage.md)
+selects `native-provider-authorization/v2` explicitly with its signed UsageV2
+Session. Neither setting alone activates an unready Core installation.
 
-## Operation and limits
+## Finite authority and anti-rollback
 
-- One configured Provider and one VLESS/VMess profile per Node snapshot.
-- Up to 128 authorized users per complete snapshot; overflow refuses rather
-  than returning partial authority. Core separately bounds candidate scanning.
-- Maximum grant lifetime is 120 seconds and also capped by credential,
-  Subscription expiry and next reset. Provider allows at most 30 seconds of
-  issuance/not-before skew; expiry has no grace period.
-- An empty verified snapshot closes users without contacting an unavailable
-  Provider. Core/Provider outages cannot renew the last accepted deadline.
-- WebSocket user/config changes trigger a complete signed refresh. Unsigned
-  user frames cannot supply credentials under this policy.
-- Revocation or expiry closes existing flows and new admission through the
-  existing watchdog; original unreported traffic is retained.
+Node checks Core signature, current pinned trust/key epoch, target Node/Machine,
+protocol/profile, completeness and revision before contacting Provider. Every
+returned profile and credential commitment is verified, then checked again at
+kernel application. Partial, empty-unverified or inconsistent material cannot
+substitute credentials.
 
-Native traffic settlement is not enabled by this consumer. Core refuses the
-old traffic billing path in native mode. A retained unacknowledged recovery
-batch continues to block reopening under existing recovery rules; never delete
-or acknowledge it just to make a consumption test pass. Subscription rendering,
-rotation, native usage settlement and production readiness remain subsequent
-work. `node_provider_credential_delivery_v1` means consumer support only.
+Persist revision high-water before admission. Authorization storage contains
+non-secret identities, digests and revisions, not UUID material. Lower revisions,
+changed same-revision content, lower trust epochs, scope drift and corrupt state
+fail closed. Restart requires fresh online verification and a higher accepted
+revision; cached content and HTTP 304 do not renew authority. Do not delete
+high-water state to bypass a refusal or describe local files as hardware-backed
+restore protection.
 
-## CI verification
+One complete snapshot has at most 128 users, one Provider and one VLESS/VMess
+profile. Overflow refuses rather than truncating authority. The grant is finite:
+at most 120 seconds, also capped by credential/Subscription expiry and next
+reset. Provider issuance/not-before skew is at most 30 seconds; expiry has no
+grace period. Runtime UTC/monotonic checks and the independent watchdog cannot
+extend that deadline during blocked I/O, Core/Provider outages or refresh failure.
+A verified empty snapshot closes users without requiring Provider availability.
 
-The `native-provider-node` GitHub Actions workflow runs focused Core/Node
-regressions, MySQL 8.4 checks, race tests, and
-`scripts/verify-native-provider-node.py`. The private integration fixture uses
-actual Laravel Node authentication/routes, native SQL domain services, a
-separate mTLS Provider, and the existing Node Service with real VLESS traffic.
-Only the not-yet-open installation admission is substituted. Two Node targets
-exercise isolated lease expiry, retained traffic and sibling revocation.
+WS user/config hints trigger complete signed refresh; unsigned frames never
+install credentials or extend a lease. Revocation/expiry blocks new I/O and
+closes established flows while preserving original unreported traffic. Current
+trust, finite time and live entitlement are distinct from historical signature
+validity. Production PKI, trust rotation, recovery and actual deployment evidence
+must be checked separately from library/unit success.
 
-Since October 16, 2026, these heavy checks run in CI by default. Local syntax,
-format and diff checks do not constitute live integration acceptance.
+## Offline proof library
+
+`internal/providerproof` is a test-only, isolated signature/window diagnostic.
+Only tests call it: no CLI, HTTP/WSS route, Service/kernel import, credential
+parser or admission hook is supplied. Its observations always report
+`admission_granted=false`; they do not validate live entitlement, intended Node
+recipient or nested business semantics and cannot install credentials or mint
+usage grants.
+
+Trust is explicitly provisioned public material, never a key URL or payload
+selected JWK. Opening/checking a finite diagnostic window rejects expiry,
+clock regression and removed/revoked/replaced current trust. Close/refusal ends
+that instance; refreshed trust constructs a new verifier without rewriting old
+signed bytes. Historical signature diagnostics remain separate from current
+permission. There is no current actual-Core interop opt-in command.
+
+## Validation boundary
+
+Use CI/Actions for real Core routes, dedicated SQL, a separate mTLS Provider,
+race tests and actual VLESS/VMess traffic. Local syntax/diff checks do not prove
+end-to-end acceptance. Linux sing-box direct TCP is the bounded C2 consumption
+scope; native Subscription billing has the additional restrictions in
+[native-subscription-usage.md](native-subscription-usage.md). No test result
+alone proves production readiness, all protocols, HA or rollback-safe PKI.

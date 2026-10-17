@@ -169,7 +169,7 @@ Machine mode owns node discovery and a shared provider-specific push transport. 
 ### State, reporting and optional integrations
 
 - **Desired vs applied:** user-state and the kernel's successfully applied snapshot are separate; failed changes must not falsely update the applied-state truth.
-- **Durable reporting:** `traffic_batch_id` remains stable across timeout/restart replay, backed by writable persistent `kernel.config_dir`. Native TXBoard HTTP 202 confirms queue acceptance, not MySQL settlement. Follow [durable traffic reporting](./traffic-durable-replay.md).
+- **Durable reporting:** `traffic_batch_id` remains stable across timeout/restart replay, backed by writable persistent `kernel.config_dir`. HTTP 202 alone does not confirm SQL settlement; a typed persisted receipt attests reception only. Follow [durable reporting](./controlplane.md#durable-reporting) and [native Subscription usage](./native-subscription-usage.md).
 - **AccessAudit:** the embedded reporter uses the legacy Xboard plugin protocol. The native TXBoard adapter intentionally does not expose `AuditTargetProvider`; `audit.enabled` should remain off for native deployments until a dedicated contract exists.
 - **Certificates/geo assets:** existing ACME DNS-provider compatibility is managed behind `certcoord`, and geo acquisition behind `geoassets`; kernel adapters execute proxy routing. Integrations must not turn into an unrestricted host-management runtime.
 

@@ -28,7 +28,7 @@ This is the active compatibility inventory for TX-Node. **Protocol interoperabil
 | Container `/etc/xboard-node/config.yml` | Narrow startup fallback for old Compose mounts | Remove only after an explicit migration window; custom `-c` paths must not invoke fallback |
 | Optional legacy AccessAudit reporter | Xboard plugin compatibility only | Keep isolated; TXBoard native does not implement its API |
 
-The retirement gate matches Docker image tokens, including quoted and registry-qualified references. It accepts `txboard-node:latest` and rejects the retired `xboard-node:latest` alias. [Node CI for `f9b2714`](https://github.com/ANRCM0/TXBoard/actions/runs/38300575454) passed Go tests, `vet` and runtime stability, then exposed a substring check that incorrectly treated the new image name as the retired alias. The token boundary check corrects that gate.
+The retirement gate matches complete Docker image tokens, including quoted and registry-qualified references. It accepts `txboard-node:latest` and rejects the retired `xboard-node:latest` alias; substring overlap is not a retired-artifact match.
 
 ## Migration and rollback safeguards
 
