@@ -61,7 +61,7 @@ before seal, after file fsync, publication, directory fsync, before spool and af
 spool. Eight fault edges plus new spool file/directory reconfirmation reject false
 durability. Original event-store SIGKILL/fsync and default Service/v1 regressions
 also ran in the complete packages. See [frozen hashes and logs](bounded-usage-verification.json)
-and [contract](../../contracts/v2/node-usage/bounded-tcp-collector-v1.md).
+and [contract](https://github.com/ANRCM0/TXBoard/blob/5b546dfc992ec56a90bfe54a103df6326eb47f08/contracts/v2/node-usage/bounded-tcp-collector-v1.md).
 
 This prototype does not open admission, install or revoke credentials, grant
 permissions from Provider proofs, run an automatic Reporter or select production

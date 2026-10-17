@@ -1,9 +1,11 @@
 # B3.9 Core 恢复边界验收
 
+> 历史验收：下文隔离 source、旧 CLI 和恢复夹具已退役，不得据此操作当前部署。当前授权与用量见[原生订阅用量](native-subscription-usage.md)；原回执、SQL 哈希和 JSON 证据保持不变。
+
 2026-10-14，固定 `64309e8` 和五个冻结候选源码的 WSL r24 快照，
 分别验证 VLESS、AEAD VMESS 的 Core 代际变化、实例漂移及真实 SQL 恢复。
 [报告](live-recovery-boundaries-verification.json)保存每个独立案例的源码、原始回执、
-HTTP 观察、SQL 备份和恢复哈希；[契约](../../contracts/v2/node-usage/live-revocation-service-v1.md)
+HTTP 观察、SQL 备份和恢复哈希；[契约](https://github.com/ANRCM0/TXBoard/blob/5b546dfc992ec56a90bfe54a103df6326eb47f08/contracts/v2/node-usage/live-revocation-service-v1.md)
 明确每条拒绝路径。每例先实际结算历史43/79字节，计费64/118，共182字节。
 
 代际案例停止原 Service 与 Core HTTP 进程，通过 Core CLI 将当前 source

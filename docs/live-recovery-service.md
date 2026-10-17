@@ -1,9 +1,11 @@
 # B3.9 source epoch 延续验收
 
+> 历史验收：下文隔离 source 分配 CLI 和 Service 夹具已退役，不是当前重启或恢复指南。当前链路见[原生订阅用量](native-subscription-usage.md)；原 JSON 结果不作为当前 native 验收。
+
 2026-10-14，固定 `4779b32` 和四个候选源码文件的 WSL r22 快照完成
 VLESS、AEAD VMESS 的真实 Service 重启与 source epoch 延续。
 [报告](live-recovery-service-verification.json)保存冻结源码、依赖、请求、回执和 SQL 备份哈希；
-[契约](../../contracts/v2/node-usage/live-revocation-service-v1.md)定义恢复边界。
+[契约](https://github.com/ANRCM0/TXBoard/blob/5b546dfc992ec56a90bfe54a103df6326eb47f08/contracts/v2/node-usage/live-revocation-service-v1.md)定义恢复边界。
 
 首个进程使用真实协议上传43、下载79字节，常规 worker 封存并取得 Core 持久 ACK；
 Core 分方向按3:2向下取整结算64/118，共182字节。进程正常结束后，Core CLI

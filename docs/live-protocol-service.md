@@ -1,9 +1,11 @@
 # B3.8 真实协议 Service 用量验收
 
+> 历史验收：下文隔离 Service、授权来源和夹具已退役，不能作为当前运行步骤。当前链路见[原生订阅用量](native-subscription-usage.md)；原 JSON 证据和以下固定提交契约保留当时结论。
+
 2026-10-14，本批在固定 `b914536` 提交与精确候选文件的 Linux 隔离快照中，
 分别完成真实 VLESS 与 AEAD VMESS 的 Service → sing-box → Core SQL 结算闭环。
 验收记录见 `live-protocol-service-verification.json`；契约见
-`contracts/v2/node-usage/live-protocol-service-v1.md`。
+[历史契约](https://github.com/ANRCM0/TXBoard/blob/5b546dfc992ec56a90bfe54a103df6326eb47f08/contracts/v2/node-usage/live-protocol-service-v1.md)。
 
 测试通过 `NewChecked` 正常构造 Service、native controlplane 和 sing-box，
 真实锁定客户端连接实际监听器与独立回环 TCP origin，没有注入内存内核、
