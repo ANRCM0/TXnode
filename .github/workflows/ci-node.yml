@@ -440,7 +440,7 @@ jobs:
           cp .env.example .env
           APP_ENV=testing php artisan key:generate
       - name: Check Core and candidate renderer compatibility
-        run: python3 .compat/core/scripts/check-renderer-registry.py
+        run: python3 scripts/check-renderer-compatibility.py
       - name: Actual Core activation, authorization, Provider, Node and settlement
         run: python3 .compat/core/scripts/verify-native-c2.py
       - name: Retain non-secret compatibility sources

@@ -21,6 +21,10 @@ The independent workflow owns tests, actual image checks and a real native Core
 compatibility test. `compatibility/core.v1.json` pins the supported Core baseline.
 The compatibility fixture selects this Node candidate while leaving that Core's
 application source unchanged and records both exact revisions in its artifact.
+`compatibility/renderers.v1.json` owns this Node's renderer source fingerprints
+and package version. Review and version it when renderer implementation changes.
+Compatibility compares the declared interface with Core and runs real delivery;
+Core's adoption review separately records the chosen pair's source fingerprints.
 
 ## Independent releases
 
