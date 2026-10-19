@@ -1,0 +1,112 @@
+{
+  "schema": "txnode-builtin-renderers/v1",
+  "version": "1.1.0",
+  "execution": "static-provider",
+  "input": "native-authorized-connections/v1",
+  "formats": {
+    "clash/v1": {
+      "min": "1.18.0",
+      "before": "2.0.0",
+      "content_type": "application/yaml"
+    },
+    "clash-meta/v1": {
+      "min": "1.18.0",
+      "before": "2.0.0",
+      "content_type": "application/yaml"
+    },
+    "sing-box/v1": {
+      "min": "1.10.0",
+      "before": "1.13.0",
+      "content_type": "application/json"
+    },
+    "shadowrocket/v1": {
+      "min": "2.2.0",
+      "before": "3.0.0",
+      "content_type": "text/plain"
+    },
+    "surge-ios/v1": {
+      "min": "5.20.0",
+      "before": "6.0.0",
+      "content_type": "text/plain"
+    },
+    "surge-mac/v1": {
+      "min": "6.7.0",
+      "before": "7.0.0",
+      "content_type": "text/plain"
+    }
+  },
+  "profiles": [
+    "vless-uuid/v1",
+    "vmess-uuid/v1"
+  ],
+  "transports": [
+    "tcp"
+  ],
+  "source_files": {
+    "internal/credentialdelivery/render.go": "6f00f7229c407308d12eefcd7259626bf3c40ac6395f971eb70f79f206b753ec",
+    "internal/credentialdelivery/render_formats.go": "9dcb1e22db05b98b455afd46b4985dcebe04f80aa692ea569c855aa6a239bdaa",
+    "internal/credentialprovider/render_clients.go": "d5003f6c6caf705d6da6b75f751ccec8abae7ee1bceb59f00f91c9ba6b4e3d05",
+    "internal/credentialprovider/render_cors.go": "451f18f1188582186639d57855c8ca36a7ba7b3659b7dfec3c4724b88157d1fa",
+    "internal/credentialprovider/render_http.go": "e982299439f9608697b411a1b0ffc021afea6732c98cda20961e5f00adc035f9",
+    "internal/credentialprovider/render_surge.go": "b93094336137748e10b3a98f7109627fc9274bf92e2ff360f1b12912f18cfe9a"
+  },
+  "compatibility": {
+    "clash/v1": {
+      "credential_profiles": [
+        "vmess-uuid/v1"
+      ],
+      "transports": [
+        "tcp"
+      ],
+      "explicit_alpn": false
+    },
+    "clash-meta/v1": {
+      "credential_profiles": [
+        "vless-uuid/v1",
+        "vmess-uuid/v1"
+      ],
+      "transports": [
+        "tcp"
+      ],
+      "explicit_alpn": true
+    },
+    "sing-box/v1": {
+      "credential_profiles": [
+        "vless-uuid/v1",
+        "vmess-uuid/v1"
+      ],
+      "transports": [
+        "tcp"
+      ],
+      "explicit_alpn": true
+    },
+    "shadowrocket/v1": {
+      "credential_profiles": [
+        "vless-uuid/v1",
+        "vmess-uuid/v1"
+      ],
+      "transports": [
+        "tcp"
+      ],
+      "explicit_alpn": true
+    },
+    "surge-ios/v1": {
+      "credential_profiles": [
+        "vmess-uuid/v1"
+      ],
+      "transports": [
+        "tcp"
+      ],
+      "explicit_alpn": true
+    },
+    "surge-mac/v1": {
+      "credential_profiles": [
+        "vmess-uuid/v1"
+      ],
+      "transports": [
+        "tcp"
+      ],
+      "explicit_alpn": true
+    }
+  }
+}

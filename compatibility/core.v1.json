@@ -1,0 +1,11 @@
+{
+  "schema": "txnode-core-compatibility/v1",
+  "repository": "ANRCM0/TXBoard",
+  "revision": "ca25f21de8ff41a476c1ffcf182359f3bc565122",
+  "protocols": [
+    "node/v1",
+    "node-usage/v2",
+    "native-provider-authorization/v2"
+  ],
+  "policy": "Node has independent versions; adopt a new Core baseline through a reviewed compatibility change."
+}
