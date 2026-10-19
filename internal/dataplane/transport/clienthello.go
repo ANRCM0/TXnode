@@ -36,6 +36,7 @@ type clientHello struct {
 	serverName string
 	alpn       []string
 	keyShare   *keyShare
+	sigAlgs    []byte // TEMP diagnostic: signature_algorithms extension data
 }
 
 // readClientHello reads TLS handshake records until the full first handshake
@@ -169,6 +170,8 @@ func parseClientHello(raw []byte) (*clientHello, error) {
 				h.alpn = append(h.alpn, string(list[:nl]))
 				list = list[nl:]
 			}
+		case 13: // signature_algorithms (TEMP diagnostic)
+			h.sigAlgs = append([]byte(nil), data...)
 		case extensionKeyShare:
 			if len(data) < 2 {
 				continue
@@ -179,6 +182,7 @@ func parseClientHello(raw []byte) (*clientHello, error) {
 				listLen = len(list)
 			}
 			list = list[:listLen]
+			var pureX25519, hybrid []byte
 			for len(list) >= 4 {
 				group := binary.BigEndian.Uint16(list[:2])
 				kl := int(binary.BigEndian.Uint16(list[2:4]))
@@ -186,17 +190,27 @@ func parseClientHello(raw []byte) (*clientHello, error) {
 				if kl > len(list) {
 					break
 				}
-				if h.keyShare == nil && (group == curveX25519 || group == 0x11ec) {
-					key := list[:kl]
-					// X25519MLKEM768 is mlkem-encapsulation-key || x25519-share.
-					if group == 0x11ec && len(key) > 32 {
-						key = key[len(key)-32:]
+				key := list[:kl]
+				switch group {
+				case curveX25519:
+					if len(key) == 32 && pureX25519 == nil {
+						pureX25519 = append([]byte(nil), key...)
 					}
-					if len(key) == 32 {
-						h.keyShare = &keyShare{group: curveX25519, data: append([]byte(nil), key...)}
+				case 0x11ec: // X25519MLKEM768: mlkem-encapsulation-key || x25519-share
+					if len(key) > 32 && hybrid == nil {
+						hybrid = append([]byte(nil), key[len(key)-32:]...)
 					}
 				}
 				list = list[kl:]
+			}
+			// xtls/reality prefers the pure X25519 share: the client's REALITY
+			// AuthKey uses KeyShareKeys.Ecdhe and only falls back to MlkemEcdhe
+			// when no X25519 share was sent.
+			switch {
+			case pureX25519 != nil:
+				h.keyShare = &keyShare{group: curveX25519, data: pureX25519}
+			case hybrid != nil:
+				h.keyShare = &keyShare{group: curveX25519, data: hybrid}
 			}
 		}
 	}

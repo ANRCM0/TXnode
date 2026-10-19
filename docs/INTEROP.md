@@ -38,17 +38,18 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 | Trojan + TLS（自签，证书 pinning） | Xray | ✅ 通过 | `TestInteropXrayTrojanTLS`；Xray 26 已移除 `allowInsecure` |
 | Shadowsocks（aes-128-gcm） | Xray | ✅ 通过 | `TestInteropXrayShadowsocks` |
 | VMess（AEAD） | Xray | ⚠️ 已知缺口 | 服务端 `identify()` 失败：`vmess: unknown user or clock out of sync`；Xray↔Xray 同配置可通 |
-| VLESS + REALITY | Xray | ⚠️ 已知缺口 | 服务端日志 `reality: the hello does not authenticate`，回落借用站点；对应复刻报告里 UNVERIFIED 的 sessionID/HKDF/nonce |
+| VLESS + REALITY | Xray / Mihomo | 🟡 鉴权已修复，握手未完成 | 已对齐 HKDF(salt=random[:20])、nonce=random[20:]、AAD=零化 sessionID 的 ClientHello、version/time/shortId 布局、优先纯 X25519 keyshare，并改用 `xtls/reality` 参考 TLS 栈；服务端日志确认鉴权通过（`hs.c.conn == conn: true`），但客户端在 Certificate 之后中断，待抓 alert |
 | Hysteria2 | Mihomo | ⚠️ 已知缺口 | SOCKS 请求被接受后关闭，服务端没有任何 QUIC 会话日志；握手未到达服务端 |
 
 ## 已知缺口的下一步
 
 1. **VMess（VMESS-1）**：用 `dyn/` 抓 Xray 首包，逐字段比对 authID（AES-ECB 解出的
    时间戳/CRC）、KDF 标签与 AEAD 长度块；当前实现只在自互通下通过。
-2. **REALITY（REALITY-1）**：抓 Xray ClientHello 的 sessionID 布局与
-   `HKDF-SHA256(dest 证书)` 派生，核对 AES-GCM nonce 拼接；复刻报告 §2.2 已列 UNVERIFIED。
+2. **REALITY（REALITY-1，进行中）**：sessionID 布局、HKDF salt、GCM nonce、AAD 与
+   shortId 位置已按 `xtls/reality` 对齐，鉴权阶段通过；剩余问题是 Certificate 之后的
+   握手完成，下一步用客户端 key log/alert 定位（服务端已切换到参考 TLS 栈）。
 3. **Hysteria2（HY2-1）**：在服务端 UDP socket 上加包计数/握手日志，确认是 QUIC/TLS
    （ALPN、证书、`h3`）还是 auth HTTP/3 流的问题；kaze 报告只到函数级证据。
 
-修复顺序建议：HY2（最可能是配置/ALPN 层）→ VMess（协议头）→ REALITY（密码学细节）。
+修复顺序建议：HY2（最可能是配置/ALPN 层）→ VMess（协议头）→ REALITY（只剩握手收尾）。
 三项都修完后，把对应 `t.Skipf` 改回 `t.Fatalf`，互通矩阵才可标为全绿。

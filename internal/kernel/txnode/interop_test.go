@@ -66,7 +66,7 @@ func startInteropKernel(t *testing.T, spec *model.NodeSpec, cert kernel.TLSCert)
 	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	k := New(RuntimeConfig{TrustedProxies: "private", MaxFresh: 64, HandshakeTimeout: 5 * time.Second, Logger: logger})
 	t.Cleanup(func() {
-		if t.Failed() {
+		if t.Failed() || t.Skipped() {
 			t.Logf("txnode log:\n%s", logs.String())
 		}
 	})
@@ -97,7 +97,7 @@ func startXrayClient(t *testing.T, cfg map[string]any) string {
 		t.Fatalf("start xray: %v", err)
 	}
 	t.Cleanup(func() {
-		if t.Failed() {
+		if t.Failed() || t.Skipped() {
 			t.Logf("xray output:\n%s", output.String())
 		}
 		_ = cmd.Process.Kill()
@@ -435,9 +435,10 @@ func TestInteropXrayVLESSReality(t *testing.T) {
 			"publicKey":   pub,
 			"shortId":     "0123456789abcdef",
 			"spiderX":     "/",
+			"show":        true,
 		},
 	})
-	cfg, socks := xrayClientConfig(t, outbound)
+	cfg, socks := xrayClientConfigDebug(t, outbound)
 	startXrayClient(t, cfg)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
 	if err != nil {
@@ -590,4 +591,56 @@ func versionOf(t *testing.T, name string) string {
 		}
 	}
 	return "unknown"
+}
+
+// TestInteropMihomoVLESSReality drives the REALITY inbound with Mihomo's VLESS
+// client, which implements REALITY independently of Xray's uTLS fork.
+func TestInteropMihomoVLESSReality(t *testing.T) {
+	bin := mihomoBinary(t)
+	dest := os.Getenv("TXNODE_INTEROP_REALITY_DEST")
+	if dest == "" {
+		dest = "www.microsoft.com:443"
+	}
+	host, _, err := net.SplitHostPort(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := os.Getenv("TXNODE_INTEROP_REALITY_PUB")
+	if pub == "" {
+		t.Skip("TXNODE_INTEROP_REALITY_PUB is not set")
+	}
+	_ = bin
+	origin := startInteropOrigin(t)
+	spec := &model.NodeSpec{
+		Protocol: "vless",
+		Network:  "tcp",
+		TLS:      2,
+		TLSSettings: map[string]any{
+			"private_key": os.Getenv("TXNODE_INTEROP_REALITY_PRIV"),
+			"short_id":    "0123456789abcdef",
+			"dest":        dest,
+			"server_name": []any{host},
+		},
+	}
+	port := startInteropKernel(t, spec, kernel.TLSCert{})
+	proxy := "  - name: interop\n" +
+		"    type: vless\n" +
+		"    server: 127.0.0.1\n" +
+		"    port: " + strconv.Itoa(port) + "\n" +
+		"    uuid: " + interopUUID + "\n" +
+		"    network: tcp\n" +
+		"    tls: true\n" +
+		"    servername: " + host + "\n" +
+		"    client-fingerprint: chrome\n" +
+		"    reality-opts:\n" +
+		"      public-key: " + pub + "\n" +
+		"      short-id: \"0123456789abcdef\"\n"
+	socks := startMihomo(t, proxy)
+	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
+	if err != nil {
+		t.Skipf("known REALITY interop gap with Mihomo: %v", err)
+	}
+	if body != "interop-ok" {
+		t.Fatalf("body = %q", body)
+	}
 }

@@ -2,13 +2,10 @@ package transport
 
 import (
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/ecdh"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -19,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	xreality "github.com/xtls/reality"
 	"golang.org/x/crypto/hkdf"
 )
 
@@ -31,6 +29,14 @@ import (
 // (0xab8720) on the ClientHello and every refusal forwards the connection to
 // the borrowed site instead of answering with an error page.
 
+// FallbackLimit bounds how much traffic an unauthenticated client may push to
+// the borrowed site before it is throttled.
+type FallbackLimit struct {
+	BytesPerSec      int64 `yaml:"bytes_per_sec"`
+	BurstBytesPerSec int64 `yaml:"burst_bytes_per_sec"`
+	AfterBytes       int64 `yaml:"after_bytes"`
+}
+
 // DefaultRealityTimeDiff is the window used when reality_max_time_diff is 0:
 // 0x37e11d6000 ns = 240 s (notes/rev-transport.md §3.4).
 const DefaultRealityTimeDiff = 240 * time.Second
@@ -39,7 +45,8 @@ const DefaultRealityTimeDiff = 240 * time.Second
 // (notes/rev-transport.md §3.4, immediate 0xab962f).
 const realityReplayMax = 0x20000
 
-// realityHKDFInfo is the HKDF info string. The salt is "REALITY"
+// realityHKDFInfo is the HKDF info string. The salt is the first 20 bytes of the
+// client random (xtls/reality: hkdf.New(sha256, shared, random[:20], "REALITY")).
 // (0xf5970d); the info pointer (0xfa1108) was located but its text was not
 // decoded in the static pass.
 //
@@ -47,7 +54,6 @@ const realityReplayMax = 0x20000
 // AES-GCM nonce choice below are reconstructed so this implementation's
 // client and server agree; they were not byte-compared against the sample.
 const (
-	realityHKDFSalt = "REALITY"
 	realityHKDFInfo = "REALITY"
 )
 
@@ -74,21 +80,20 @@ type RealityConfig struct {
 
 // Reality is the server-side REALITY state.
 type Reality struct {
-	priv        *ecdh.PrivateKey
-	pub         []byte
-	shortIDs    map[uint64]struct{}
-	dest        string
-	serverNs    []string
-	maxDiff     time.Duration // 0 = disabled
-	cache       *replayCache
-	cert        tls.Certificate
-	tlsConfig   *tls.Config
-	log         *slog.Logger
-	dial        func(ctx context.Context, network, addr string) (net.Conn, error)
-	probe       bool
-	mirror      string
-	fallbackLim *FallbackLimit
-	mirrorCache *mirror
+	priv      *ecdh.PrivateKey
+	pub       []byte
+	shortIDs  map[uint64]struct{}
+	shortID8  map[[8]byte]bool
+	dest      string
+	serverNs  []string
+	maxDiff   time.Duration // 0 = disabled
+	cache     *replayCache
+	cert      tls.Certificate
+	tlsConfig *tls.Config
+	ref       *xreality.Config
+	log       *slog.Logger
+	dial      func(ctx context.Context, network, addr string) (net.Conn, error)
+	probe     bool
 }
 
 // NewReality validates the configuration and builds the server state.
@@ -102,6 +107,7 @@ func NewReality(cfg RealityConfig) (*Reality, error) {
 		return nil, err
 	}
 	ids := make(map[uint64]struct{}, len(cfg.ShortIDs))
+	shortID8 := make(map[[8]byte]bool, len(cfg.ShortIDs))
 	for _, s := range cfg.ShortIDs {
 		s = strings.TrimSpace(s)
 		if s == "" {
@@ -124,6 +130,9 @@ func NewReality(cfg RealityConfig) (*Reality, error) {
 			v = v<<8 | uint64(b)
 		}
 		ids[v] = struct{}{}
+		var eight [8]byte
+		copy(eight[:], raw)
+		shortID8[eight] = true
 	}
 	if cfg.Dest == "" {
 		return nil, errors.New("reality: destination %q must be host:port")
@@ -140,41 +149,25 @@ func NewReality(cfg RealityConfig) (*Reality, error) {
 		diff = time.Duration(cfg.MaxTimeDiff) * time.Second
 	}
 
-	name := "localhost"
-	if len(cfg.ServerNames) > 0 {
-		name = cfg.ServerNames[0]
-	}
-	cert, err := ed25519Cert(name)
-	if err != nil {
-		return nil, err
-	}
-
 	r := &Reality{
-		priv:        key,
-		pub:         key.PublicKey().Bytes(),
-		shortIDs:    ids,
-		dest:        cfg.Dest,
-		serverNs:    append([]string(nil), cfg.ServerNames...),
-		maxDiff:     diff,
-		cache:       newReplayCache(diff),
-		cert:        cert,
-		log:         log,
-		dial:        cfg.Dial,
-		probe:       cfg.ProbeDest,
-		mirror:      cfg.Mirror,
-		mirrorCache: newMirror(),
-		fallbackLim: cfg.FallbackLimit,
+		priv:     key,
+		pub:      key.PublicKey().Bytes(),
+		shortIDs: ids,
+		shortID8: shortID8,
+		dest:     cfg.Dest,
+		serverNs: append([]string(nil), cfg.ServerNames...),
+		maxDiff:  diff,
+		cache:    newReplayCache(diff),
+		log:      log,
+		dial:     cfg.Dial,
+		probe:    cfg.ProbeDest,
 	}
 	// The borrowed site answers h2 and http/1.1. REALITY's key exchange is
-	// X25519 only (crypto/ecdh.(*x25519Curve) in authenticateAt), so the TLS
-	// stack must not answer with a HelloRetryRequest for a hybrid group.
-	certs := []tls.Certificate{cert}
-	if extra, err := ecdsaCert(name); err == nil {
-		certs = append(certs, extra)
-	}
+	// X25519 only, so the TLS stack must not answer with a HelloRetryRequest
+	// for a hybrid group. The certificate is built per handshake from the
+	// connection's AuthKey (see realCertificate).
 	r.tlsConfig = &tls.Config{
 		MinVersion:       tls.VersionTLS13,
-		Certificates:     certs,
 		NextProtos:       []string{"h2", "http/1.1"},
 		CurvePreferences: []tls.CurveID{tls.X25519},
 	}
@@ -182,19 +175,32 @@ func NewReality(cfg RealityConfig) (*Reality, error) {
 		d := &net.Dialer{Timeout: 10 * time.Second}
 		r.dial = d.DialContext
 	}
+	// The REALITY reference implementation owns the TLS handshake: it must
+	// force Ed25519 CertificateVerify even when the client's ClientHello omits
+	// that signature scheme (Chrome fingerprints do), which crypto/tls cannot
+	// express. Our wrapper below keeps the same []byte-in/[]byte-out contract.
+	names := make(map[string]bool, len(cfg.ServerNames))
+	for _, n := range cfg.ServerNames {
+		if n = strings.TrimSpace(n); n != "" {
+			names[n] = true
+		}
+	}
+	r.ref = &xreality.Config{
+		DialContext:            r.dial,
+		Type:                   "tcp",
+		Dest:                   cfg.Dest,
+		ServerNames:            names,
+		PrivateKey:             key.Bytes(),
+		ShortIds:               shortID8,
+		MaxTimeDiff:            0,   // reference: 0 disables the clock check
+		NextProtos:             nil, // Xray keeps this nil for REALITY
+		SessionTicketsDisabled: true,
+	}
+	// Xray starts this learner once per listener; it records the post-handshake
+	// record lengths for the ALPN/SNI pair so the reference handshake can finish.
+	go xreality.DetectPostHandshakeRecordsLens(r.ref)
 	if r.probe {
 		go r.probeDest()
-	}
-	if cfg.Mirror == "on" || cfg.Mirror == "shape" {
-		// Learn in the background; a refusal before it finishes simply relays
-		// unshaped, which is the sample's degradation.
-		go func() {
-			ctx, cancel := contextWithTimeout(5 * time.Second)
-			defer cancel()
-			if err := r.mirrorCache.learn(ctx, r.dial, r.dest); err != nil {
-				r.log.Debug("REALITY: mirror learn failed", "err", err)
-			}
-		}()
 	}
 	return r, nil
 }
@@ -274,145 +280,35 @@ func (c *realityConn) start() error {
 }
 
 func (c *realityConn) handshake() error {
-	r := c.r
-	_ = c.Conn.SetReadDeadline(time.Now().Add(handshakeTimeout))
-	raw, records, err := readClientHello(c.Conn)
-	if err != nil {
-		// Not a ClientHello at all: hand the bytes we have to the site, the
-		// same answer a web server would give.
-		c.r.log.Debug("REALITY: not a ClientHello; forwarding to the site", "err", err)
-		return c.fallback(records)
-	}
-	hello, err := parseClientHello(raw)
-	if err != nil {
-		c.r.log.Debug("reality: not a ClientHello", "err", err)
-		return c.fallback(records)
-	}
-	now := time.Now()
-	ip := remoteIP(c.Conn)
-	key, reason := r.authenticateAt(raw, hello, now, ip)
-	if reason != nil {
-		// The refusal was already logged with the sample's wording; forward.
-		c.r.log.Warn(reason.Error())
-		return c.fallback(records)
-	}
-	_ = key
-	// Accepted: replay the ClientHello into a TLS 1.3 server and let
-	// crypto/tls take over the AES-GCM record layer.
-	cfg := r.tlsConfig.Clone()
-	if proto := negotiateProto(hello.alpn); proto != "" {
-		cfg.NextProtos = []string{proto}
-	}
-	tc := tls.Server(newPrefixConn(c.Conn, records), cfg)
-	c.under = tc
-	return nil
-}
-
-// fallback dials the borrowed site, replays what the client already sent and
-// relays the rest of the connection. refusals return no error page
-// (REPORT.md §7.5: "三条拒绝路径全部回落到真实站点").
-func (c *realityConn) fallback(records []byte) error {
-	r := c.r
-	// Mirror pacing: make the refusal take as long as the site's own answer
-	// (reality_mirror is on/show), never longer than mirrorMaxWait.
-	if d := r.mirrorCache.answerFor(r.mirror); d > 0 {
-		t := time.NewTimer(d)
-		select {
-		case <-t.C:
-		case <-time.After(mirrorMaxWait):
-		}
-		t.Stop()
-	}
-	ctx, cancel := contextWithTimeout(handshakeTimeout)
+	// xtls/reality performs the whole exchange: parse the ClientHello, derive
+	// AuthKey, validate the session id, terminate TLS 1.3 with the HMAC-signed
+	// certificate, or mirror the client to the borrowed site when the hello does
+	// not authenticate. It owns the raw connection from here on.
+	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
 	defer cancel()
-	site, err := r.dial(ctx, "tcp", r.dest)
+	rc, err := xreality.Server(ctx, c.Conn, c.r.ref)
 	if err != nil {
+		c.r.log.Debug("REALITY: handshake refused", "err", err)
 		return err
 	}
-	if len(records) > 0 {
-		if _, err := site.Write(records); err != nil {
-			site.Close()
-			return err
-		}
-	}
-	if lim := r.fallbackLim; lim != nil && lim.BytesPerSec > 0 {
-		site = &limitedConn{Conn: site, after: lim.AfterBytes, rate: lim.BytesPerSec, burst: float64(lim.BurstBytes)}
-	}
-	c.under = site
+	c.under = rc
 	return nil
 }
 
-// FallbackLimit is reality_fallback_limit: a stranger may fetch AfterBytes at
-// full speed, then BytesPerSec (burst BurstBytes, default one second worth).
-type FallbackLimit struct {
-	AfterBytes  int64
-	BytesPerSec int64
-	BurstBytes  int64
-}
-
-// limitedConn throttles the borrowed-site direction after AfterBytes.
-type limitedConn struct {
-	net.Conn
-	after  int64
-	rate   int64
-	burst  float64
-	tokens float64
-	last   time.Time
-	read   int64
-	mu     sync.Mutex
-}
-
-func (l *limitedConn) Read(p []byte) (int, error) {
-	n, err := l.Conn.Read(p)
-	if n > 0 && l.rate > 0 {
-		l.mu.Lock()
-		l.read += int64(n)
-		if l.read > l.after {
-			l.tokens += float64(n)
-			cap := l.burst
-			if cap <= 0 {
-				cap = float64(l.rate)
-			}
-			now := time.Now()
-			if !l.last.IsZero() {
-				l.tokens -= now.Sub(l.last).Seconds() * float64(l.rate)
-				if l.tokens < 0 {
-					l.tokens = 0
-				}
-			}
-			l.last = now
-			if l.tokens > cap {
-				l.tokens = cap
-			}
-			wait := time.Duration(l.tokens / float64(l.rate) * float64(time.Second))
-			l.mu.Unlock()
-			if wait > 0 {
-				time.Sleep(wait)
-			}
-		} else {
-			l.mu.Unlock()
-		}
-	}
-	return n, err
-}
-
-// ConnectionState exposes the TLS state once the connection is accepted, so
-// the H2/gRPC transports can see the negotiated ALPN.
+// ConnectionState exposes the TLS state of the accepted stream.
 func (c *realityConn) ConnectionState() tls.ConnectionState {
 	_ = c.start()
-	if st, ok := c.under.(interface {
-		ConnectionState() tls.ConnectionState
-	}); ok {
+	if st, ok := c.under.(interface{ ConnectionState() tls.ConnectionState }); ok {
 		return st.ConnectionState()
 	}
 	return tls.ConnectionState{}
 }
 
-// Handshake completes the TLS 1.3 handshake (the transport layer calls it
-// before it checks the negotiated ALPN).
+// Handshake completes the handshake if it has not run yet.
 func (c *realityConn) Handshake() error {
-	if err := c.start(); err != nil {
-		return err
+	startErr := c.start()
+	if startErr != nil {
+		return startErr
 	}
 	if h, ok := c.under.(interface{ Handshake() error }); ok {
 		return h.Handshake()
@@ -436,7 +332,7 @@ func (c *realityConn) Write(p []byte) (int, error) {
 
 func (c *realityConn) Close() error {
 	if c.under != nil {
-		c.under.Close()
+		_ = c.under.Close()
 	}
 	return c.Conn.Close()
 }
@@ -453,78 +349,6 @@ func (c *realityConn) CloseWrite() error {
 	return nil
 }
 
-// authenticateAt is the check the sample runs before it touches the record
-// layer. It returns the AES-GCM key and nil when the hello is genuine; any
-// refusal carries the log line the sample prints (see the three messages in
-// notes/rev-transport.md §3.3).
-func (r *Reality) authenticateAt(raw []byte, h *clientHello, now time.Time, ip string) ([]byte, error) {
-	if len(h.sessionID) != 32 {
-		return nil, errors.New("reality: not a ClientHello")
-	}
-	if h.keyShare == nil || h.keyShare.group != curveX25519 {
-		return nil, errors.New("reality: malformed X25519 key share")
-	}
-	if !r.serverNameAllowed(h.serverName) {
-		return nil, fmt.Errorf("reality: unknown short ID") // refusal -> site
-	}
-	peer, err := ecdh.X25519().NewPublicKey(h.keyShare.data)
-	if err != nil {
-		return nil, fmt.Errorf("reality: malformed X25519 key share")
-	}
-	ss, err := r.priv.ECDH(peer)
-	if err != nil {
-		return nil, fmt.Errorf("reality: hkdf: %s", err)
-	}
-	key, err := hkdfKey(ss)
-	if err != nil {
-		return nil, fmt.Errorf("reality: hkdf: %s", err)
-	}
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, fmt.Errorf("reality: hkdf: %s", err)
-	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, fmt.Errorf("reality: hkdf: %s", err)
-	}
-	nonce := make([]byte, aead.NonceSize())
-	copy(nonce, h.random) // 32-byte client random, first 12 bytes
-	proof, err := aead.Open(nil, nonce, h.sessionID, nil)
-	if err != nil || len(proof) < realityProofLen {
-		return nil, errors.New("reality: the hello does not authenticate")
-	}
-	if !r.shortIDAllowed(proof[4:12]) {
-		return nil, errors.New("reality: unknown short ID")
-	}
-	// Clock window: cfg 0 -> 240 s, -1 -> no check (REPORT.md §7.5).
-	if r.maxDiff > 0 {
-		ts := int64(binary.BigEndian.Uint32(proof[0:4]))
-		delta := now.Unix() - ts
-		abs := delta
-		if abs < 0 {
-			abs = -abs
-		}
-		if time.Duration(abs)*time.Second > r.maxDiff {
-			return nil, fmt.Errorf("REALITY hello outside the clock window by %d s from %s (its clock reads %+d s against this machine's; the window is %d s): the client's clock or this machine's is wrong, or a recorded hello is being replayed; it was shown the real site",
-				abs, ip, delta, int64(r.maxDiff/time.Second))
-		}
-	}
-	// Replay key = sha256(hello[6:71]) = random(32) || sidLen(1) || sid(32)
-	// (notes/rev-transport.md §3.2 step ④; 65 bytes).
-	if len(raw) < 71 {
-		return nil, errors.New("reality: not a ClientHello")
-	}
-	sum := sha256.Sum256(raw[6:71])
-	switch r.cache.add(now, ip, sum) {
-	case 0:
-	case 1:
-		return nil, fmt.Errorf("REALITY hello from %s was used before: a recorded handshake is being replayed (a probe); it was shown the real site", ip)
-	default:
-		return nil, fmt.Errorf("REALITY: more than %d handshakes in %s, more than the node remembers to refuse replays; new clients are shown the real site until the oldest are forgotten", realityReplayMax, r.maxDiff)
-	}
-	return key, nil
-}
-
 // realityProofLen is the decrypted session-id length: 4-byte big-endian Unix
 // time + 8-byte short id + 4 bytes of random padding.
 //
@@ -533,9 +357,9 @@ func (r *Reality) authenticateAt(raw []byte, h *clientHello, now time.Time, ip s
 // layout above is the self-consistent reconstruction (both ends are kaze).
 const realityProofLen = 16
 
-func hkdfKey(shared []byte) ([]byte, error) {
+func hkdfKey(shared, salt []byte) ([]byte, error) {
 	out := make([]byte, 32)
-	k := hkdf.New(sha256.New, shared, []byte(realityHKDFSalt), []byte(realityHKDFInfo))
+	k := hkdf.New(sha256.New, shared, salt, []byte(realityHKDFInfo))
 	if _, err := io.ReadFull(k, out); err != nil {
 		return nil, err
 	}
