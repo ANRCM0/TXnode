@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/ANRCM0/TX-Node/internal/config"
-	M "github.com/sagernet/sing/common/metadata"
 )
 
 // The explicit runner starts real Laravel routes and the separate Provider.
@@ -93,8 +92,8 @@ func TestNativeProviderCoreMaterialAndRealVLESS(t *testing.T) {
 		if uuid == "22222222-2222-4222-8222-222222222222" || len(uuid) != 36 {
 			t.Fatal("legacy or metadata credential reached the kernel")
 		}
-		raw, stream := liveProtocolDial(t, "vless",
-			net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), uuid, M.ParseSocksaddr(origin.Addr().String()))
+		raw, stream := liveProtocolDial(t, "socks",
+			net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), uuid, origin.Addr())
 		t.Cleanup(func() { raw.Close() })
 		t.Cleanup(func() { stream.Close() })
 		stream.SetDeadline(time.Now().Add(10 * time.Second))

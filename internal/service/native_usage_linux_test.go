@@ -20,24 +20,46 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/config"
 	"github.com/ANRCM0/TX-Node/internal/controlplane"
 	"github.com/ANRCM0/TX-Node/internal/credentialdelivery"
-	"github.com/ANRCM0/TX-Node/internal/kernel/singbox"
 	"github.com/ANRCM0/TX-Node/internal/kernellifecycle"
 	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/panel"
+	"github.com/ANRCM0/TX-Node/internal/usageinterval"
 	"github.com/ANRCM0/TX-Node/internal/usagev2"
 )
 
+// nativeBillingKernel is the kernel half of usage_v2 for this fixture. The
+// meter itself is exercised by the txnode package tests; here the service's
+// authorization/refresh lifecycle is under test, so a stub meter is enough.
 type nativeBillingKernel struct {
 	*fakeKernel
-	prepared *singbox.ConnTracker
+	meter *stubNativeMeter
 }
 
-func (k *nativeBillingKernel) SetNativeUsageTracker(tracker *singbox.ConnTracker) bool {
-	if k.running || tracker == nil {
-		return false
+type stubNativeMeter struct {
+	enforcing bool
+	collector *usageinterval.NativeCollector
+}
+
+func (m *stubNativeMeter) EnableEnforcingBounded() bool { m.enforcing = true; return true }
+
+// StopBoundedUsageTraffic mirrors the kernel contract: the collector is failed so
+// no further BeginIO succeeds, and affected transports would be closed.
+func (m *stubNativeMeter) StopBoundedUsageTraffic() {
+	if m.collector != nil {
+		m.collector.Fail()
 	}
-	k.prepared = tracker
-	return true
+}
+
+func (k *nativeBillingKernel) NewNativeMeter(collector *usageinterval.NativeCollector, _ map[string]int) (usageinterval.Meter, bool) {
+	if k.running {
+		return nil, false
+	}
+	k.meter = &stubNativeMeter{collector: collector}
+	return k.meter, true
+}
+
+func (k *nativeBillingKernel) SetNativeUsageTracker(m usageinterval.Meter) bool {
+	return m != nil
 }
 func (k *nativeBillingKernel) Protocols() []string { return []string{"vless", "vmess"} }
 

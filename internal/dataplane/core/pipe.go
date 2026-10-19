@@ -21,7 +21,7 @@ import (
 
 // Pipe relays until both directions finish. It does not close the connections.
 func Pipe(ctx context.Context, a, b net.Conn, up, down func(int64)) error {
-	return pipeLimited(ctx, a, b, nil, nil, up, down)
+	return pipeLimited(ctx, a, b, nil, nil, up, down, nil, Chunk{})
 }
 
 // waiter is the token-bucket surface relay needs: a Limiter, or a chain of a
@@ -64,28 +64,30 @@ func activeLimiters(ls ...*Limiter) []waiter {
 // pipeLimited is Pipe with optional token buckets. The buckets throttle the read
 // side, which turns a slow reader into backpressure on the writer, exactly like
 // Limiter.Wait inside the original pipe.
-func pipeLimited(ctx context.Context, a, b net.Conn, upLim, downLim []waiter, up, down func(int64)) error {
-	if len(upLim) == 0 && len(downLim) == 0 {
+func pipeLimited(ctx context.Context, a, b net.Conn, upLim, downLim []waiter, up, down func(int64), hook ChunkHook, meta Chunk) error {
+	// A chunk hook needs a userspace copy: admission must happen before the
+	// bytes move, which splice(2) cannot express.
+	if hook == nil && len(upLim) == 0 && len(downLim) == 0 {
 		if ok, err := splicePipe(ctx, a, b, up, down); ok {
 			return err
 		}
 	}
-	return copyPipe(ctx, a, b, upLim, downLim, up, down)
+	return copyPipe(ctx, a, b, upLim, downLim, up, down, hook, meta)
 }
 
 // copyPipe is the userspace fallback: one goroutine per direction, half-close on
 // EOF so the peer's copy loop terminates.
-func copyPipe(ctx context.Context, a, b net.Conn, upLim, downLim []waiter, up, down func(int64)) error {
+func copyPipe(ctx context.Context, a, b net.Conn, upLim, downLim []waiter, up, down func(int64), hook ChunkHook, meta Chunk) error {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	errCh := make(chan error, 2)
 	go func() {
 		defer wg.Done()
-		errCh <- copyDirection(ctx, b, a, upLim, up)
+		errCh <- copyDirection(ctx, b, a, upLim, up, hook, meta, DirUpload)
 	}()
 	go func() {
 		defer wg.Done()
-		errCh <- copyDirection(ctx, a, b, downLim, down)
+		errCh <- copyDirection(ctx, a, b, downLim, down, hook, meta, DirDownload)
 	}()
 
 	done := make(chan struct{})
@@ -120,10 +122,25 @@ func copyPipe(ctx context.Context, a, b net.Conn, upLim, downLim []waiter, up, d
 }
 
 // copyDirection copies src→dst honouring the limiter, counting bytes.
-func copyDirection(ctx context.Context, dst, src net.Conn, lims []waiter, count func(int64)) error {
+func copyDirection(ctx context.Context, dst, src net.Conn, lims []waiter, count func(int64), hook ChunkHook, meta Chunk, dir ChunkDirection) error {
 	buf := make([]byte, copyBuf)
 	for {
+		var token any
+		if hook != nil {
+			c := meta
+			c.Dir, c.N = dir, int64(len(buf))
+			var herr error
+			token, herr = hook.Begin(c)
+			if herr != nil {
+				return herr
+			}
+		}
 		n, rerr := src.Read(buf)
+		if hook != nil {
+			c := meta
+			c.Dir, c.N, c.Err = dir, int64(n), rerr
+			hook.Complete(c, token)
+		}
 		if n > 0 {
 			if len(lims) > 0 {
 				if err := waiterSet(lims).Wait(ctx, int64(n)); err != nil {

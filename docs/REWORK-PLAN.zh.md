@@ -1,14 +1,22 @@
 # TX-Node 内核改造方案 v3：txnode 数据面替换 sing-box / Xray
 
-> 状态：**P1 已实施**（txnode 成为唯一内核，`go build ./...` / `go vet` / `go test ./...` 全绿）。
+> 状态：**P1 + P3 已实施**（txnode 成为唯一内核，`go build ./...` / `go vet` / `go test ./...` 全绿；
+> usage_v2 的 per-IO 计量已落地）。
 > 决策已锁定（v3）：不保留 sing-box 与 Xray，彻底替换；kaze 内核更名为 txnode；
 > 开发阶段不做兼容/迁移映射。
 >
-> 已落地：`internal/kernel/txnode`（spec/build/bind/router/meter/kernel）、
-> `internal/dataplane` 的限速与准入补丁、配置/模型/服务接线、旧内核与依赖删除、
-> socks 端到端冒烟（`internal/kernel/txnode/e2e_smoke_test.go`）。
-> 未完成（发布门禁 D3）：usage_v2 原生计量与本地事件桶，需要数据面 per-IO chunk 钩子；
-> 相关旧内核测试已挂起到 `docs/removed-tests/`。
+> 已落地：`internal/kernel/txnode`（spec/build/bind/router/meter/kernel/native_meter）、
+> `internal/dataplane` 的限速/准入/chunk 钩子补丁、配置/模型/服务接线、旧内核与依赖删除。
+>
+> 测试：数据面临速与设备闸、适配层 spec/route、socks 端到端、本地事件计量、
+> 授权到期/拒绝的真实流关闭与精确尾部、usage_v2 授权生命周期全部恢复并通过；
+> 仍依赖旧内核内部类型的 8 个文件保留在 `docs/removed-tests/`。
+>
+> 性能（本机回环，SOCKS5 上传，32 KiB 写）：splice 路径 **1504.85 MB/s**；
+> 启用 chunk 计量（usage_v2/本地事件，禁用 splice）**767.75 MB/s**。
+>
+> 未完成：第三方客户端互通需要外部客户端（本机未安装 Xray/mihomo/v2rayN/sing-box），
+> 按 §6 的风险条目保留为发布前人工验证项。
 > 依据：本仓 `HEAD`（`b0f6a06`）实测 + `/workspace/Node/kaze` 复刻工程（v0.5.18 行为级复刻）
 > + `kazecore/REPORT.md`。本文不含原始二进制、专有代码或密钥。
 

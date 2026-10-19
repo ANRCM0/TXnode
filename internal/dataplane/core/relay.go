@@ -248,7 +248,11 @@ func (s *Server) relayTCP(ctx context.Context, sess *Session) error {
 		}
 		upCount(int64(len(head)))
 	}
-	return pipeLimited(ctx, sess.Conn, remote, upLims, downLims, upCount, downCount)
+	meta := Chunk{ConnID: sess.ConnID, UserID: user, Path: "conn"}
+	if o.Hooks != nil {
+		defer o.Hooks.Close(meta)
+	}
+	return pipeLimited(ctx, sess.Conn, remote, upLims, downLims, upCount, downCount, o.Hooks, meta)
 }
 
 // limiters collects the per-user and per-node token buckets for a session. Both
@@ -301,6 +305,9 @@ func (s *Server) relayUDP(ctx context.Context, sess *Session) error {
 		assocs:   make(map[socks.Addr]*udpAssoc),
 	}
 	defer u.close()
+	if o.Hooks != nil {
+		defer o.Hooks.Close(Chunk{ConnID: sess.ConnID, UserID: user, Path: "udp"})
+	}
 	u.StartWatchdog()
 
 	buf := make([]byte, 65535)
@@ -409,10 +416,28 @@ func (u *udpRelay) forward(payload []byte, dest socks.Addr) {
 			return
 		}
 	}
+	var token any
+	if u.opts.Hooks != nil {
+		meta := Chunk{ConnID: u.sess.ConnID, UserID: u.user, Dir: DirUpload, Path: "udp", N: int64(len(payload))}
+		var herr error
+		token, herr = u.opts.Hooks.Begin(meta)
+		if herr != nil {
+			return
+		}
+	}
 	if err := a.Write(payload); err != nil {
+		if u.opts.Hooks != nil {
+			meta := Chunk{ConnID: u.sess.ConnID, UserID: u.user, Dir: DirUpload, Path: "udp", N: int64(len(payload)), Err: err}
+			u.opts.Hooks.Complete(meta, token)
+		}
 		u.log.Debug("udp through outbound failed; dropping until it can be retried",
 			"dest", dest.String(), "err", err)
 		u.remove(dest, a)
+		return
+	}
+	if u.opts.Hooks != nil {
+		meta := Chunk{ConnID: u.sess.ConnID, UserID: u.user, Dir: DirUpload, Path: "udp", N: int64(len(payload))}
+		u.opts.Hooks.Complete(meta, token)
 	}
 }
 
@@ -474,11 +499,24 @@ func (u *udpRelay) readBack(a *udpAssoc) {
 	for {
 		var n int
 		var err error
+		var token any
 		addr := a.dest
+		if u.opts.Hooks != nil {
+			meta := Chunk{ConnID: u.sess.ConnID, UserID: u.user, Dir: DirDownload, Path: "udp", N: int64(len(buf))}
+			var herr error
+			if token, herr = u.opts.Hooks.Begin(meta); herr != nil {
+				u.remove(a.dest, a)
+				return
+			}
+		}
 		if a.stream != nil {
 			n, addr, err = a.stream.ReadPacket(buf)
 		} else {
 			n, err = a.conn.Read(buf)
+		}
+		if u.opts.Hooks != nil {
+			meta := Chunk{ConnID: u.sess.ConnID, UserID: u.user, Dir: DirDownload, Path: "udp", N: int64(n), Err: err}
+			u.opts.Hooks.Complete(meta, token)
 		}
 		if err != nil {
 			u.remove(a.dest, a)

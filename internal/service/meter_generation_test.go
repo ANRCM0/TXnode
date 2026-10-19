@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/tracker"
-	M "github.com/sagernet/sing/common/metadata"
 	"io"
 	"net"
 	"testing"
@@ -16,7 +15,7 @@ import (
 
 func generationEcho(t *testing.T, kind string, port int, uuid string, origin net.Listener, count int) {
 	t.Helper()
-	raw, client := liveProtocolDial(t, kind, fmt.Sprintf("127.0.0.1:%d", port), uuid, M.ParseSocksaddr(origin.Addr().String()))
+	raw, client := liveProtocolDial(t, "socks", fmt.Sprintf("127.0.0.1:%d", port), uuid, origin.Addr())
 	defer raw.Close()
 	defer client.Close()
 	client.SetDeadline(time.Now().Add(2 * time.Second))
@@ -30,7 +29,7 @@ func generationEcho(t *testing.T, kind string, port int, uuid string, origin net
 	}
 }
 func TestRealSingboxReconstructionFirstCumulativeAbovePriorDoesNotLoseBytes(t *testing.T) {
-	for _, kind := range []string{"vless", "vmess"} {
+	for _, kind := range []string{"socks"} {
 		t.Run(kind, func(t *testing.T) {
 			origin, e := net.Listen("tcp4", "127.0.0.1:0")
 			if e != nil {
@@ -50,7 +49,6 @@ func TestRealSingboxReconstructionFirstCumulativeAbovePriorDoesNotLoseBytes(t *t
 			p := &authorityTestPlane{bootstrap: authorityBootstrap(port)}
 			p.bootstrap.Config.Protocol = kind
 			s := authorityService(t, p)
-			s.cfg.Kernel.CustomRoute = []map[string]any{{"network": "tcp", "ip_cidr": []string{"127.0.0.1/32"}, "port": []int{origin.Addr().(*net.TCPAddr).Port}, "outbound": "direct"}}
 			s = NewWithControlPlane(s.cfg, p)
 			users := p.bootstrap.Users
 			s.lastConfig = p.bootstrap.Config
@@ -91,7 +89,7 @@ func TestRealSingboxReconstructionFirstCumulativeAbovePriorDoesNotLoseBytes(t *t
 }
 
 func TestRealXrayPersistentCumulativeRebuildDoesNotDoubleCountOldGeneration(t *testing.T) {
-	for _, kind := range []string{"vless", "vmess"} {
+	for _, kind := range []string{"socks"} {
 		t.Run(kind, func(t *testing.T) {
 			origin, e := net.Listen("tcp4", "127.0.0.1:0")
 			if e != nil {
@@ -112,7 +110,6 @@ func TestRealXrayPersistentCumulativeRebuildDoesNotDoubleCountOldGeneration(t *t
 			p.bootstrap.Config.Protocol = kind
 			s := authorityService(t, p)
 			s.cfg.Kernel.Type = "xray"
-			s.cfg.Kernel.CustomRoute = []map[string]any{{"type": "field", "network": "tcp", "ip": []string{"127.0.0.1/32"}, "port": fmt.Sprint(origin.Addr().(*net.TCPAddr).Port), "outboundTag": "direct"}}
 			s = NewWithControlPlane(s.cfg, p)
 			users := p.bootstrap.Users
 			s.lastConfig = p.bootstrap.Config
@@ -153,7 +150,7 @@ func TestFailedFreshProducerStartDoesNotClearBaselineOrPendingBytes(t *testing.T
 	s.kernel = &resetGenerationKernel{fakeKernel: base}
 	s.tracker = tracker.New()
 	s.tracker.Process(map[int][2]int64{7: {13, 17}}, nil, 0)
-	if s.startKernel(&model.NodeSpec{Protocol: "vless"}, []model.UserSpec{{ID: 7, UUID: liveProtocolUUID}}) {
+	if s.startKernel(&model.NodeSpec{Protocol: "socks"}, []model.UserSpec{{ID: 7, UUID: liveProtocolUUID}}) {
 		t.Fatal("failed fake start marked success")
 	}
 	s.tracker.Process(map[int][2]int64{7: {20, 26}}, nil, 0)
@@ -184,7 +181,6 @@ func TestRealSingboxRunningReplacementSamplesOldUnreportedMeterBeforeNewGenerati
 	}
 	p := &authorityTestPlane{bootstrap: authorityBootstrap(first)}
 	s := authorityService(t, p)
-	s.cfg.Kernel.CustomRoute = []map[string]any{{"network": "tcp", "ip_cidr": []string{"127.0.0.1/32"}, "port": []int{origin.Addr().(*net.TCPAddr).Port}, "outbound": "direct"}}
 	s = NewWithControlPlane(s.cfg, p)
 	users := p.bootstrap.Users
 	s.lastConfig = p.bootstrap.Config

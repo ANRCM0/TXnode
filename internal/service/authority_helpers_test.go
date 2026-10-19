@@ -89,7 +89,7 @@ func authorityPort(t *testing.T) int {
 
 func authorityBootstrap(port int) controlplane.Bootstrap {
 	return controlplane.Bootstrap{
-		Config: &model.NodeSpec{Protocol: "vless", ListenIP: "127.0.0.1", ServerPort: port},
+		Config: &model.NodeSpec{Protocol: "socks", ListenIP: "127.0.0.1", ServerPort: port},
 		Users:  []model.UserSpec{{ID: 7, UUID: liveProtocolUUID}},
 	}
 }

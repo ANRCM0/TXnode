@@ -30,6 +30,9 @@ func (s *Server) ServeSession(ctx context.Context, sess *Session) error {
 	if sess == nil {
 		return errors.New("session refused: nil session")
 	}
+	if sess.ConnID == 0 {
+		sess.ConnID = s.connSeq.Add(1)
+	}
 	if o := s.snapshot(); o.Admission != nil && !o.Admission() {
 		if sess.Conn != nil {
 			_ = sess.Conn.Close()

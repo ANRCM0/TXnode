@@ -13,6 +13,7 @@ import (
 
 	"github.com/ANRCM0/TX-Node/internal/kernel"
 	"github.com/ANRCM0/TX-Node/internal/model"
+	"github.com/ANRCM0/TX-Node/internal/usagebucket"
 )
 
 // TestKernelRelaysThroughSocks is the P1.5 acceptance smoke test: a real txnode
@@ -25,7 +26,7 @@ func TestKernelRelaysThroughSocks(t *testing.T) {
 	}))
 	defer origin.Close()
 
-	port := freePort(t)
+	port := freePortTB(t)
 	ns := &model.NodeSpec{Protocol: "socks", ListenIP: "127.0.0.1", ServerPort: port}
 	users := []model.UserSpec{{ID: 1, UUID: "secret-pass", SpeedLimit: 0, DeviceLimit: 0}}
 
@@ -38,7 +39,7 @@ func TestKernelRelaysThroughSocks(t *testing.T) {
 		t.Fatal("kernel not running after Start")
 	}
 
-	conn := socksConnect(t, port, "secret-pass", origin.Listener.Addr().String())
+	conn := socksConnectTB(t, port, "secret-pass", origin.Listener.Addr().String())
 	defer conn.Close()
 
 	req := "GET / HTTP/1.1\r\nHost: origin\r\nConnection: close\r\n\r\n"
@@ -72,7 +73,7 @@ func TestKernelRelaysThroughSocks(t *testing.T) {
 	}
 }
 
-func freePort(t *testing.T) int {
+func freePortTB(t testing.TB) int {
 	t.Helper()
 	l, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
@@ -84,7 +85,7 @@ func freePort(t *testing.T) int {
 }
 
 // socksConnect performs RFC1928 method negotiation (user/pass) and a CONNECT.
-func socksConnect(t *testing.T, port int, password, dest string) net.Conn {
+func socksConnectTB(t testing.TB, port int, password, dest string) net.Conn {
 	t.Helper()
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 2*time.Second)
 	if err != nil {
@@ -134,4 +135,57 @@ func socksConnect(t *testing.T, port int, password, dest string) net.Conn {
 	}
 	_ = conn.SetDeadline(time.Time{})
 	return conn
+}
+
+// TestKernelLocalEventMeterAccountsRelay proves the chunk hook is wired through
+// the relay: with a local event meter attached, a real SOCKS5 transfer emits
+// accounting events for both directions.
+func TestKernelLocalEventMeterAccountsRelay(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "metered")
+	}))
+	defer origin.Close()
+
+	meter, err := usagebucket.New(usagebucket.Options{Enabled: true, Window: time.Second, MaxEvents: 64, MaxSealed: 4})
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := freePortTB(t)
+	k := New(RuntimeConfig{TrustedProxies: "private", MaxFresh: 64, HandshakeTimeout: 5 * time.Second})
+	k.meter = &nativeMeter{}
+	k.meter.setEventMeter(meter)
+	ns := &model.NodeSpec{Protocol: "socks", ListenIP: "127.0.0.1", ServerPort: port}
+	if err := k.Start(ns, []model.UserSpec{{ID: 1, UUID: "secret-pass"}}, kernel.TLSCert{}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	defer k.Stop()
+
+	conn := socksConnectTB(t, port, "secret-pass", origin.Listener.Addr().String())
+	req := "GET / HTTP/1.1\r\nHost: origin\r\nConnection: close\r\n\r\n"
+	if _, err := io.WriteString(conn, req); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	_ = conn.Close()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		snap := meter.Snapshot()
+		total := len(snap.Open.Events)
+		for _, b := range snap.Sealed {
+			total += len(b.Events)
+		}
+		if total > 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("local event meter saw no accounting events")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }

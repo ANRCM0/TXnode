@@ -4,87 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/ANRCM0/TX-Node/internal/config"
 	"github.com/ANRCM0/TX-Node/internal/controlerror"
 	"github.com/ANRCM0/TX-Node/internal/controlplane"
-	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/reporting"
-	M "github.com/sagernet/sing/common/metadata"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 	"time"
 )
 
-type authorityTestPlane struct {
-	mu           sync.Mutex
-	bootstrap    controlplane.Bootstrap
-	pollErr      error
-	reportErr    error
-	reports      []controlplane.ReportPayload
-	initialCalls int
-}
-
-func (p *authorityTestPlane) Initial(context.Context, func() map[string]interface{}, chan<- controlplane.Event, chan<- controlplane.StatusChange) (controlplane.Bootstrap, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.initialCalls++
-	return p.bootstrap, nil
-}
-func (p *authorityTestPlane) Poll(context.Context) (controlplane.Snapshot, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return controlplane.Snapshot{Config: p.bootstrap.Config, Users: p.bootstrap.Users}, p.pollErr
-}
-func (p *authorityTestPlane) Discover(context.Context, func() map[string]interface{}, chan<- controlplane.Event, chan<- controlplane.StatusChange) (controlplane.PushClient, error) {
-	return nil, nil
-}
-func (p *authorityTestPlane) Metrics() controlplane.APIMetrics { return controlplane.APIMetrics{} }
-func (p *authorityTestPlane) SupportsPolling() bool            { return true }
-func (p *authorityTestPlane) SupportsDiscovery() bool          { return false }
-func (p *authorityTestPlane) Report(b controlplane.ReportPayload) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.reports = append(p.reports, b)
-	return p.reportErr
-}
-func (p *authorityTestPlane) ReportDevices(controlplane.PushClient, map[int][]string) {}
-func (p *authorityTestPlane) SupportsReporting() bool                                 { return true }
-func (p *authorityTestPlane) SupportsDeviceReports() bool                             { return false }
-func authorityService(t *testing.T, p *authorityTestPlane) *Service {
-	t.Helper()
-	cfg := &config.Config{InstanceID: "native-denial-fixture", Panel: config.PanelConfig{Provider: "txboard", URL: "http://127.0.0.1:1", NodeID: 42, Token: "synthetic"}, Kernel: config.KernelConfig{Type: "singbox", ConfigDir: t.TempDir(), LogLevel: "error"}, Cert: config.CertConfig{CertMode: "none"}, Node: config.NodeConfig{TrackInterval: 60, PushInterval: 60, PullInterval: 1, DeviceReportInterval: 60}, WS: config.WSConfig{DiscoveryInterval: 60}}
-	return NewWithControlPlane(cfg, p)
-}
-func authorityPort(t *testing.T) int {
-	t.Helper()
-	l, e := net.Listen("tcp4", "127.0.0.1:0")
-	if e != nil {
-		t.Fatal(e)
-	}
-	port := l.Addr().(*net.TCPAddr).Port
-	l.Close()
-	return port
-}
-func authorityBootstrap(port int) controlplane.Bootstrap {
-	return controlplane.Bootstrap{Config: &model.NodeSpec{Protocol: "vless", ListenIP: "127.0.0.1", ServerPort: port}, Users: []model.UserSpec{{ID: 7, UUID: liveProtocolUUID}}}
-}
-func authorityWaitListener(t *testing.T, port int) {
-	t.Helper()
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		c, e := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 20*time.Millisecond)
-		if e == nil {
-			c.Close()
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("real listener not opened")
-}
 func TestNativeAuthorityDenialAsyncPollStopsRealListenerAndPreservesUnreportedTail(t *testing.T) {
 	port := authorityPort(t)
 	denial := &controlerror.AuthorityDenial{Scope: controlerror.NodeScope, NodeID: 42, Code: "NODE_NOT_FOUND", HTTPStatus: 404}
@@ -196,7 +126,7 @@ func TestNativeAuthorityRecoveryDrainsTailBeforeListenerIncludingEmptyBootstrap(
 	}
 }
 
-func TestNativeAuthorityDenialClosesEstablishedVLESSStreamAndCheckpointsActualMeter(t *testing.T) {
+func TestNativeAuthorityDenialClosesEstablishedStreamAndCheckpointsActualMeter(t *testing.T) {
 	origin, e := net.Listen("tcp4", "127.0.0.1:0")
 	if e != nil {
 		t.Fatal(e)
@@ -215,15 +145,12 @@ func TestNativeAuthorityDenialClosesEstablishedVLESSStreamAndCheckpointsActualMe
 	port := authorityPort(t)
 	p := &authorityTestPlane{bootstrap: authorityBootstrap(port)}
 	s := authorityService(t, p)
-	s.cfg.Kernel.CustomRoute = []map[string]any{{"network": "tcp", "ip_cidr": []string{"127.0.0.1/32"}, "port": []int{origin.Addr().(*net.TCPAddr).Port}, "outbound": "direct"}}
-	// Construction snapshots the kernel config, so construct after routing policy.
-	s = NewWithControlPlane(s.cfg, p)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- s.Run(ctx) }()
 	authorityWaitListener(t, port)
-	raw, client := liveProtocolDial(t, "vless", fmt.Sprintf("127.0.0.1:%d", port), liveProtocolUUID, M.ParseSocksaddr(origin.Addr().String()))
+	raw, client := liveProtocolDial(t, "socks", fmt.Sprintf("127.0.0.1:%d", port), liveProtocolUUID, origin.Addr())
 	defer raw.Close()
 	defer client.Close()
 	client.SetDeadline(time.Now().Add(12 * time.Second))

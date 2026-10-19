@@ -15,6 +15,8 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/dataplane/transport"
 	"github.com/ANRCM0/TX-Node/internal/kernel"
 	"github.com/ANRCM0/TX-Node/internal/model"
+	"github.com/ANRCM0/TX-Node/internal/usagebucket"
+	"github.com/ANRCM0/TX-Node/internal/usageinterval"
 	"golang.org/x/time/rate"
 )
 
@@ -41,6 +43,12 @@ type Kernel struct {
 
 	auditor   atomic.Pointer[audit.Reporter]
 	admission atomic.Bool
+
+	// meter is the per-chunk accountant. It is attached before Start by the
+	// usage_v2 runtime and/or the local event store.
+	meter           *nativeMeter
+	localCoord      *usagebucket.Coordinator
+	localEventMeter *usagebucket.Meter
 }
 
 // New builds an idle kernel. Start binds the node.
@@ -203,6 +211,7 @@ func (k *Kernel) buildLocked(nc *model.NodeSpec, sp *spec, users []model.UserSpe
 		BindLocal:            k.rt.AutoOutIP,
 		Admission:            k.admitted,
 		OnAudit:              k.auditSession,
+		Hooks:                k.chunkHook(),
 	})
 	res, err := bindNode(sp, handler, cu, tlsCfg, re, srv, k.rt, k.log)
 	if err != nil {
@@ -217,6 +226,13 @@ func (k *Kernel) installLocked(sp *spec, router *core.Router, srv *core.Server, 
 	k.router.Store(router)
 	k.srv = srv
 	k.bind = res
+	if k.meter != nil {
+		k.meter.onStop = func() {
+			if k.srv != nil {
+				k.srv.CloseAllSessions()
+			}
+		}
+	}
 	k.spec = sp
 	k.running = true
 	serveTCP(srv, res.ln, k.log)
@@ -411,6 +427,9 @@ func (k *Kernel) SetAuditor(r *audit.Reporter) { k.auditor.Store(r) }
 func (k *Kernel) StopAuthorization() {
 	k.admission.Store(false)
 	k.mu.Lock()
+	if k.srv != nil {
+		k.srv.CloseAllSessions()
+	}
 	if k.bind != nil {
 		if k.bind.ln != nil {
 			_ = k.bind.ln.Close()
@@ -424,6 +443,88 @@ func (k *Kernel) StopAuthorization() {
 	}
 	k.mu.Unlock()
 	k.log.Warn("authorization denied: new sessions refused")
+}
+
+// NewNativeMeter implements service.nativeUsageKernel: it builds the usage_v2
+// meter over the caller-owned collector. It must be called before Start, because
+// the relay installs its hook when the server is built.
+func (k *Kernel) NewNativeMeter(collector *usageinterval.NativeCollector, users map[string]int) (usageinterval.Meter, bool) {
+	if collector == nil {
+		return nil, false
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.running {
+		return nil, false
+	}
+	if k.meter != nil {
+		if k.meter.collector != nil {
+			return nil, false
+		}
+		k.meter.collector = collector
+		k.meter.users = users
+		return k.meter, true
+	}
+	m := &nativeMeter{collector: collector, users: users}
+	if k.localEvents() != nil {
+		m.setEventMeter(k.localEvents())
+	}
+	k.meter = m
+	return m, true
+}
+
+// SetNativeUsageTracker implements service.nativeUsageKernel: it turns the meter
+// into an enforcing one. Replacing it while the node runs is refused because the
+// relay already holds the hook.
+func (k *Kernel) SetNativeUsageTracker(m usageinterval.Meter) bool {
+	nm, ok := m.(*nativeMeter)
+	if !ok || nm == nil {
+		return false
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.running || k.meter != nm {
+		return false
+	}
+	return nm.EnableEnforcingBounded()
+}
+
+// SetLocalEventConsumer implements service.localEventKernel: it creates the
+// local meter and registers it with the process coordinator. It must be called
+// before Start.
+func (k *Kernel) SetLocalEventConsumer(consumer *usagebucket.Coordinator) bool {
+	if consumer == nil {
+		return false
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.running || k.localCoord != nil {
+		return false
+	}
+	meter, err := usagebucket.New(usagebucket.Options{Enabled: true, Window: time.Second, MaxEvents: 128, MaxSealed: 8})
+	if err != nil {
+		return false
+	}
+	if err := consumer.Add(meter); err != nil {
+		return false
+	}
+	k.localCoord = consumer
+	k.localEventMeter = meter
+	if k.meter != nil {
+		k.meter.setEventMeter(meter)
+	}
+	return true
+}
+
+func (k *Kernel) localEvents() *usagebucket.Meter { return k.localEventMeter }
+
+// chunkHook returns the installed accountant, or nil when neither usage_v2 nor
+// the local event store is active.
+func (k *Kernel) chunkHook() core.ChunkHook {
+	if k.meter == nil {
+		return nil
+	}
+	return k.meter
 }
 
 // syncLocked refreshes the tracker, the device gate and the limit buckets from

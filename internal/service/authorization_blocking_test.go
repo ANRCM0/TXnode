@@ -10,7 +10,6 @@ import (
 	"io"
 	"net"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -18,13 +17,12 @@ import (
 
 	"github.com/ANRCM0/TX-Node/internal/controlplane"
 	"github.com/ANRCM0/TX-Node/internal/reporting"
-	M "github.com/sagernet/sing/common/metadata"
 )
 
 // A stalled prepare owns the real reporting pendingMu; no fake authority,
 // fake kernel or injected watchdog call can substitute for actual lease expiry.
 func TestSignedAuthorizationExpiryClosesActualTrafficBeforeBlockedReportPrepareReturns(t *testing.T) {
-	for _, kernelName := range []string{"singbox", "xray"} {
+	for _, kernelName := range []string{"txnode"} {
 		t.Run(kernelName, func(t *testing.T) {
 			initial, plane, port := signedAuthorityFixture(t, kernelName, 3)
 			origin, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -39,9 +37,7 @@ func TestSignedAuthorizationExpiryClosesActualTrafficBeforeBlockedReportPrepareR
 					_, _ = io.Copy(conn, conn)
 				}
 			}()
-			initial.cfg.Kernel.CustomRoute = []map[string]any{{"network": "tcp", "ip_cidr": []string{"127.0.0.1/32"}, "port": []int{origin.Addr().(*net.TCPAddr).Port}, "outbound": "direct"}}
 			if kernelName == "xray" {
-				initial.cfg.Kernel.CustomRoute = []map[string]any{{"type": "field", "network": "tcp", "ip": []string{"127.0.0.1/32"}, "port": strconv.Itoa(origin.Addr().(*net.TCPAddr).Port), "outboundTag": "direct"}}
 			}
 			svc := NewWithControlPlane(initial.cfg, plane)
 			plane.mu.Lock()
@@ -52,7 +48,7 @@ func TestSignedAuthorizationExpiryClosesActualTrafficBeforeBlockedReportPrepareR
 			done := make(chan error, 1)
 			go func() { done <- svc.Run(ctx) }()
 			authorityWaitListener(t, port)
-			raw, stream := liveProtocolDial(t, "vless", fmt.Sprintf("127.0.0.1:%d", port), liveProtocolUUID, M.ParseSocksaddr(origin.Addr().String()))
+			raw, stream := liveProtocolDial(t, "socks", fmt.Sprintf("127.0.0.1:%d", port), liveProtocolUUID, origin.Addr())
 			defer raw.Close()
 			defer stream.Close()
 			stream.SetDeadline(time.Now().Add(7 * time.Second))

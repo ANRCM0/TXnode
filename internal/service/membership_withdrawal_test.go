@@ -10,7 +10,6 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/nodesync"
 	"github.com/ANRCM0/TX-Node/internal/reporting"
-	M "github.com/sagernet/sing/common/metadata"
 	"io"
 	"net"
 	"os"
@@ -19,7 +18,7 @@ import (
 )
 
 func TestMembershipWithdrawalStopsActualProtocolAndDurablyCheckpointsFinalTail(t *testing.T) {
-	for _, kind := range []string{"vless", "vmess"} {
+	for _, kind := range []string{"socks"} {
 		t.Run(kind, func(t *testing.T) {
 			origin, e := net.Listen("tcp4", "127.0.0.1:0")
 			if e != nil {
@@ -41,14 +40,13 @@ func TestMembershipWithdrawalStopsActualProtocolAndDurablyCheckpointsFinalTail(t
 			p.bootstrap.Config.Protocol = kind
 			s := authorityService(t, p)
 			s.cfg.Panel.MachineID = 16
-			s.cfg.Kernel.CustomRoute = []map[string]any{{"network": "tcp", "ip_cidr": []string{"127.0.0.1/32"}, "port": []int{origin.Addr().(*net.TCPAddr).Port}, "outbound": "direct"}}
 			s = NewWithControlPlane(s.cfg, p)
 			ctx, cancel := context.WithCancelCause(context.Background())
 			defer cancel(nil)
 			done := make(chan error, 1)
 			go func() { done <- s.Run(ctx) }()
 			authorityWaitListener(t, port)
-			raw, client := liveProtocolDial(t, kind, fmt.Sprintf("127.0.0.1:%d", port), liveProtocolUUID, M.ParseSocksaddr(origin.Addr().String()))
+			raw, client := liveProtocolDial(t, "socks", fmt.Sprintf("127.0.0.1:%d", port), liveProtocolUUID, origin.Addr())
 			defer raw.Close()
 			defer client.Close()
 			client.SetDeadline(time.Now().Add(12 * time.Second))
@@ -176,7 +174,7 @@ func TestMembershipWithdrawalDirectApplicationHelpersCannotBypassStopCause(t *te
 	cancel(&controlerror.NodeMembershipWithdrawal{NodeID: 42, MachineID: 16})
 	k := &fakeKernel{}
 	s := snapshotTestService(k)
-	old := &model.NodeSpec{Protocol: "vless", ServerPort: 12345}
+	old := &model.NodeSpec{Protocol: "socks", ServerPort: 12345}
 	s.lastConfig = old
 	s.lastConfigHash = computeConfigHash(old)
 	s.updateUserState([]model.UserSpec{}, srcBootstrap)
@@ -186,7 +184,7 @@ func TestMembershipWithdrawalDirectApplicationHelpersCannotBypassStopCause(t *te
 	users := []model.UserSpec{{ID: 7, UUID: liveProtocolUUID}}
 	s.applyUserUpdate(ctx, users, computeUserHash(users), srcWSFull)
 	s.applyUserDelta(ctx, "add", users)
-	s.applySyncResult(ctx, nodesync.Result{Config: &model.NodeSpec{Protocol: "vless", ServerPort: 12346}, Users: users, UserHash: computeUserHash(users)})
+	s.applySyncResult(ctx, nodesync.Result{Config: &model.NodeSpec{Protocol: "socks", ServerPort: 12346}, Users: users, UserHash: computeUserHash(users)})
 	s.handleWSEvent(ctx, controlplane.Event{Type: controlplane.EventSyncUsers, Users: users})
 	s.applyDesiredState(ctx)
 	if k.startCalls != 0 || k.addCalls != 0 || k.updateCalls != 0 || s.users.Count() != 0 || s.lastConfig != old {

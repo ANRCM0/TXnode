@@ -96,11 +96,47 @@ type UDPOutbound interface {
 // core.Session (size 0x60): UserID, Dest, Conn, Packets, Local, Socket.
 type Session struct {
 	UserID  int
+	ConnID  uint64 // process-unique id, assigned by the server before relay
 	Dest    socks.Addr
 	Conn    net.Conn
 	Packets PacketStream // non-nil for UDP sessions
 	Local   netip.Addr   // node-side egress address, zero = unspecified
 	Socket  *net.TCPConn // bare socket for splice, may be nil
+}
+
+// ChunkDirection is the relay direction of one accounted chunk: upload is
+// client→remote, download is remote→client.
+type ChunkDirection int
+
+const (
+	DirUpload ChunkDirection = iota
+	DirDownload
+)
+
+// Chunk describes one chunk-accounted IO. N is the requested size on Begin and
+// the completed size on Complete. Path is "conn" for stream sessions and "udp"
+// for datagram sessions.
+type Chunk struct {
+	ConnID uint64
+	UserID int
+	Dir    ChunkDirection
+	Path   string
+	N      int64
+	Err    error
+}
+
+// ChunkHook is the per-chunk accounting hook used by usage_v2 and the local
+// event meter. Begin may refuse the chunk (quota exhausted, authorization
+// revoked); the token it returns is handed back to Complete. Close is called
+// once per session after its relay ends.
+//
+// Implementations run on the relay goroutines: Begin/Complete for one direction
+// are always paired and ordered, but different sessions and the two directions
+// of one session are concurrent.
+type ChunkHook interface {
+	Begin(Chunk) (token any, err error)
+	Complete(Chunk, any)
+	Close(Chunk)
 }
 
 // Handler is one inbound protocol as wired by node.buildHandler. Handle parses

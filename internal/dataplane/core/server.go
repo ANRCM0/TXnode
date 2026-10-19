@@ -61,6 +61,10 @@ type ServerOptions struct {
 	// OnAudit observes one routed session (audit reporter). target is the
 	// requested domain (may be empty), targetIP the dialled address.
 	OnAudit func(userID int, target, targetIP, sourceIP string)
+
+	// Hooks accounts every relay chunk (usage_v2 / local event store). When set,
+	// the splice fast path is disabled: admission must happen before the copy.
+	Hooks ChunkHook
 }
 
 type handlerBox struct{ h Handler }
@@ -88,6 +92,8 @@ type Server struct {
 
 	closeOnce sync.Once
 	closed    chan struct{}
+
+	connSeq atomic.Uint64
 }
 
 // ErrSessionRefused is returned by ServeSession when the tracker refuses the
@@ -363,6 +369,21 @@ func (s *Server) isClosed() bool {
 
 // track registers a connection so Close can tear it down (Server.track
 // @0x7af8c0).
+// CloseAllSessions closes every accepted connection without stopping the
+// listener. It is the authorization-expiry path: new sessions are refused by the
+// Admission gate, established ones lose their transport immediately.
+func (s *Server) CloseAllSessions() {
+	s.connsMu.Lock()
+	conns := make([]net.Conn, 0, len(s.conns))
+	for c := range s.conns {
+		conns = append(conns, c)
+	}
+	s.connsMu.Unlock()
+	for _, c := range conns {
+		_ = c.Close()
+	}
+}
+
 func (s *Server) track(c net.Conn) {
 	s.connsMu.Lock()
 	s.conns[c] = struct{}{}
@@ -542,6 +563,9 @@ func (s *Server) serve(o ServerOptions, conn net.Conn, src netip.Addr, local net
 		return
 	}
 	o.Guard.Succeeded(src)
+	if sess.ConnID == 0 {
+		sess.ConnID = s.connSeq.Add(1)
+	}
 	if sess.Conn == nil {
 		sess.Conn = conn
 	}

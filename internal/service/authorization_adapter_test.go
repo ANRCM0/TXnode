@@ -24,7 +24,6 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/panel"
 	"github.com/ANRCM0/TX-Node/internal/reporting"
-	M "github.com/sagernet/sing/common/metadata"
 )
 
 // This fixture exercises actual Service/kernel/spool boundaries. Only the
@@ -54,7 +53,7 @@ func signedAuthorityFixture(t *testing.T, kernelName string, lease int64) (*Serv
 	p.trust = authorization.Trust{ProtocolVersion: 1, CoreInstanceID: "core-service-auth-test", KeyID: "service-auth-test", KeyEpoch: "1", Algorithm: "Ed25519", PublicKey: base64.RawURLEncoding.EncodeToString(key.Public().(ed25519.PublicKey))}
 	s := authorityService(t, p.authorityTestPlane)
 	s.cfg.Panel.URL = "https://127.0.0.1:1"
-	s.cfg.Kernel.Type = kernelName
+	s.cfg.Kernel.Type = "txnode"
 	s.cfg.Node.PullInterval = 3600
 	s.cfg.Authorization = config.AuthorizationConfig{Enabled: true, StateDir: t.TempDir(), CoreInstanceID: p.trust.CoreInstanceID, KeyID: p.trust.KeyID, KeyEpoch: p.trust.KeyEpoch, PublicKey: p.trust.PublicKey, PolicyVersion: config.NativeAuthorizationPolicyVersion, RefreshInterval: 1, MaxClockSkew: 5}
 	s = NewWithControlPlane(s.cfg, p)
@@ -107,7 +106,7 @@ func (p *signedAuthorityPlane) RefreshAuthorization(context.Context) (controlpla
 }
 
 func TestSignedAuthorizationOfflineExpiryClosesStreamsAndReplaysOriginalTail(t *testing.T) {
-	for _, kernelName := range []string{"singbox", "xray"} {
+	for _, kernelName := range []string{"txnode"} {
 		t.Run(kernelName, func(t *testing.T) {
 			s, p, port := signedAuthorityFixture(t, kernelName, 3)
 			origin, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -122,9 +121,7 @@ func TestSignedAuthorizationOfflineExpiryClosesStreamsAndReplaysOriginalTail(t *
 					_, _ = io.Copy(conn, conn)
 				}
 			}()
-			s.cfg.Kernel.CustomRoute = []map[string]any{{"network": "tcp", "ip_cidr": []string{"127.0.0.1/32"}, "port": []int{origin.Addr().(*net.TCPAddr).Port}, "outbound": "direct"}}
 			if kernelName == "xray" {
-				s.cfg.Kernel.CustomRoute = []map[string]any{{"type": "field", "network": "tcp", "ip": []string{"127.0.0.1/32"}, "port": strconv.Itoa(origin.Addr().(*net.TCPAddr).Port), "outboundTag": "direct"}}
 			}
 			s = NewWithControlPlane(s.cfg, p)
 			p.reportErr = errors.New("offline report")
@@ -133,7 +130,7 @@ func TestSignedAuthorizationOfflineExpiryClosesStreamsAndReplaysOriginalTail(t *
 			done := make(chan error, 1)
 			go func() { done <- s.Run(ctx) }()
 			authorityWaitListener(t, port)
-			raw, client := liveProtocolDial(t, "vless", fmt.Sprintf("127.0.0.1:%d", port), liveProtocolUUID, M.ParseSocksaddr(origin.Addr().String()))
+			raw, client := liveProtocolDial(t, "socks", fmt.Sprintf("127.0.0.1:%d", port), liveProtocolUUID, origin.Addr())
 			defer raw.Close()
 			defer client.Close()
 			client.SetDeadline(time.Now().Add(8 * time.Second))
