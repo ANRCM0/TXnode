@@ -51,6 +51,7 @@ type RenderPayload struct {
 	ProviderInstanceEpoch string           `json:"provider_instance_epoch"`
 	RecipientPublicKey    string           `json:"recipient_public_key"`
 	FormatID              string           `json:"format_id"`
+	ClientVersion         string           `json:"client_version,omitempty"`
 	UserID                string           `json:"user_id"`
 	Subject               MetadataSubject  `json:"subject"`
 	CredentialSHA256      string           `json:"credential_sha256"`
@@ -148,7 +149,7 @@ func VerifyRenderGrant(envelope Envelope, trust Trust, now time.Time) (*RenderGr
 		p.PolicyVersion != RenderPolicyVersion || p.Audience != RenderAudience ||
 		p.CoreInstanceID != trust.CoreInstanceID || p.KeyID != trust.KeyID || p.KeyEpoch != trust.KeyEpoch ||
 		p.Subject.InstallationID != p.CoreInstanceID || !renderIDRE.MatchString(p.GrantID) ||
-		p.FormatID != RenderFormat || !PositiveDecimal(p.UserID) ||
+		!ValidRenderFormat(p.FormatID, p.ClientVersion) || !PositiveDecimal(p.UserID) ||
 		!digestRE.MatchString(p.CredentialSHA256) || p.CredentialExpiresAt < p.ExpiresAt ||
 		p.IssuedAt < 0 || p.NotBefore < 0 || p.NotBefore > p.IssuedAt || p.NotBefore < p.IssuedAt-30 ||
 		p.ExpiresAt <= p.IssuedAt || p.ExpiresAt-p.IssuedAt > 30 ||
@@ -164,7 +165,7 @@ func VerifyRenderGrant(envelope Envelope, trust Trust, now time.Time) (*RenderGr
 	var previous int64
 	for _, node := range p.Nodes {
 		id, err := strconv.ParseInt(node.NodeID, 10, 64)
-		if err != nil || id <= previous || !validNode(node, p.Subject.CredentialProfileID) {
+		if err != nil || id <= previous || !validNode(node, p.Subject.CredentialProfileID) || !CompatibleRenderNode(p.FormatID, node) {
 			return nil, refusal("RENDER_TARGET_INVALID")
 		}
 		previous = id

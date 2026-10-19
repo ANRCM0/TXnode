@@ -15,27 +15,40 @@ import (
 // NewRenderHandler belongs only on the separate public TLS listener. It exposes
 // no control or Node endpoint and requires the subscriber's private-key proof.
 func NewRenderHandler(store *Store, trust credentialdelivery.Trust) (http.Handler, error) {
+	return NewBrowserRenderHandler(store, trust, nil)
+}
+
+// NewBrowserRenderHandler permits only explicitly configured browser origins.
+// The same private-key authorization remains required for every actual request.
+func NewBrowserRenderHandler(store *Store, trust credentialdelivery.Trust, origins []string) (http.Handler, error) {
 	if store == nil || credentialdelivery.ValidateTrust(trust) != nil {
 		return nil, errors.New("RENDER_CONFIG_INVALID")
+	}
+	cors, err := newRenderCORS(origins)
+	if err != nil {
+		return nil, err
 	}
 	admission := make(chan struct{}, 32)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		if r.TLS == nil || r.TLS.Version != tls.VersionTLS13 {
+			writeDeliveryError(w, http.StatusForbidden, "TLS_REQUIRED")
+			return
+		}
+		if r.URL.Path != "/subscription-render" || r.URL.RawPath != "" || r.URL.RawQuery != "" || r.URL.ForceQuery {
+			writeDeliveryError(w, http.StatusNotFound, "ENDPOINT_NOT_FOUND")
+			return
+		}
+		if cors.handle(w, r) {
+			return
+		}
 		select {
 		case admission <- struct{}{}:
 			defer func() { <-admission }()
 		default:
 			writeDeliveryError(w, http.StatusServiceUnavailable, "REQUEST_CAPACITY_EXCEEDED")
-			return
-		}
-		if r.TLS == nil || r.TLS.Version != tls.VersionTLS13 {
-			writeDeliveryError(w, http.StatusForbidden, "TLS_REQUIRED")
-			return
-		}
-		if r.URL.Path != "/subscription-render" || r.URL.RawPath != "" || r.URL.RawQuery != "" {
-			writeDeliveryError(w, http.StatusNotFound, "ENDPOINT_NOT_FOUND")
 			return
 		}
 		if r.Method != http.MethodPost {
@@ -97,6 +110,24 @@ func NewRenderHandler(store *Store, trust credentialdelivery.Trust) (http.Handle
 			writeDeliveryError(w, http.StatusRequestTimeout, "REQUEST_EXPIRED")
 			return
 		}
-		writeDeliveryResponse(w, result, grant.Payload.ExpiresAt)
+		if grant.Payload.FormatID == credentialdelivery.RenderFormat {
+			writeDeliveryResponse(w, result, grant.Payload.ExpiresAt)
+			return
+		}
+		document, err := renderClientDocument(grant.Payload.FormatID, result.Connections)
+		if err != nil || len(document.body) > credentialdelivery.MaxMessageBytes {
+			writeDeliveryError(w, http.StatusConflict, "RENDER_FORMAT_UNAVAILABLE")
+			return
+		}
+		if r.Context().Err() != nil || grant.Payload.ExpiresAt <= time.Now().Unix() {
+			writeDeliveryError(w, http.StatusForbidden, "AUTHORIZATION_REJECTED")
+			return
+		}
+		w.Header().Set("Content-Type", document.contentType)
+		w.Header().Set("Content-Disposition", "attachment; filename=\""+document.filename+"\"")
+		w.Header().Set("X-TXBoard-Format", grant.Payload.FormatID)
+		w.Header().Set("X-TXBoard-Authorization-Digest", grant.Digest)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(document.body)
 	}), nil
 }

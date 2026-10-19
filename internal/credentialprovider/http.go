@@ -32,6 +32,7 @@ type Config struct {
 	SubscriptionListen     string
 	SubscriptionTLSCert    string
 	SubscriptionTLSKey     string
+	SubscriptionOrigins    []string
 }
 
 func fingerprintSet(values []string) (map[string]bool, error) {
@@ -174,6 +175,12 @@ func writeResponse(w http.ResponseWriter, status int, response Response) {
 // Run never logs request bodies, TLS errors, certificate paths or private state.
 // The optional ready callback receives only the bound listener address.
 func Run(ctx context.Context, config Config, ready func(net.Addr)) error {
+	if _, err := newRenderCORS(config.SubscriptionOrigins); err != nil {
+		return err
+	}
+	if len(config.SubscriptionOrigins) > 0 && config.SubscriptionListen == "" {
+		return errors.New("RENDER_CONFIG_INVALID")
+	}
 	if strings.TrimSpace(config.Listen) == "" {
 		return errors.New("LISTEN_CONFIG_INVALID")
 	}
@@ -227,7 +234,7 @@ func Run(ctx context.Context, config Config, ready func(net.Addr)) error {
 		if err != nil {
 			return err
 		}
-		renderHandler, err := NewRenderHandler(store, trust)
+		renderHandler, err := NewBrowserRenderHandler(store, trust, config.SubscriptionOrigins)
 		if err != nil {
 			return err
 		}

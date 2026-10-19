@@ -15,7 +15,7 @@ import (
 
 func main() {
 	var config credentialprovider.Config
-	var fingerprints, nodeFingerprints string
+	var fingerprints, nodeFingerprints, subscriptionOrigins string
 	flag.StringVar(&config.Listen, "listen", "127.0.0.1:9443", "Provider control listen address")
 	flag.StringVar(&config.StorePath, "store", "", "Absolute path to the private Provider store")
 	flag.StringVar(&config.ProviderID, "provider-id", "", "Fixed Provider ID")
@@ -29,12 +29,18 @@ func main() {
 	flag.StringVar(&config.SubscriptionListen, "subscription-listen", "", "Optional separate public subscriber TLS listen address")
 	flag.StringVar(&config.SubscriptionTLSCert, "subscription-tls-cert", "", "Public subscriber server certificate PEM")
 	flag.StringVar(&config.SubscriptionTLSKey, "subscription-tls-key", "", "Public subscriber server private key PEM")
+	flag.StringVar(&subscriptionOrigins, "subscription-origin", "", "Comma-separated canonical HTTPS browser origins for the public subscriber listener (maximum 16; disabled by default)")
 	flag.Parse()
 	if flag.NArg() != 0 {
 		fmt.Fprintln(os.Stderr, "INVALID_ARGUMENTS")
 		os.Exit(1)
 	}
 	config.ClientFingerprints = strings.Split(fingerprints, ",")
+	flag.Visit(func(option *flag.Flag) {
+		if option.Name == "subscription-origin" {
+			config.SubscriptionOrigins = strings.Split(subscriptionOrigins, ",")
+		}
+	})
 	if nodeFingerprints != "" {
 		config.NodeClientFingerprints = strings.Split(nodeFingerprints, ",")
 	}
