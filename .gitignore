@@ -41,3 +41,6 @@ cmd/xboard-node-bench
 /.compat/
 /artifacts/
 __pycache__/
+
+# Third-party interop clients (test tools only, never shipped)
+.clients/

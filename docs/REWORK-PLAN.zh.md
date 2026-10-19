@@ -15,8 +15,8 @@
 > 性能（本机回环，SOCKS5 上传，32 KiB 写）：splice 路径 **1504.85 MB/s**；
 > 启用 chunk 计量（usage_v2/本地事件，禁用 splice）**767.75 MB/s**。
 >
-> 未完成：第三方客户端互通（客户端**仅作测试工具**，不进入依赖或发布物；本机未安装），
-> 按 §6 的风险条目保留为发布前人工验证项。
+> 互通实测（Xray 26.3.27 / Mihomo v1.19.32，客户端仅作测试工具）：VLESS(tcp/ws)、
+> Trojan+TLS、Shadowsocks 通过；VMess、REALITY、Hysteria2 为已知缺口（见 `docs/INTEROP.md`）。
 > 依据：本仓 `HEAD`（`b0f6a06`）实测 + `/workspace/Node/kaze` 复刻工程（v0.5.18 行为级复刻）
 > + `kazecore/REPORT.md`。本文不含原始二进制、专有代码或密钥。
 
@@ -496,10 +496,11 @@ singbox 与 txnode 各自实现，service 不再 import 具体内核。
 | 协议 | 现网 sing-box | txnode（数据面） | 结论 |
 |---|---|---|---|
 | vmess / vless / trojan / shadowsocks / anytls / naive / socks / http / mieru | ✅ | ✅ | 对等 |
-| hysteria2 | ✅ | ✅（`hysteria` v2） | 对等（字节级互通见 R1） |
+| hysteria2 | ✅ | ✅（`hysteria` v2） | **Mihomo 互通未通过（HY2-1）** |
 | tuic | ✅ | ✅ | 对等（0-RTT 双方都没有/未验证） |
 | snell | ❌（sing-box 入站不支持） | ✅ | **能力新增**，需在能力矩阵标注 |
 | VLESS Encryption（客户端侧） | 部分 | 仅服务端自洽实现 | 互通未证（R1） |
+| VMess（AEAD） | ✅ | 自互通通过 | **Xray 互通失败（VMESS-1）** |
 
 ### 6.2 传输
 
@@ -578,8 +579,8 @@ tcp / tls / reality / ws / grpc / h2 / httpupgrade / xhttp / shadowtls / obfs-ht
 
 | # | 风险 | 证据 | 对策 |
 |---|---|---|---|
-| R1 | **第三方客户端互通未证**（测试用客户端，非依赖）：kaze 只做自互通；Hysteria2/Mieru/Snell 数据面是自洽实现；VLESS Encryption 无客户端侧 | `kaze/DESIGN-AND-GAPS.zh.md` §2.1/§2.4 | P4 强制互通测试；不通过则该协议保持「实验性」标注，不删除 sing-box 能力声明前先灰度 |
-| R2 | **REALITY 指纹差异**（mirror 不回放） | 同上 §2.1 | 灰度对比探测结果；必要时补字节回放 |
+| R1 | **互通实测结果**：VLESS(tcp/ws)、Trojan+TLS、SS 通过；**VMess / REALITY / Hysteria2 未通过**（详见 `docs/INTEROP.md`），VLESS Encryption 仍无客户端侧 | 本轮 Xray 26.3.27 / Mihomo v1.19.32 实测 | 三项缺口按 HY2→VMess→REALITY 顺序修；修复前对应协议标「实验性」，不得宣称全互通 |
+| R2 | **REALITY 互通失败**：Xray 客户端报 `the hello does not authenticate`，服务端回落到借用站点；同时 mirror 不回放字节 | `docs/INTEROP.md`；`kaze/DESIGN-AND-GAPS.zh.md` §2.1 | 先对齐 sessionID/HKDF/nonce（REALITY-1），再补 mirror 字节回放 |
 | R3 | **usage_v2 语义**：区间计量要求 per-IO 准入，数据面需关 splice | 本仓 `native_usage_adapter.go:24`；`core/pipe.go` splice 路径 | P3 单独立项；原生模式与普通模式分开压测 |
 | R4 | **依赖版本**：TX-Node 已对齐 quic-go 0.63/utls 1.8.3；后续升级需双向验证 | `go.mod` | 锁版本 + CI 双跑 |
 | R5 | **linkname 类冲突**：sing-box 的 `v2rayhttp.ResetTransport` 已因 x/net 升级失效 | 本次实测编译错误 | 删除 `internal/deps/sing-box` 是根治；不要试图用 `-checklinkname=0` 掩盖 |
@@ -611,7 +612,7 @@ tcp / tls / reality / ws / grpc / h2 / httpupgrade / xhttp / shadowtls / obfs-ht
 2. `go build ./... && go vet ./... && make test` 全绿；`go test -race ./...` 无报告；
 3. `kernel.type: txnode` 起节点：面板用户同步、流量上报、限速、设备上限、Reload、授权到期全部生效；
 4. `bench-ab`：普通模式吞吐/CPU 不劣于旧内核 5%；usage_v2 模式单独基线；
-5. 12 协议 × 传输子集 e2e 通过；第三方客户端互通清单（VLESS/VMess/Trojan/SS）逐项签字；
+5. 12 协议 × 传输子集 e2e 通过；互通清单按 `docs/INTEROP.md` 执行：VLESS/Trojan/SS 已通过，VMess/REALITY/Hysteria2 修复前不算通过；
 6. `core.v1.json` 若发生能力变化，必须有显式评审记录（不允许静默降级）。
 
 ---
