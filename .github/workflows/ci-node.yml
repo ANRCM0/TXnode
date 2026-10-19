@@ -91,26 +91,16 @@ jobs:
             exit 1
           fi
           go mod verify
-      - name: Enforce ANRCM0-owned pinned kernel dependencies
+      - name: Enforce the native data plane and the absence of legacy kernels
         run: |
           set -euo pipefail
-          grep -Eq '^replace github.com/xtls/xray-core => github.com/ANRCM0/Xray-core v' go.mod
-          if grep -E 'github.com/PaiMonCai/(sing-box|Xray-core)' go.mod go.sum; then
-            echo "Old-account kernel fork dependency has reappeared" >&2
+          if grep -REn 'sagernet/sing-box|sagernet/sing-vmess|xtls/xray-core|internal/deps/(sing-box|sing-vmess)' cmd internal go.mod go.sum; then
+            echo "Legacy kernel dependency has reappeared" >&2
             exit 1
           fi
-          grep -Eq '^github.com/ANRCM0/Xray-core v[^ ]+ h1:' go.sum
-          if grep -Fxq 'replace github.com/sagernet/sing-box => ./internal/deps/sing-box' go.mod; then
-            grep -Fq 'github.com/ANRCM0/sing-box` commit' internal/deps/sing-box/TXNODE-PATCH.md
-            grep -Fq '20260917154452-6184aa2cd055' internal/deps/sing-box/TXNODE-PATCH.md
-            grep -Fq 'AdmitRoutedConnection' internal/deps/sing-box/route/route.go
-          else
-            grep -Eq '^replace github.com/sagernet/sing-box => github.com/ANRCM0/sing-box v' go.mod
-            grep -Eq '^github.com/ANRCM0/sing-box v[^ ]+ h1:' go.sum
-          fi
-          grep -Fxq 'replace github.com/sagernet/sing-vmess => ./internal/deps/sing-vmess' go.mod
-          grep -Fq '3aed155119a1' internal/deps/sing-vmess/TXNODE-PATCH.md
-          test -s internal/deps/sing-vmess/LICENSE
+          test -d internal/kernel/txnode
+          test -d internal/dataplane/core
+          grep -Fq "kernel.type must be 'txnode'" internal/config/config.go
           go mod tidy -diff
       - name: Validate retained Node version and any release notes
         run: |

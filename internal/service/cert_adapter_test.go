@@ -27,8 +27,8 @@ func (b *serviceCertBackend) Reconfigure(_ context.Context, cfg config.CertConfi
 	return b.changed, b.reconfigureErr
 }
 func (b *serviceCertBackend) TLSCert() kernel.TLSCert { return kernel.TLSCert{} }
-func (b *serviceCertBackend) HasCert() bool            { return b.hasCert }
-func (b *serviceCertBackend) CertRenewed() bool        { return false }
+func (b *serviceCertBackend) HasCert() bool           { return b.hasCert }
+func (b *serviceCertBackend) CertRenewed() bool       { return false }
 
 func TestApplyRemoteOverridesDelegatesModernCertConfig(t *testing.T) {
 	k := &fakeKernel{}

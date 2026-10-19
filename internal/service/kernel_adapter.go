@@ -52,6 +52,13 @@ func (s *Service) startKernel(config *model.NodeSpec, users []model.UserSpec) bo
 		previousPeriods = s.tracker.BindPeriods(users)
 	}
 	s.observeBoundary("KERNEL_START_BEGIN", true)
+	if s.geo != nil {
+		if err := s.geo.PrepareTxnode(s.cfg.Kernel, config); err != nil {
+			// Geo assets are optional: rules that need them log a lookup failure
+			// and the node keeps serving with the rules it could compile.
+			nlog.Core().Warn("geo data unavailable", "error", err)
+		}
+	}
 	if err := s.kernelLife.Start(config, users, s.certs.TLSCert()); err != nil {
 		if !s.nativeUsageMode() && s.tracker != nil {
 			s.tracker.RestorePeriodBindings(previousPeriods)

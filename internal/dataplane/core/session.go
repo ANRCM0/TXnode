@@ -30,6 +30,15 @@ func (s *Server) ServeSession(ctx context.Context, sess *Session) error {
 	if sess == nil {
 		return errors.New("session refused: nil session")
 	}
+	if o := s.snapshot(); o.Admission != nil && !o.Admission() {
+		if sess.Conn != nil {
+			_ = sess.Conn.Close()
+		}
+		if sess.Packets != nil {
+			_ = sess.Packets.Close()
+		}
+		return errors.New("session refused: admission closed")
+	}
 	if sess.Conn == nil && sess.Packets == nil {
 		return errors.New("session refused: no transport")
 	}

@@ -4,7 +4,8 @@ Independent Go data plane and Credential Provider for TXBoard. Source history wa
 extracted from TXBoard's `node/` directory at Core revision `ca25f21`.
 The existing Go module namespace `github.com/ANRCM0/TX-Node` is retained.
 
-`cmd/tx-node` runs the Node runtime with embedded sing-box or Xray kernels.
+`cmd/tx-node` runs the Node runtime with the native `txnode` data plane
+(`internal/dataplane`); the sing-box and Xray kernels were removed.
 `cmd/credential-provider` owns private credential storage and authorized delivery.
 They remain separate processes and authorities even though they share this module.
 Core owns identity, entitlement and settlement; Node consumes versioned protocols.

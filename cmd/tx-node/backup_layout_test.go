@@ -11,7 +11,7 @@ import (
 )
 
 func layoutConfig() *config.RootConfig {
-	return &config.RootConfig{Config: config.Config{Panel: config.PanelConfig{Provider: "txboard", URL: "https://core.example", NodeID: 42, Token: "DO_NOT_EMIT_BEARER"}, Kernel: config.KernelConfig{Type: "singbox", ConfigDir: "/etc/txnode/runtime", GeoDataDir: "/etc/txnode/runtime"}, Cert: config.CertConfig{CertDir: "/etc/txnode/runtime/certs", KeyContent: "DO_NOT_EMIT_PRIVATE_KEY"}, Log: config.LogConfig{Output: "stdout"}, Authorization: config.AuthorizationConfig{Enabled: true, StateDir: "/etc/txnode/authorization", CoreInstanceID: "core-instance-1", PolicyVersion: config.NativeAuthorizationPolicyVersion, KeyID: "native", KeyEpoch: "1", PublicKey: "public-pin"}}}
+	return &config.RootConfig{Config: config.Config{Panel: config.PanelConfig{Provider: "txboard", URL: "https://core.example", NodeID: 42, Token: "DO_NOT_EMIT_BEARER"}, Kernel: config.KernelConfig{Type: "txnode", ConfigDir: "/etc/txnode/runtime", GeoDataDir: "/etc/txnode/runtime"}, Cert: config.CertConfig{CertDir: "/etc/txnode/runtime/certs", KeyContent: "DO_NOT_EMIT_PRIVATE_KEY"}, Log: config.LogConfig{Output: "stdout"}, Authorization: config.AuthorizationConfig{Enabled: true, StateDir: "/etc/txnode/authorization", CoreInstanceID: "core-instance-1", PolicyVersion: config.NativeAuthorizationPolicyVersion, KeyID: "native", KeyEpoch: "1", PublicKey: "public-pin"}}}
 }
 func TestBackupLayoutExcludesSecretsAndUsesExactRuntimePaths(t *testing.T) {
 	root := layoutConfig()
@@ -78,7 +78,7 @@ func TestBackupLayoutLoadedConfigurationNeverCreatesRuntimeState(t *testing.T) {
   token: DO_NOT_EMIT
   node_id: 42
 kernel:
-  type: singbox
+  type: txnode
   config_dir: /etc/txnode/read-only-probe-missing
 cert:
   cert_mode: none

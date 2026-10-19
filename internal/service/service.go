@@ -18,9 +18,8 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/config"
 	"github.com/ANRCM0/TX-Node/internal/controlerror"
 	"github.com/ANRCM0/TX-Node/internal/controlplane"
+	"github.com/ANRCM0/TX-Node/internal/geoassets"
 	"github.com/ANRCM0/TX-Node/internal/kernel"
-	"github.com/ANRCM0/TX-Node/internal/kernel/singbox"
-	"github.com/ANRCM0/TX-Node/internal/kernel/xray"
 	"github.com/ANRCM0/TX-Node/internal/kernellifecycle"
 	"github.com/ANRCM0/TX-Node/internal/limiter"
 	"github.com/ANRCM0/TX-Node/internal/model"
@@ -41,6 +40,7 @@ type Service struct {
 	sink         controlplane.Sink
 	kernel       kernel.Kernel
 	kernelLife   *kernellifecycle.Controller
+	geo          *geoassets.Coordinator
 	tracker      *tracker.Tracker
 	limiter      *limiter.Limiter
 	speedTracker *limiter.SpeedTracker
@@ -120,16 +120,7 @@ func NewWithControlPlane(cfg *config.Config, cp controlplane.ControlPlane) *Serv
 }
 
 func newService(cfg *config.Config, cp controlplane.ControlPlane) *Service {
-	var k kernel.Kernel
-	switch cfg.Kernel.Type {
-	case "singbox":
-		k = singbox.New(cfg.Kernel)
-	case "xray":
-		k = xray.New(cfg.Kernel)
-	default:
-		nlog.Core().Warn("unsupported kernel type, defaulting to sing-box", "type", cfg.Kernel.Type)
-		k = singbox.New(cfg.Kernel)
-	}
+	k := newKernel(cfg)
 
 	l := limiter.New()
 	st := limiter.NewSpeedTracker(l)
@@ -160,6 +151,7 @@ func newService(cfg *config.Config, cp controlplane.ControlPlane) *Service {
 		sink:              cp,
 		kernel:            k,
 		kernelLife:        kernellifecycle.New(k),
+		geo:               geoassets.New(),
 		tracker:           tracker.New(),
 		limiter:           l,
 		speedTracker:      st,

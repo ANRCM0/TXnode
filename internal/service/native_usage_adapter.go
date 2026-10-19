@@ -13,7 +13,6 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/authorization"
 	"github.com/ANRCM0/TX-Node/internal/config"
 	"github.com/ANRCM0/TX-Node/internal/controlplane"
-	"github.com/ANRCM0/TX-Node/internal/kernel/singbox"
 	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/usageinterval"
 	"github.com/ANRCM0/TX-Node/internal/usagev2"
@@ -21,15 +20,19 @@ import (
 
 var errNativeUsage = errors.New("NATIVE_USAGE_SESSION_STOPPED")
 
+// nativeUsageKernel is the kernel half of usage_v2: it builds a meter over the
+// collector and admits per-IO charges through it. Defined structurally so the
+// service never imports a kernel implementation.
 type nativeUsageKernel interface {
-	SetNativeUsageTracker(*singbox.ConnTracker) bool
+	NewNativeMeter(*usageinterval.NativeCollector, map[string]int) (usageinterval.Meter, bool)
+	SetNativeUsageTracker(usageinterval.Meter) bool
 }
 
 type nativeUsageRuntime struct {
 	store           *usageinterval.NativeStore
 	spool           *usagev2.Spool
 	reporter        *usagev2.Reporter
-	active          atomic.Pointer[singbox.ConnTracker]
+	active          atomic.Value // usageinterval.Meter
 	collector       atomic.Pointer[usageinterval.NativeCollector]
 	failure         chan error
 	stop            sync.Once
@@ -135,7 +138,16 @@ func (s *Service) installNativeCollector(ctx context.Context, snapshot *authoriz
 		case <-timer.C:
 		}
 	}
-	tracker := singbox.NewNativeUsageTracker(collector, users)
+	nk, ok := s.kernel.(nativeUsageKernel)
+	if !ok {
+		collector.Fail()
+		return errNativeUsage
+	}
+	meter, ok := nk.NewNativeMeter(collector, users)
+	if !ok || meter == nil {
+		collector.Fail()
+		return errNativeUsage
+	}
 	s.nativeUsage.admissionMu.Lock()
 	defer s.nativeUsage.admissionMu.Unlock()
 	if blocked := s.nativeUsage.blockedRevision; blocked != "" &&
@@ -144,18 +156,18 @@ func (s *Service) installNativeCollector(ctx context.Context, snapshot *authoriz
 		collector.Fail()
 		return errNativeUsage
 	}
-	if !tracker.EnableEnforcingBounded() || !s.kernel.(nativeUsageKernel).SetNativeUsageTracker(tracker) {
+	if !meter.EnableEnforcingBounded() || !nk.SetNativeUsageTracker(meter) {
 		collector.Fail()
 		return errNativeUsage
 	}
 	s.nativeUsage.collector.Store(collector)
-	s.nativeUsage.active.Store(tracker)
+	s.nativeUsage.active.Store(meter)
 	s.nativeUsage.session = *snapshot.Payload.UsageV2
 	s.nativeUsage.session.Grants = append([]usagev2.Grant{}, snapshot.Payload.UsageV2.Grants...)
 	s.nativeUsage.revision = snapshot.Payload.Revision
 	s.nativeUsage.refreshNeeded.Store(false)
 	if s.nativeUsage.failed.Load() {
-		tracker.StopBoundedUsageTraffic()
+		meter.StopBoundedUsageTraffic()
 		return errNativeUsage
 	}
 	return nil
@@ -192,8 +204,8 @@ func (s *Service) quarantineNativeUsage(record usagev2.Record) {
 	// requesting replacement authority; unrelated history cannot stop a new grant.
 	runtime.blockedRevision = runtime.revision
 	runtime.refreshNeeded.Store(true)
-	if tracker := runtime.active.Load(); tracker != nil {
-		tracker.StopBoundedUsageTraffic()
+	if meter, ok := runtime.active.Load().(usageinterval.Meter); ok && meter != nil {
+		meter.StopBoundedUsageTraffic()
 	}
 	select {
 	case runtime.refresh <- struct{}{}:
@@ -205,8 +217,8 @@ func (s *Service) stopNativeUsageIO() {
 	if !s.nativeUsageMode() {
 		return
 	}
-	if tracker := s.nativeUsage.active.Load(); tracker != nil {
-		tracker.StopBoundedUsageTraffic()
+	if meter, ok := s.nativeUsage.active.Load().(usageinterval.Meter); ok && meter != nil {
+		meter.StopBoundedUsageTraffic()
 	}
 }
 

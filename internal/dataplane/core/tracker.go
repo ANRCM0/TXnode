@@ -14,14 +14,17 @@ import (
 // userState is the per-user accounting record (core.userState, size 0x88).
 type userState struct {
 	User
-	up        atomic.Int64
-	down      atomic.Int64
-	upLim     atomic.Pointer[Limiter]
-	downLim   atomic.Pointer[Limiter]
-	mu        sync.Mutex
-	ips       map[string]*ipState
-	conns     map[io.Closer]struct{}
-	others    int
+	up      atomic.Int64
+	down    atomic.Int64
+	upLim   atomic.Pointer[Limiter]
+	downLim atomic.Pointer[Limiter]
+	mu      sync.Mutex
+	ips     map[string]*ipState
+	conns   map[io.Closer]struct{}
+	others  int
+	// manual marks a bucket set by SetUserLimit; applySpeedLocked must not
+	// overwrite it when the user table is refreshed from the panel.
+	manual    bool
 	slowUntil time.Time
 }
 
@@ -46,6 +49,7 @@ type Tracker struct {
 	totalSessions     atomic.Int64
 	deviceRefusals    atomic.Int64
 	activeSince       map[int]time.Time
+	deviceGate        DeviceGate
 }
 
 // DynamicLimit mirrors core.DynamicLimit (size 0x40).
@@ -199,6 +203,9 @@ func (t *Tracker) speedFor(u *userState) int {
 
 func (t *Tracker) applySpeedLocked() {
 	for _, u := range t.users {
+		if u.manual {
+			continue
+		}
 		r := mbpsToBytes(t.speedFor(u))
 		up := u.upLim.Load()
 		if up == nil {
@@ -232,6 +239,83 @@ func (t *Tracker) Limiters(userID int) (up, down *Limiter) {
 	up, down = u.upLim.Load(), u.downLim.Load()
 	t.mu.Unlock()
 	return up, down
+}
+
+// SetUserLimit installs one user's byte/s ceilings and token ceiling. This is
+// the TX-Node path: limiter.SpeedTracker is the authority for rate and burst,
+// so the tracker must not derive them from the panel Mbps field (SpeedLimit).
+// rate <= 0 removes the limit; burst <= 0 keeps the sample's 0.25*rate.
+func (t *Tracker) SetUserLimit(userID int, upBps, downBps, burst int64) {
+	t.mu.Lock()
+	u := t.users[userID]
+	if u == nil {
+		t.mu.Unlock()
+		return
+	}
+	u.manual = true
+	up := u.upLim.Load()
+	down := u.downLim.Load()
+	if up == nil {
+		up = NewLimiter(0)
+		u.upLim.Store(up)
+	}
+	if down == nil {
+		down = NewLimiter(0)
+		u.downLim.Store(down)
+	}
+	t.mu.Unlock()
+	up.SetRate(upBps)
+	up.SetBurst(burst)
+	down.SetRate(downBps)
+	down.SetBurst(burst)
+}
+
+// SetUserDeviceLimit updates one user's concurrent-device ceiling.
+func (t *Tracker) SetUserDeviceLimit(userID, n int) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if u := t.users[userID]; u != nil {
+		u.DeviceLimit = n
+	}
+}
+
+// DeviceGate replaces the built-in device check. TX-Node implements the panel
+// merge (local addresses + the panel's global device set) here; the implementation
+// must not call back into the Tracker.
+type DeviceGate interface {
+	// Allow reports whether src may open another session for userID. local maps
+	// the locally live device keys to their connection counts.
+	Allow(userID int, src netip.Addr, local map[string]int) bool
+}
+
+// SetDeviceGate installs the optional device gate. nil restores the built-in
+// per-user/global device limit.
+func (t *Tracker) SetDeviceGate(g DeviceGate) {
+	t.mu.Lock()
+	t.deviceGate = g
+	t.mu.Unlock()
+}
+
+// CloseUserConns closes every tracked session of one user and reports how many
+// were closed. It is the kernel.RemoveUsers path (a removed user must lose its
+// live sessions immediately, as the sing-box runtime did).
+func (t *Tracker) CloseUserConns(userID int) int {
+	t.mu.RLock()
+	u := t.users[userID]
+	t.mu.RUnlock()
+	if u == nil {
+		return 0
+	}
+	u.mu.Lock()
+	closers := make([]io.Closer, 0, len(u.conns))
+	for c := range u.conns {
+		closers = append(closers, c)
+	}
+	u.mu.Unlock()
+	for _, c := range closers {
+		_ = c.Close()
+	}
+	return len(closers)
 }
 
 // Lease is a granted session slot. Release returns the connection and device
@@ -270,7 +354,16 @@ func (t *Tracker) Acquire(userID int, src netip.Addr, closer io.Closer) (*Lease,
 	if u.DeviceLimit > 0 && (limit == 0 || u.DeviceLimit < limit) {
 		limit = u.DeviceLimit
 	}
-	if limit > 0 && st.conns == 0 && len(u.ips) >= limit {
+	if t.deviceGate != nil {
+		local := make(map[string]int, len(u.ips))
+		for k, state := range u.ips {
+			local[k] = state.conns
+		}
+		if !t.deviceGate.Allow(userID, src, local) {
+			t.deviceRefusals.Add(1)
+			return nil, false
+		}
+	} else if limit > 0 && st.conns == 0 && len(u.ips) >= limit {
 		t.deviceRefusals.Add(1)
 		return nil, false
 	}

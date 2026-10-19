@@ -19,6 +19,23 @@ func OutboundSupportMatrix() map[string]KernelOutboundSupport {
 				"proxy_tag",
 			},
 		},
+		"txnode": {
+			Protocols: []string{
+				"vmess",
+				"vless",
+				"trojan",
+				"shadowsocks",
+				"socks",
+				"http",
+				"wireguard",
+			},
+			Features: []string{
+				"tag",
+				"protocol",
+				"settings",
+				"proxy_tag",
+			},
+		},
 		"singbox": {
 			Protocols: []string{
 				"vmess",

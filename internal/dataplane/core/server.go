@@ -55,6 +55,12 @@ type ServerOptions struct {
 
 	NodeID    int
 	OnTraffic func(userID int, up, down int64) // 计数回调；可空
+
+	// Admission gates new sessions (authorization expiry / drain). nil admits.
+	Admission func() bool
+	// OnAudit observes one routed session (audit reporter). target is the
+	// requested domain (may be empty), targetIP the dialled address.
+	OnAudit func(userID int, target, targetIP, sourceIP string)
 }
 
 type handlerBox struct{ h Handler }
@@ -414,6 +420,13 @@ func (s *Server) handle(c net.Conn) {
 		return
 	}
 	defer fresh.Done()
+
+	// 3b. admission (authorization expiry / draining)
+	if o.Admission != nil && !o.Admission() {
+		log.Debug("session refused: admission closed", "from", clientIP(c).String())
+		abortConn(c)
+		return
+	}
 
 	// 4. handshake deadline
 	hsDeadline := time.Now().Add(o.HandshakeTimeout)

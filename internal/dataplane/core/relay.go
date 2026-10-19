@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -149,6 +150,18 @@ func (s *Server) relayTCP(ctx context.Context, sess *Session) error {
 
 	log.Debug("tcp", "user", user, "from", from.String(), "dest", dest.String(), "proto", proto)
 
+	if o.OnAudit != nil {
+		targetIP := ""
+		if ip, err := netip.ParseAddr(dest.Host); err == nil {
+			targetIP = ip.String()
+		}
+		fromStr := ""
+		if from.IsValid() {
+			fromStr = from.String()
+		}
+		o.OnAudit(user, domain, targetIP, fromStr)
+	}
+
 	// Accounting: OnTraffic when the node supplied one, else the Tracker.
 	count := func(up bool) func(int64) {
 		return func(n int64) {
@@ -273,16 +286,19 @@ func (s *Server) relayUDP(ctx context.Context, sess *Session) error {
 	}
 	log.Debug("udp", "user", user, "from", fromStr)
 
+	upLims, downLims := s.limiters(o, user)
 	u := &udpRelay{
-		srv:    s,
-		ctx:    ctx,
-		sess:   sess,
-		log:    log,
-		user:   user,
-		from:   fromStr,
-		router: s.Router(),
-		opts:   o,
-		assocs: make(map[socks.Addr]*udpAssoc),
+		srv:      s,
+		ctx:      ctx,
+		sess:     sess,
+		log:      log,
+		user:     user,
+		from:     fromStr,
+		router:   s.Router(),
+		opts:     o,
+		upLims:   upLims,
+		downLims: downLims,
+		assocs:   make(map[socks.Addr]*udpAssoc),
 	}
 	defer u.close()
 	u.StartWatchdog()
@@ -369,6 +385,13 @@ func (u *udpRelay) forward(payload []byte, dest socks.Addr) {
 			a = &udpAssoc{dest: dest, conn: conn}
 		}
 		a.last.Store(time.Now().UnixNano())
+		if u.opts.OnAudit != nil {
+			targetIP := ""
+			if ip, err := netip.ParseAddr(dest.Host); err == nil {
+				targetIP = ip.String()
+			}
+			u.opts.OnAudit(u.user, dest.Host, targetIP, u.from)
+		}
 		u.mu.Lock()
 		if u.closed {
 			u.mu.Unlock()
@@ -381,6 +404,11 @@ func (u *udpRelay) forward(payload []byte, dest socks.Addr) {
 	}
 
 	a.last.Store(time.Now().UnixNano())
+	if len(u.upLims) > 0 {
+		if err := waiterSet(u.upLims).Wait(u.ctx, int64(len(payload))); err != nil {
+			return
+		}
+	}
 	if err := a.Write(payload); err != nil {
 		u.log.Debug("udp through outbound failed; dropping until it can be retried",
 			"dest", dest.String(), "err", err)
@@ -408,15 +436,17 @@ func (a *udpAssoc) Close() error {
 }
 
 type udpRelay struct {
-	srv     *Server
-	ctx     context.Context
-	sess    *Session
-	log     *slog.Logger
-	user    int
-	from    string
-	router  *Router
-	opts    ServerOptions
-	writeMu sync.Mutex
+	srv      *Server
+	ctx      context.Context
+	sess     *Session
+	log      *slog.Logger
+	user     int
+	from     string
+	router   *Router
+	opts     ServerOptions
+	upLims   []waiter
+	downLims []waiter
+	writeMu  sync.Mutex
 
 	mu     sync.Mutex
 	assocs map[socks.Addr]*udpAssoc
@@ -458,6 +488,12 @@ func (u *udpRelay) readBack(a *udpAssoc) {
 			continue
 		}
 		a.last.Store(time.Now().UnixNano())
+		if len(u.downLims) > 0 {
+			if err := waiterSet(u.downLims).Wait(u.ctx, int64(n)); err != nil {
+				u.remove(a.dest, a)
+				return
+			}
+		}
 		u.writeMu.Lock()
 		if !u.isClosed() {
 			_ = u.sess.Packets.WritePacket(buf[:n], addr)

@@ -11,7 +11,7 @@ func TestNativeUsageRequiresV2SignedAuthorityAndKeepsMachineChildIdentity(t *tes
 	root := t.TempDir()
 	key := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
 	base := Config{Panel: PanelConfig{Provider: "txboard", URL: "https://core.example.test", NodeID: 42},
-		Kernel:  KernelConfig{Type: "singbox", ConfigDir: root},
+		Kernel:  KernelConfig{Type: "txnode", ConfigDir: root},
 		UsageV2: UsageV2Config{Enabled: true, Directory: filepath.Join(root, "usage")},
 		Authorization: AuthorizationConfig{Enabled: true, PolicyVersion: NativeProviderUsagePolicyVersion,
 			CoreInstanceID: "1b32d316-8cb8-4b46-8d49-e281c28d5169", KeyID: "native-usage", KeyEpoch: "1",
@@ -24,7 +24,7 @@ func TestNativeUsageRequiresV2SignedAuthorityAndKeepsMachineChildIdentity(t *tes
 	if err := base.ValidateUsageV2(); err != nil {
 		t.Fatal(err)
 	}
-	for _, mode := range []string{"v1", "no_usage", "no_authority", "xray", "observer", "http"} {
+	for _, mode := range []string{"v1", "no_usage", "no_authority", "kernel", "observer", "http"} {
 		t.Run(mode, func(t *testing.T) {
 			cfg := base
 			switch mode {
@@ -34,8 +34,8 @@ func TestNativeUsageRequiresV2SignedAuthorityAndKeepsMachineChildIdentity(t *tes
 				cfg.UsageV2.Enabled = false
 			case "no_authority":
 				cfg.Authorization.Enabled = false
-			case "xray":
-				cfg.Kernel.Type = "xray"
+			case "kernel":
+				cfg.Kernel.Type = "other"
 			case "observer":
 				cfg.UsageObserver.Enabled = true
 			case "http":

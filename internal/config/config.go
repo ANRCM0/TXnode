@@ -19,14 +19,15 @@ import (
 )
 
 type Config struct {
-	InstanceID string        `yaml:"-"`
-	Panel      PanelConfig   `yaml:"panel"`
-	Node       NodeConfig    `yaml:"node"`
-	Kernel     KernelConfig  `yaml:"kernel"`
-	Cert       CertConfig    `yaml:"cert"`
-	Log        LogConfig     `yaml:"log"`
-	Runtime    RuntimeConfig `yaml:"runtime"`
-	WS         WSConfig      `yaml:"ws"`
+	InstanceID string          `yaml:"-"`
+	Panel      PanelConfig     `yaml:"panel"`
+	Node       NodeConfig      `yaml:"node"`
+	Kernel     KernelConfig    `yaml:"kernel"`
+	Dataplane  DataplaneConfig `yaml:"dataplane"`
+	Cert       CertConfig      `yaml:"cert"`
+	Log        LogConfig       `yaml:"log"`
+	Runtime    RuntimeConfig   `yaml:"runtime"`
+	WS         WSConfig        `yaml:"ws"`
 	// Standalone enables a local-only node that never contacts the panel.
 	Standalone *StandaloneConfig `yaml:"standalone,omitempty"`
 	// HealthPort enables a lightweight HTTP health-check endpoint on the
@@ -46,13 +47,14 @@ type Config struct {
 	Machine *MachineConfig `yaml:"machine,omitempty"`
 
 	// Audit (optional) uses the provider-selected Xboard plugin adapter or
-	// TXBoard native Bearer node/v1 audit transport. It attaches only to sing-box.
+	// TXBoard native Bearer node/v1 audit transport. It attaches through the
+	// native kernel's SetAuditor hook.
 	// Disabled by default; omit this section to disable the reporter.
 	Audit AuditConfig `yaml:"audit,omitempty"`
 	// UsageObserver is local evidence collection only. Explicit per-instance
 	// opt-in; never inherited implicitly or used to activate a billing protocol.
 	UsageObserver UsageObserverConfig `yaml:"usage_observer,omitempty"`
-	// UsageEventStore is default-off local sing-box evidence. One supported
+	// UsageEventStore is default-off local per-connection evidence. One supported
 	// Service per process owns its consumer; no billing protocol is activated.
 	UsageEventStore UsageEventStoreConfig `yaml:"usage_event_store,omitempty"`
 	UsageV2         UsageV2Config         `yaml:"usage_v2,omitempty"`
@@ -148,30 +150,54 @@ type WSConfig struct {
 }
 
 type KernelConfig struct {
-	Type      string `yaml:"type"` // "singbox" or "xray"
+	Type      string `yaml:"type"` // "txnode"
 	ConfigDir string `yaml:"config_dir"`
 	LogLevel  string `yaml:"log_level"`
 
-	// GeoDataDir is the directory that contains GeoIP/GeoSite database files.
-	// For sing-box: geoip.db and geosite.db (geoip2-format).
-	// For xray:     geoip.dat and geosite.dat.
-	// Defaults to config_dir when empty. You only need to set this if your
-	// geo database files live somewhere other than config_dir.
+	// GeoDataDir is the directory that contains v2ray geoip.dat / geosite.dat.
+	// Defaults to config_dir when empty. You only need to set this if the geo
+	// database files live somewhere other than config_dir.
 	GeoDataDir string `yaml:"geo_data_dir"`
 
-	// CustomOutbound adds outbound entries to the generated kernel config.
-	// Each item is a raw kernel-native outbound object (sing-box or xray format).
+	// CustomOutbound / CustomRoute / CustomConfig were kernel-native
+	// (sing-box / Xray) escape hatches. The txnode kernel has no such objects:
+	// structure your rules through the panel's custom_outbounds / routes, or
+	// use the dataplane section. Leaving any of these set is a configuration
+	// error so nothing is silently ignored.
 	CustomOutbound []map[string]any `yaml:"custom_outbound"`
+	CustomRoute    []map[string]any `yaml:"custom_route"`
+	CustomConfig   string           `yaml:"custom_config"`
+}
 
-	// CustomRoute adds route rules to the generated kernel config.
-	// Each item is a raw kernel-native route rule object.
-	CustomRoute []map[string]any `yaml:"custom_route"`
+// DataplaneConfig is the behaviour surface of the native kernel: proxy protocol,
+// timeouts, admission limits and the brute-force brake. Defaults preserve the
+// historical node behaviour (no private-address blocking, unlimited connections,
+// brake off).
+type DataplaneConfig struct {
+	TrustedProxies       string `yaml:"trusted_proxies"` // "private,cloudflare" when empty
+	ProxyProtocol        bool   `yaml:"proxy_protocol"`
+	RequireProxyProtocol bool   `yaml:"require_proxy_protocol"`
+	AutoOutIP            bool   `yaml:"auto_out_ip"`
+	StrictALPN           bool   `yaml:"strict_alpn"`
 
-	// CustomConfig is the path to a kernel-native config file (JSON or YAML)
-	// that is deep-merged into the auto-generated config. This enables full
-	// customization of dns, outbounds, endpoints, route, experimental, etc.
-	// Compatible with V2bX OriginalPath format.
-	CustomConfig string `yaml:"custom_config"`
+	MaxFresh         int `yaml:"max_fresh"`         // unauthenticated connections, default 4096
+	HandshakeTimeout int `yaml:"handshake_timeout"` // seconds, default 10
+	TCPTimeout       int `yaml:"tcp_timeout"`       // seconds, default 300
+	UDPTimeout       int `yaml:"udp_timeout"`       // seconds, default 60
+	DrainTimeout     int `yaml:"drain_timeout"`     // seconds, default 5
+
+	ForbiddenPrivateIP  bool   `yaml:"forbidden_private_ip"`
+	ForbiddenBitTorrent bool   `yaml:"forbidden_bittorrent"`
+	ForbiddenPorts      string `yaml:"forbidden_ports"`
+
+	UserTCPLimit     int `yaml:"user_tcp_limit"` // per-user concurrent connections, 0 = unlimited
+	DeviceLimit      int `yaml:"device_limit"`   // node-wide device ceiling, 0 = unlimited
+	DeviceIPv6Prefix int `yaml:"device_ipv6_prefix"`
+
+	InvalidAccessEnable        bool `yaml:"invalid_access_enable"`
+	InvalidAccessCount         int  `yaml:"invalid_access_count"`
+	InvalidAccessDuration      int  `yaml:"invalid_access_duration"`
+	InvalidAccessForbiddenTime int  `yaml:"invalid_access_forbidden_time"`
 }
 
 // AuditConfig controls the optional embedded access-audit reporter for the
@@ -624,7 +650,37 @@ func (c *Config) inheritFrom(parent *Config) {
 
 func (c *Config) setDefaultsFrom(baseDir string) {
 	if c.Kernel.Type == "" {
-		c.Kernel.Type = "singbox"
+		c.Kernel.Type = "txnode"
+	}
+	if c.Dataplane.MaxFresh == 0 {
+		c.Dataplane.MaxFresh = 4096
+	}
+	if c.Dataplane.HandshakeTimeout == 0 {
+		c.Dataplane.HandshakeTimeout = 10
+	}
+	if c.Dataplane.TCPTimeout == 0 {
+		c.Dataplane.TCPTimeout = 300
+	}
+	if c.Dataplane.UDPTimeout == 0 {
+		c.Dataplane.UDPTimeout = 60
+	}
+	if c.Dataplane.DrainTimeout == 0 {
+		c.Dataplane.DrainTimeout = 5
+	}
+	if c.Dataplane.DeviceIPv6Prefix == 0 {
+		c.Dataplane.DeviceIPv6Prefix = 64
+	}
+	if c.Dataplane.InvalidAccessCount == 0 {
+		c.Dataplane.InvalidAccessCount = 30
+	}
+	if c.Dataplane.InvalidAccessDuration == 0 {
+		c.Dataplane.InvalidAccessDuration = 60
+	}
+	if c.Dataplane.InvalidAccessForbiddenTime == 0 {
+		c.Dataplane.InvalidAccessForbiddenTime = 600
+	}
+	if c.Dataplane.TrustedProxies == "" {
+		c.Dataplane.TrustedProxies = "private,cloudflare"
 	}
 	if c.Kernel.ConfigDir == "" {
 		c.Kernel.ConfigDir = baseDir
@@ -798,10 +854,11 @@ func (c *Config) validate() error {
 			}
 		}
 	}
-	switch c.Kernel.Type {
-	case "singbox", "xray":
-	default:
-		return fmt.Errorf("kernel.type must be 'singbox' or 'xray', got '%s'", c.Kernel.Type)
+	if c.Kernel.Type != "txnode" {
+		return fmt.Errorf("kernel.type must be 'txnode', got '%s'", c.Kernel.Type)
+	}
+	if len(c.Kernel.CustomOutbound) > 0 || len(c.Kernel.CustomRoute) > 0 || c.Kernel.CustomConfig != "" {
+		return fmt.Errorf("kernel.custom_outbound/custom_route/custom_config were removed with the sing-box/Xray kernels; use the panel's structured routes/outbounds instead")
 	}
 	if c.Cert.AutoTLS && c.Cert.Domain == "" {
 		return fmt.Errorf("cert.domain is required when cert.auto_tls is enabled")

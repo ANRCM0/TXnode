@@ -2,7 +2,6 @@ package geoassets
 
 import (
 	"errors"
-	"os"
 	"testing"
 
 	"github.com/ANRCM0/TX-Node/internal/config"
@@ -10,95 +9,61 @@ import (
 )
 
 type fakeBackend struct {
-	calls        int
-	dir          string
-	needGeoIP    bool
-	needGeoSite  bool
-	kernelType   string
-	err          error
+	called   bool
+	dir      string
+	needIP   bool
+	needSite bool
+	err      error
 }
 
-func (f *fakeBackend) Ensure(dir string, needGeoIP, needGeoSite bool, kernelType string) error {
-	f.calls++
-	f.dir = dir
-	f.needGeoIP = needGeoIP
-	f.needGeoSite = needGeoSite
-	f.kernelType = kernelType
+func (f *fakeBackend) Ensure(dir string, needGeoIP, needGeoSite bool) error {
+	f.called, f.dir, f.needIP, f.needSite = true, dir, needGeoIP, needGeoSite
 	return f.err
 }
 
-func TestPrepareXraySkipsWhenRoutesDoNotNeedGeoAssets(t *testing.T) {
+func TestPrepareTxnodeSkipsWhenRoutesDoNotNeedGeoAssets(t *testing.T) {
 	backend := &fakeBackend{}
-	coordinator := NewWithBackend(backend)
-
-	t.Setenv("XRAY_LOCATION_ASSET", "unchanged")
-	err := coordinator.PrepareXray(
-		config.KernelConfig{GeoDataDir: "/geo"},
-		&model.NodeSpec{Routes: []model.RouteRule{{Match: []string{"example.com"}}}},
-	)
-	if err != nil {
-		t.Fatalf("PrepareXray: %v", err)
+	c := NewWithBackend(backend)
+	spec := &model.NodeSpec{Routes: []model.RouteRule{{Match: []string{"example.com"}}}}
+	if err := c.PrepareTxnode(config.KernelConfig{GeoDataDir: "/tmp/geo"}, spec); err != nil {
+		t.Fatal(err)
 	}
-	if backend.calls != 0 {
-		t.Fatalf("backend calls = %d, want 0", backend.calls)
-	}
-	if got := os.Getenv("XRAY_LOCATION_ASSET"); got != "unchanged" {
-		t.Fatalf("asset env unexpectedly changed: %q", got)
+	if backend.called {
+		t.Fatal("backend called without geo terms")
 	}
 }
 
-func TestPrepareXrayDelegatesGeoIPAndSetsCompatibilityEnv(t *testing.T) {
+func TestPrepareTxnodeRequestsBothDatabases(t *testing.T) {
 	backend := &fakeBackend{}
-	coordinator := NewWithBackend(backend)
-	t.Setenv("XRAY_LOCATION_ASSET", "")
-
-	err := coordinator.PrepareXray(
-		config.KernelConfig{GeoDataDir: "/var/lib/tx-node/geo"},
-		&model.NodeSpec{Routes: []model.RouteRule{{Match: []string{"geoip:cn"}}}},
-	)
-	if err != nil {
-		t.Fatalf("PrepareXray: %v", err)
+	c := NewWithBackend(backend)
+	spec := &model.NodeSpec{Routes: []model.RouteRule{{Match: []string{"geosite:cn", "geoip:cn"}}}}
+	if err := c.PrepareTxnode(config.KernelConfig{GeoDataDir: "/var/lib/tx-node/geo"}, spec); err != nil {
+		t.Fatal(err)
 	}
-	if backend.calls != 1 || !backend.needGeoIP || backend.needGeoSite {
-		t.Fatalf("unexpected backend request: %#v", backend)
-	}
-	if backend.dir != "/var/lib/tx-node/geo" || backend.kernelType != "xray" {
-		t.Fatalf("unexpected backend target: %#v", backend)
-	}
-	if got := os.Getenv("XRAY_LOCATION_ASSET"); got != "/var/lib/tx-node/geo" {
-		t.Fatalf("XRAY_LOCATION_ASSET = %q", got)
+	if !backend.called || backend.dir != "/var/lib/tx-node/geo" || !backend.needIP || !backend.needSite {
+		t.Fatalf("backend call: %+v", backend)
 	}
 }
 
-func TestPrepareXrayDelegatesGeoSite(t *testing.T) {
+func TestPrepareTxnodeSeesStructuredRoutes(t *testing.T) {
 	backend := &fakeBackend{}
-	coordinator := NewWithBackend(backend)
-
-	err := coordinator.PrepareXray(
-		config.KernelConfig{GeoDataDir: "/geo"},
-		&model.NodeSpec{Routes: []model.RouteRule{{Match: []string{"geosite:google"}}}},
-	)
-	if err != nil {
-		t.Fatalf("PrepareXray: %v", err)
+	c := NewWithBackend(backend)
+	spec := &model.NodeSpec{CustomRouteRules: []model.CustomRouteRule{{
+		Match: model.RouteMatch{IPCIDRs: []string{"geoip:private"}},
+	}}}
+	if err := c.PrepareTxnode(config.KernelConfig{GeoDataDir: "/geo"}, spec); err != nil {
+		t.Fatal(err)
 	}
-	if backend.calls != 1 || backend.needGeoIP || !backend.needGeoSite {
-		t.Fatalf("unexpected backend request: %#v", backend)
+	if !backend.needIP || backend.needSite {
+		t.Fatalf("needIP=%v needSite=%v", backend.needIP, backend.needSite)
 	}
 }
 
-func TestPrepareXrayPreservesEnvWhenBackendFails(t *testing.T) {
+func TestPrepareTxnodeReturnsBackendError(t *testing.T) {
 	backend := &fakeBackend{err: errors.New("download failed")}
-	coordinator := NewWithBackend(backend)
-	t.Setenv("XRAY_LOCATION_ASSET", "")
-
-	err := coordinator.PrepareXray(
-		config.KernelConfig{GeoDataDir: "/geo"},
-		&model.NodeSpec{Routes: []model.RouteRule{{Match: []string{"geoip:private"}}}},
-	)
-	if err == nil || err.Error() != "download failed" {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got := os.Getenv("XRAY_LOCATION_ASSET"); got != "/geo" {
-		t.Fatalf("compatibility env was not preserved after backend error: %q", got)
+	c := NewWithBackend(backend)
+	spec := &model.NodeSpec{Routes: []model.RouteRule{{Match: []string{"geoip:cn"}}}}
+	if err := c.PrepareTxnode(config.KernelConfig{GeoDataDir: "/geo"}, spec); err == nil {
+		t.Fatal("backend error swallowed")
 	}
 }

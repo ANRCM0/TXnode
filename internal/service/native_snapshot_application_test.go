@@ -21,7 +21,7 @@ import (
 
 func snapshotTestService(k *fakeKernel) *Service {
 	s := newTestService(k)
-	s.cfg = &config.Config{Panel: config.PanelConfig{Provider: "txboard"}, Kernel: config.KernelConfig{Type: "singbox"}}
+	s.cfg = &config.Config{Panel: config.PanelConfig{Provider: "txboard"}, Kernel: config.KernelConfig{Type: "txnode"}}
 	return s
 }
 func TestIdenticalDesiredConfigRetriesAfterReloadAndStartFailure(t *testing.T) {

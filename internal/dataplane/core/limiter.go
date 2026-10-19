@@ -12,6 +12,7 @@ import (
 type Limiter struct {
 	mu     sync.Mutex
 	rate   float64 // bytes per second
+	burst  float64 // token ceiling; 0 = the sample's 0.25*rate
 	tokens float64
 	last   time.Time
 }
@@ -25,6 +26,36 @@ func NewLimiter(rate int64) *Limiter {
 	return l
 }
 
+// SetBurst overrides the token ceiling. The sample uses 0.25*rate; TX-Node's
+// panel semantics use clamp(rate, 64 KiB, 4*rate), so the relay owner can set
+// it explicitly. n <= 0 restores the sample default.
+func (l *Limiter) SetBurst(n int64) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if n <= 0 {
+		l.burst = 0
+	} else {
+		l.burst = float64(n)
+	}
+	if cap := l.ceilingLocked(); l.tokens > cap {
+		l.tokens = cap
+	}
+}
+
+// Burst reports the effective token ceiling.
+func (l *Limiter) Burst() int64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return int64(l.ceilingLocked())
+}
+
+func (l *Limiter) ceilingLocked() float64 {
+	if l.burst > 0 {
+		return l.burst
+	}
+	return 0.25 * l.rate
+}
+
 // SetRate updates the rate; zero disables limiting. Existing burst is clamped
 // to the new 0.25*rate ceiling exactly as reserve() does.
 func (l *Limiter) SetRate(rate int64) {
@@ -35,7 +66,7 @@ func (l *Limiter) SetRate(rate int64) {
 		l.tokens = 0
 		return
 	}
-	cap := 0.25 * l.rate
+	cap := l.ceilingLocked()
 	if l.tokens > cap {
 		l.tokens = cap
 	}
@@ -65,7 +96,7 @@ func (l *Limiter) Reserve(n int64) time.Duration {
 		}
 	}
 	l.last = now
-	cap := 0.25 * l.rate
+	cap := l.ceilingLocked()
 	if l.tokens > cap {
 		l.tokens = cap
 	}
@@ -94,11 +125,14 @@ func (l *Limiter) Wait(ctx context.Context, n int64) error {
 	}
 }
 
-// mbpsToBytes converts the panel's Mbps figure to bytes/s, matching
-// core.mbpsToBytes (1024-based, 1/8).
+// mbpsToBytes converts the panel's Mbps figure to bytes/s.
+//
+// The sample used 1024-based MiB (mbps*1024*1024/8). TX-Node's panel figure and
+// its limiter.SpeedTracker are decimal (mbps*1_000_000/8), so the native kernel
+// keeps the panel semantics: 100 Mbps is 12,500,000 B/s, not 13,107,200 B/s.
 func mbpsToBytes(mbps int) int64 {
 	if mbps <= 0 {
 		return 0
 	}
-	return int64(mbps) * 1024 * 1024 / 8
+	return int64(mbps) * 1_000_000 / 8
 }

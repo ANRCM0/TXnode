@@ -33,17 +33,18 @@ func (t TLSCert) HasCert() bool {
 	return len(t.CertPEM) > 0 && len(t.KeyPEM) > 0
 }
 
-// Kernel is the interface for proxy kernel backends (sing-box, xray, etc.).
+// Kernel is the interface for proxy kernel backends. TX-Node ships one
+// implementation: the native txnode data plane (internal/kernel/txnode).
 //
 // The interface is split into lifecycle, user management, and observability
 // groups. User operations (AddUsers/RemoveUsers) are designed to be atomic
 // and non-disruptive — they MUST NOT restart listeners or drop existing
 // connections. Only Start and Reload may (re)bind ports.
 //
-// Implementors: singbox.SingBox, xray.Xray
+// Implementor: txnode.Kernel
 type Kernel interface {
 	// ─── Identity ───────────────────────────────────────────────────────
-	// Name returns the kernel identifier (e.g. "sing-box", "xray").
+	// Name returns the kernel identifier ("txnode").
 	Name() string
 	// Protocols returns the protocol names this kernel supports.
 	Protocols() []string

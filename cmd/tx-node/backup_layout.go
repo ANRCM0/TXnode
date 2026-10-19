@@ -79,7 +79,7 @@ func makeBackupLayout(root *config.RootConfig) (*backupLayout, error) {
 			nodes = []*config.Config{instance}
 		}
 		for _, cfg := range nodes {
-			if cfg.Kernel.Type != "singbox" && cfg.Kernel.Type != "xray" {
+			if cfg.Kernel.Type != "txnode" {
 				return nil, errors.New("NODE_BACKUP_LAYOUT_UNSUPPORTED")
 			}
 			if len(cfg.Kernel.CustomOutbound) > 0 || len(cfg.Kernel.CustomRoute) > 0 || cfg.Kernel.CustomConfig != "" {

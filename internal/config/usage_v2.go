@@ -19,7 +19,7 @@ func (c *Config) ValidateUsageV2() error {
 	}
 	u, err := url.Parse(c.Panel.URL)
 	if c.Authorization.Enabled && c.Authorization.PolicyVersion == NativeProviderUsagePolicyVersion {
-		if c.Panel.Provider != "txboard" || c.Kernel.Type != "singbox" || c.IsStandalone() || c.Panel.NodeID <= 0 && !c.IsMachineMode() && len(c.Nodes) == 0 ||
+		if c.Panel.Provider != "txboard" || c.Kernel.Type != "txnode" || c.IsStandalone() || c.Panel.NodeID <= 0 && !c.IsMachineMode() && len(c.Nodes) == 0 ||
 			c.UsageObserver.Enabled || c.UsageEventStore.Enabled || !filepath.IsAbs(c.Kernel.ConfigDir) || !filepath.IsAbs(c.UsageV2.Directory) ||
 			err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Path != "" && u.Path != "/" ||
 			c.UsageV2.CAFile != "" && !filepath.IsAbs(c.UsageV2.CAFile) {

@@ -18,12 +18,12 @@ func TestValidateCustomOutbounds(t *testing.T) {
 				{Tag: "warp", Protocol: "wireguard", Settings: map[string]any{"server": "1.1.1.1", "server_port": 2408, "private_key": "pk"}},
 				{Tag: "proxy", Protocol: "socks", ProxyTag: "warp", Settings: map[string]any{"server": "2.2.2.2", "server_port": 1080}},
 			},
-			kernel: "singbox",
+			kernel: "txnode",
 		},
 		{
 			name:      "valid native vmess settings preserved",
 			outbounds: []OutboundConfig{{Tag: "vmess-native", Protocol: "vmess", Settings: map[string]any{"vnext": []any{map[string]any{"address": "1.1.1.1", "port": 443}}}}},
-			kernel:    "xray",
+			kernel:    "txnode",
 		},
 		{
 			name:      "missing tag",
@@ -60,8 +60,8 @@ func TestValidateCustomOutbounds(t *testing.T) {
 		{
 			name:      "unsupported protocol for kernel",
 			outbounds: []OutboundConfig{{Tag: "hy2", Protocol: "hysteria2", Settings: map[string]any{"server": "2.2.2.2", "server_port": 8443}}},
-			kernel:    "xray",
-			wantErr:   `custom_outbounds[0].protocol "hysteria2" is not supported by kernel "xray"`,
+			kernel:    "txnode",
+			wantErr:   `custom_outbounds[0].protocol "hysteria2" is not supported by kernel "txnode"`,
 		},
 		{
 			name:      "missing settings",

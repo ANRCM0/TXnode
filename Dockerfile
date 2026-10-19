@@ -8,8 +8,6 @@ RUN apk add --no-cache git
 WORKDIR /build
 
 COPY go.mod go.sum ./
-COPY internal/deps/sing-box ./internal/deps/sing-box
-COPY internal/deps/sing-vmess ./internal/deps/sing-vmess
 RUN go mod download
 
 COPY . .
@@ -24,10 +22,9 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags "-s -w
     -X github.com/ANRCM0/TX-Node/internal/buildinfo.Version=${VERSION} \
     -X github.com/ANRCM0/TX-Node/internal/buildinfo.BuildTime=${BUILD_TIME} \
     -X github.com/ANRCM0/TX-Node/internal/buildinfo.Commit=${COMMIT}" \
-    -tags "with_quic with_utls with_wireguard with_clash_api" \
     -o tx-node ./cmd/tx-node
 
-# Runtime stage — sing-box & xray-core are embedded as Go libraries
+# Runtime stage — the native txnode data plane is compiled in
 FROM alpine:3.20
 
 ARG VERSION=dev
@@ -65,7 +62,7 @@ WORKDIR /etc/txnode
 #   apiKey   / API_KEY     → server token
 #   nodeID   / NODE_ID     → node ID
 #   nodeType / NODE_TYPE   → node type (optional)
-#   kernel   / KERNEL_TYPE → singbox (default) or xray
+#   kernel   / KERNEL_TYPE → txnode (only supported value)
 #   domain   / DOMAIN      → TLS domain (enables auto_tls)
 #   certFile / CERT_FILE   → TLS cert path
 #   keyFile  / KEY_FILE    → TLS key path
