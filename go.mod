@@ -156,7 +156,8 @@ require (
 	gvisor.dev/gvisor v0.0.0-20260122175437-89a5d21be8f0 // indirect
 )
 
-// TX-Node's kernel forks are pinned by commit under the canonical ANRCM0 account.
-// Retain the required Mieru and Xray per-user bandwidth patches.
+// github.com/sagernet/bbolt is the BoltDB fork used by the credential provider's
+// encrypted store. It is a storage library, not a proxy kernel: no sing-box or
+// Xray code is linked into the node.
 
 // Preserve the pinned protocol while publishing immutable authentication indexes.

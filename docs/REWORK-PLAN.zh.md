@@ -15,7 +15,7 @@
 > 性能（本机回环，SOCKS5 上传，32 KiB 写）：splice 路径 **1504.85 MB/s**；
 > 启用 chunk 计量（usage_v2/本地事件，禁用 splice）**767.75 MB/s**。
 >
-> 未完成：第三方客户端互通需要外部客户端（本机未安装 Xray/mihomo/v2rayN/sing-box），
+> 未完成：第三方客户端互通（客户端**仅作测试工具**，不进入依赖或发布物；本机未安装），
 > 按 §6 的风险条目保留为发布前人工验证项。
 > 依据：本仓 `HEAD`（`b0f6a06`）实测 + `/workspace/Node/kaze` 复刻工程（v0.5.18 行为级复刻）
 > + `kazecore/REPORT.md`。本文不含原始二进制、专有代码或密钥。
@@ -568,7 +568,7 @@ tcp / tls / reality / ws / grpc / h2 / httpupgrade / xhttp / shadowtls / obfs-ht
   `reality_mirror_test.go`、`transport_test.go`、`fakepanel/`；
 - TX-Node 侧 e2e：假面板 + `kernel.type=txnode` 全链路（拉配置 → 监听 → 上报 → 用户同步 → Reload）；
 - `-race`、30 分钟 soak、1000 并发（kaze 未做的部分，纳入本阶段）；
-- 第三方客户端互通（Xray/mihomo/v2rayN/sing-box，VLESS/VMess/Trojan/SS 优先）；
+- 第三方客户端互通（Xray/mihomo/v2rayN 等**仅作测试客户端**，不进入依赖；VLESS/VMess/Trojan/SS 优先）；
 - `scripts/bench-ab.sh` 移植：txnode vs 旧 sing-box 快照镜像，吞吐/CPU 不劣于基线 5%；
 - 文档：`README`、`config.yml.example`、能力矩阵、迁移说明。
 
@@ -578,7 +578,7 @@ tcp / tls / reality / ws / grpc / h2 / httpupgrade / xhttp / shadowtls / obfs-ht
 
 | # | 风险 | 证据 | 对策 |
 |---|---|---|---|
-| R1 | **第三方客户端互通未证**：kaze 只做自互通；Hysteria2/Mieru/Snell 数据面是自洽实现；VLESS Encryption 无客户端侧 | `kaze/DESIGN-AND-GAPS.zh.md` §2.1/§2.4 | P4 强制互通测试；不通过则该协议保持「实验性」标注，不删除 sing-box 能力声明前先灰度 |
+| R1 | **第三方客户端互通未证**（测试用客户端，非依赖）：kaze 只做自互通；Hysteria2/Mieru/Snell 数据面是自洽实现；VLESS Encryption 无客户端侧 | `kaze/DESIGN-AND-GAPS.zh.md` §2.1/§2.4 | P4 强制互通测试；不通过则该协议保持「实验性」标注，不删除 sing-box 能力声明前先灰度 |
 | R2 | **REALITY 指纹差异**（mirror 不回放） | 同上 §2.1 | 灰度对比探测结果；必要时补字节回放 |
 | R3 | **usage_v2 语义**：区间计量要求 per-IO 准入，数据面需关 splice | 本仓 `native_usage_adapter.go:24`；`core/pipe.go` splice 路径 | P3 单独立项；原生模式与普通模式分开压测 |
 | R4 | **依赖版本**：TX-Node 已对齐 quic-go 0.63/utls 1.8.3；后续升级需双向验证 | `go.mod` | 锁版本 + CI 双跑 |

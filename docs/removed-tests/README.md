@@ -1,7 +1,8 @@
 # 已挂起的旧内核测试
 
 这些测试直接依赖已删除的 sing-box / Xray 实现（`*singbox.ConnTracker`、
-`sing-box` 的 `buf`/`adapter` 包装器、`sing-vmess` 客户端夹具）。P3 完成后，其中
+`sing-box` 的 `buf`/`adapter` 包装器、`sing-vmess` 客户端夹具）。
+其中 `sing-vmess` 只是**测试客户端**，从未进入运行时依赖或发布产物。P3 完成后，其中
 大部分已按原生内核重建并恢复；本目录只保留**仍无法脱离 sing-box 内部类型**的部分。
 
 ## 已恢复（原生 txnode 重建）
