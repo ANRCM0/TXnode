@@ -16,7 +16,7 @@
 > 启用 chunk 计量（usage_v2/本地事件，禁用 splice）**767.75 MB/s**。
 >
 > 互通实测（Xray 26.3.27 / Mihomo v1.19.32，客户端仅作测试工具）：VLESS(tcp/ws)、
-> Trojan+TLS、Shadowsocks 通过；VMess、REALITY、Hysteria2 为已知缺口（见 `docs/INTEROP.md`）。
+> Trojan+TLS、Shadowsocks、REALITY（Xray/Mihomo）通过；VMess、Hysteria2 为已知缺口（见 `docs/INTEROP.md`）。
 > 依据：本仓 `HEAD`（`b0f6a06`）实测 + `/workspace/Node/kaze` 复刻工程（v0.5.18 行为级复刻）
 > + `kazecore/REPORT.md`。本文不含原始二进制、专有代码或密钥。
 
@@ -580,7 +580,7 @@ tcp / tls / reality / ws / grpc / h2 / httpupgrade / xhttp / shadowtls / obfs-ht
 | # | 风险 | 证据 | 对策 |
 |---|---|---|---|
 | R1 | **互通实测结果**：VLESS(tcp/ws)、Trojan+TLS、SS 通过；**VMess / REALITY / Hysteria2 未通过**（详见 `docs/INTEROP.md`），VLESS Encryption 仍无客户端侧 | 本轮 Xray 26.3.27 / Mihomo v1.19.32 实测 | 三项缺口按 HY2→VMess→REALITY 顺序修；修复前对应协议标「实验性」，不得宣称全互通 |
-| R2 | **REALITY 鉴权已修复、握手收尾未完成**：HKDF/nonce/AAD/布局/keyshare/证书 HMAC 已按参考实现对齐并改用 `xtls/reality` TLS 栈，服务端确认鉴权通过；客户端仍在 Certificate 后中断 | `docs/INTEROP.md` | 抓客户端 alert/key log 定位收尾失败；mirror 字节回放仍待补 |
+| R2 | **REALITY 已互通**：鉴权与证书按 `xtls/reality` 对齐并改用参考 TLS 栈，Xray/Mihomo 均通过；限制是借用站点握手记录需 ≤8 KiB，首次握手等待 post-handshake 学习（≤8 s） | `docs/INTEROP.md` | 保留参考栈依赖；mirror 字节回放仍待补 |
 | R3 | **usage_v2 语义**：区间计量要求 per-IO 准入，数据面需关 splice | 本仓 `native_usage_adapter.go:24`；`core/pipe.go` splice 路径 | P3 单独立项；原生模式与普通模式分开压测 |
 | R4 | **依赖版本**：TX-Node 已对齐 quic-go 0.63/utls 1.8.3；后续升级需双向验证 | `go.mod` | 锁版本 + CI 双跑 |
 | R5 | **linkname 类冲突**：sing-box 的 `v2rayhttp.ResetTransport` 已因 x/net 升级失效 | 本次实测编译错误 | 删除 `internal/deps/sing-box` 是根治；不要试图用 `-checklinkname=0` 掩盖 |

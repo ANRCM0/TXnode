@@ -38,16 +38,16 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 | Trojan + TLS（自签，证书 pinning） | Xray | ✅ 通过 | `TestInteropXrayTrojanTLS`；Xray 26 已移除 `allowInsecure` |
 | Shadowsocks（aes-128-gcm） | Xray | ✅ 通过 | `TestInteropXrayShadowsocks` |
 | VMess（AEAD） | Xray | ⚠️ 已知缺口 | 服务端 `identify()` 失败：`vmess: unknown user or clock out of sync`；Xray↔Xray 同配置可通 |
-| VLESS + REALITY | Xray / Mihomo | 🟡 鉴权已修复，握手未完成 | 已对齐 HKDF(salt=random[:20])、nonce=random[20:]、AAD=零化 sessionID 的 ClientHello、version/time/shortId 布局、优先纯 X25519 keyshare，并改用 `xtls/reality` 参考 TLS 栈；服务端日志确认鉴权通过（`hs.c.conn == conn: true`），但客户端在 Certificate 之后中断，待抓 alert |
+| VLESS + REALITY | Xray / Mihomo | ✅ 通过 | 鉴权线格式已按参考实现对齐（HKDF salt=random[:20]、GCM nonce=random[20:]、AAD=零化 sessionID 的 ClientHello、version/time/shortId 布局、优先纯 X25519），TLS 终止改用 `xtls/reality` 参考栈。注意：借用站点的握手记录需 ≤8 KiB（参考实现的 8 KiB 捕获窗口），默认用例改用 `www.cloudflare.com`；首次握手会等后台 post-handshake 记录学习完成（最长 8 s，之后为 0） |
 | Hysteria2 | Mihomo | ⚠️ 已知缺口 | SOCKS 请求被接受后关闭，服务端没有任何 QUIC 会话日志；握手未到达服务端 |
 
 ## 已知缺口的下一步
 
 1. **VMess（VMESS-1）**：用 `dyn/` 抓 Xray 首包，逐字段比对 authID（AES-ECB 解出的
    时间戳/CRC）、KDF 标签与 AEAD 长度块；当前实现只在自互通下通过。
-2. **REALITY（REALITY-1，进行中）**：sessionID 布局、HKDF salt、GCM nonce、AAD 与
-   shortId 位置已按 `xtls/reality` 对齐，鉴权阶段通过；剩余问题是 Certificate 之后的
-   握手完成，下一步用客户端 key log/alert 定位（服务端已切换到参考 TLS 栈）。
+2. **REALITY（REALITY-1，已修复）**：sessionID 布局、HKDF salt、GCM nonce、AAD、
+   shortId 位置与证书 HMAC 已按 `xtls/reality` 对齐，TLS 终止切换为参考栈；Xray 与
+   Mihomo 两个客户端均通过。剩余注意点只有借用站点的 8 KiB 握手记录上限。
 3. **Hysteria2（HY2-1）**：在服务端 UDP socket 上加包计数/握手日志，确认是 QUIC/TLS
    （ALPN、证书、`h3`）还是 auth HTTP/3 流的问题；kaze 报告只到函数级证据。
 

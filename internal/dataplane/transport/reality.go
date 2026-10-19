@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -90,8 +91,9 @@ type Reality struct {
 	cache     *replayCache
 	cert      tls.Certificate
 	tlsConfig *tls.Config
-	ref       *xreality.Config
-	log       *slog.Logger
+	ref        *xreality.Config
+	detectOnce sync.Once
+	log        *slog.Logger
 	dial      func(ctx context.Context, network, addr string) (net.Conn, error)
 	probe     bool
 }
@@ -198,11 +200,44 @@ func NewReality(cfg RealityConfig) (*Reality, error) {
 	}
 	// Xray starts this learner once per listener; it records the post-handshake
 	// record lengths for the ALPN/SNI pair so the reference handshake can finish.
+	// The reference server blocks its per-connection handshake until the entry
+	// exists, so wait (bounded) for the learner instead of letting the first
+	// client pay a 5 s retry cycle.
 	go xreality.DetectPostHandshakeRecordsLens(r.ref)
 	if r.probe {
 		go r.probeDest()
 	}
 	return r, nil
+}
+
+// waitPostHandshakeDetection waits until every (dest, SNI, ALPN) key learned by
+// DetectPostHandshakeRecordsLens has a length list, or the deadline passes.
+func waitPostHandshakeDetection(cfg *xreality.Config, timeout time.Duration) {
+	deadline := time.Now().Add(timeout)
+	for {
+		done := true
+		for sni := range cfg.ServerNames {
+			for alpn := 0; alpn < 3; alpn++ {
+				key := cfg.Dest + " " + sni + " " + strconv.Itoa(alpn)
+				v, ok := xreality.GlobalPostHandshakeRecordsLens.Load(key)
+				if !ok {
+					done = false
+					break
+				}
+				if _, isBool := v.(bool); isBool {
+					done = false
+					break
+				}
+			}
+			if !done {
+				break
+			}
+		}
+		if done || time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 // PublicKey returns the X25519 public key (base64url) the clients need.
@@ -284,6 +319,10 @@ func (c *realityConn) handshake() error {
 	// AuthKey, validate the session id, terminate TLS 1.3 with the HMAC-signed
 	// certificate, or mirror the client to the borrowed site when the hello does
 	// not authenticate. It owns the raw connection from here on.
+	// The reference server finishes its handshake only after the post-handshake
+	// record lengths for this (dest, SNI, ALPN) are known. Wait once, lazily, so
+	// Start is not delayed for every node.
+	c.r.detectOnce.Do(func() { waitPostHandshakeDetection(c.r.ref, 8*time.Second) })
 	ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
 	defer cancel()
 	rc, err := xreality.Server(ctx, c.Conn, c.r.ref)

@@ -405,7 +405,7 @@ func TestInteropXrayVLESSReality(t *testing.T) {
 	bin := xrayBinary(t)
 	dest := os.Getenv("TXNODE_INTEROP_REALITY_DEST")
 	if dest == "" {
-		dest = "www.microsoft.com:443"
+		dest = "www.cloudflare.com:443"
 	}
 	host, _, err := net.SplitHostPort(dest)
 	if err != nil {
@@ -442,11 +442,7 @@ func TestInteropXrayVLESSReality(t *testing.T) {
 	startXrayClient(t, cfg)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
 	if err != nil {
-		// Xray's REALITY sessionID layout / HKDF / AES-GCM nonce are the parts the
-		// replica marks UNVERIFIED; the server logs "the hello does not
-		// authenticate" and falls back to the borrowed site. Recorded as the known
-		// interop gap R2/REALITY-1 in docs/REWORK-PLAN.zh.md.
-		t.Skipf("known REALITY interop gap with Xray 26: %v", err)
+		t.Fatalf("REALITY handshake with Xray failed: %v", err)
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
@@ -599,7 +595,7 @@ func TestInteropMihomoVLESSReality(t *testing.T) {
 	bin := mihomoBinary(t)
 	dest := os.Getenv("TXNODE_INTEROP_REALITY_DEST")
 	if dest == "" {
-		dest = "www.microsoft.com:443"
+		dest = "www.cloudflare.com:443"
 	}
 	host, _, err := net.SplitHostPort(dest)
 	if err != nil {
@@ -638,7 +634,7 @@ func TestInteropMihomoVLESSReality(t *testing.T) {
 	socks := startMihomo(t, proxy)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
 	if err != nil {
-		t.Skipf("known REALITY interop gap with Mihomo: %v", err)
+		t.Fatalf("REALITY handshake with Mihomo failed: %v", err)
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
