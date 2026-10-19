@@ -18,9 +18,8 @@ SOURCES = {
 SURFACE = ('execution', 'input', 'formats', 'profiles', 'transports', 'compatibility')
 
 
-def main():
+def main(core_root=ROOT / '.compat/core'):
     candidate = json.loads((ROOT / 'compatibility/renderers.v1.json').read_text(encoding='utf-8'))
-    core_root = ROOT / '.compat/core'
     core = json.loads((core_root / 'contracts/renderers/builtin.v1.json').read_text(encoding='utf-8'))
     if candidate.get('schema') != 'txnode-builtin-renderers/v1':
         raise ValueError('Unexpected Node renderer declaration schema')
