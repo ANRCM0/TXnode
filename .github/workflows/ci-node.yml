@@ -274,7 +274,7 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
-      - name: Resolve unified image channel
+      - name: Resolve independent Node image channel
         id: channel
         working-directory: .
         env:
