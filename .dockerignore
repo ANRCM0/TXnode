@@ -17,3 +17,8 @@ dist
 vendor
 benchmark
 bench-results
+
+.compat
+artifacts
+scripts
+compatibility

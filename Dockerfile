@@ -33,7 +33,7 @@ FROM alpine:3.20
 ARG VERSION=dev
 ARG BUILD_TIME=unknown
 ARG COMMIT=unknown
-ARG SOURCE_URL=https://github.com/ANRCM0/TXBoard
+ARG SOURCE_URL=https://github.com/ANRCM0/txnode
 LABEL org.opencontainers.image.source="${SOURCE_URL}" \
       org.opencontainers.image.revision="${COMMIT}" \
       org.opencontainers.image.version="${VERSION}" \

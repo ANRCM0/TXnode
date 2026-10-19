@@ -1,0 +1,452 @@
+name: Node CI and images
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Each main SHA keeps an immutable dev-sha build. Only superseded PR work is cancelled.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('node-ci-pr-{0}', github.event.pull_request.number) || format('node-ci-{0}-{1}', github.ref, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  changes:
+    name: Classify Node runtime changes
+    runs-on: ubuntu-latest
+    outputs:
+      runtime: ${{ steps.classify.outputs.runtime }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Keep documentation and test-only pushes verification-only
+        id: classify
+        working-directory: .
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          runtime=false
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            runtime=true
+          elif [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            if [[ ! "$BEFORE_SHA" =~ ^[0-9a-f]{40}$ ]] \
+              || [[ "$BEFORE_SHA" == 0000000000000000000000000000000000000000 ]] \
+              || ! git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null; then
+              runtime=true
+            else
+              changed_files="$(mktemp)"
+              git diff --no-renames --name-only -z "$BEFORE_SHA" "$GITHUB_SHA" > "$changed_files"
+              while IFS= read -r -d '' file; do
+                case "$file" in
+                  docs/*|*.md|.github/release/*|*_test.go|.gitignore) ;;
+                  *) runtime=true ;;
+                esac
+              done < "$changed_files"
+              rm -f "$changed_files"
+            fi
+          fi
+          echo "runtime=$runtime" >> "$GITHUB_OUTPUT"
+          echo "Node runtime publishing selected: $runtime" >> "$GITHUB_STEP_SUMMARY"
+
+  test:
+    name: Node Go tests and source guards
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Node release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: .
+        env:
+          TXBOARD_IMAGE_REPO: ghcr.io/anrcm0/txboard-node
+        run: bash scripts/resolve-image-tags.sh
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+          cache: true
+      - name: Verify canonical Go module and source paths
+        run: |
+          set -euo pipefail
+          grep -Fxq 'module github.com/ANRCM0/TX-Node' go.mod
+          if grep -RFn 'github.com/PaiMonCai/TX-Node' cmd internal Makefile Dockerfile go.mod; then
+            echo "Legacy TX-Node module path has reappeared" >&2
+            exit 1
+          fi
+          if grep -Fq 'ghcr.io/paimoncai/tx-node' Dockerfile; then
+            echo "Legacy TX-Node registry location has reappeared" >&2
+            exit 1
+          fi
+          go mod verify
+      - name: Enforce ANRCM0-owned pinned kernel dependencies
+        run: |
+          set -euo pipefail
+          grep -Eq '^replace github.com/xtls/xray-core => github.com/ANRCM0/Xray-core v' go.mod
+          if grep -E 'github.com/PaiMonCai/(sing-box|Xray-core)' go.mod go.sum; then
+            echo "Old-account kernel fork dependency has reappeared" >&2
+            exit 1
+          fi
+          grep -Eq '^github.com/ANRCM0/Xray-core v[^ ]+ h1:' go.sum
+          if grep -Fxq 'replace github.com/sagernet/sing-box => ./internal/deps/sing-box' go.mod; then
+            grep -Fq 'github.com/ANRCM0/sing-box` commit' internal/deps/sing-box/TXNODE-PATCH.md
+            grep -Fq '20260917154452-6184aa2cd055' internal/deps/sing-box/TXNODE-PATCH.md
+            grep -Fq 'AdmitRoutedConnection' internal/deps/sing-box/route/route.go
+          else
+            grep -Eq '^replace github.com/sagernet/sing-box => github.com/ANRCM0/sing-box v' go.mod
+            grep -Eq '^github.com/ANRCM0/sing-box v[^ ]+ h1:' go.sum
+          fi
+          grep -Fxq 'replace github.com/sagernet/sing-vmess => ./internal/deps/sing-vmess' go.mod
+          grep -Fq '3aed155119a1' internal/deps/sing-vmess/TXNODE-PATCH.md
+          test -s internal/deps/sing-vmess/LICENSE
+          go mod tidy -diff
+      - name: Validate retained Node version and any release notes
+        run: |
+          set -euo pipefail
+          version="$(tr -d '[:space:]' < .github/release/VERSION)"
+          [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            [[ "${GITHUB_REF_NAME%%-*}" == "$version" ]] || {
+              echo 'Node release tag differs from the independent Node version metadata' >&2
+              exit 1
+            }
+          fi
+          if [[ -e .github/release/NOTES.md ]]; then
+            grep -Fxq "# TX-Node $version" .github/release/NOTES.md
+            retired_node_bin="xboard-node""-linux-"
+            retired_cli_bin="xbctl""-linux-"
+            retired_audit_zip="AccessAudit""-plugin.zip"
+            if grep -Fq "$retired_node_bin" .github/release/NOTES.md \
+              || grep -Fq "$retired_cli_bin" .github/release/NOTES.md \
+              || grep -Fq "$retired_audit_zip" .github/release/NOTES.md; then
+              echo "Historical release notes list retired artifacts" >&2
+              exit 1
+            fi
+          else
+            echo 'SKIP - historical release prose removed; version metadata validated.'
+          fi
+      - name: Verify release commit is contained in Node repository main
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          (git fetch --no-tags --unshallow origin main || git fetch --no-tags origin main)
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "Release tag must refer to a commit on Node repository main" >&2
+            exit 1
+          }
+      - name: Run full Node tests
+        run: make test
+      - name: Check independent Node image channels
+        run: bash scripts/test-image-tags.sh
+      - name: Verify pinned protocol authentication publication and replay history
+        run: go test -race -count=1 github.com/sagernet/sing-vmess github.com/sagernet/sing-vmess/vless
+      - name: Check Go types and diagnostics
+        run: go vet ./...
+      - name: Enforce legacy retirement boundary
+        run: |
+          set -euo pipefail
+          test ! -d cmd/xbctl
+          legacy_xboard_artifact="xboard-node""-linux-"
+          legacy_xbctl_artifact="xbctl""-linux-"
+          legacy_docker_alias="xboard-node"":latest"
+          if grep -Fq "$legacy_xboard_artifact" Makefile .github/workflows/ci-node.yml \
+            || grep -Fq "$legacy_xbctl_artifact" Makefile .github/workflows/ci-node.yml; then
+            echo "Retired binary artifacts were reintroduced" >&2
+            exit 1
+          fi
+          if grep -Eq "(^|[^[:alnum:]_.-])${legacy_docker_alias}([^[:alnum:]_.-]|$)" Makefile Dockerfile; then
+            echo "Retired Docker alias was reintroduced" >&2
+            exit 1
+          fi
+          grep -Fq 'CMD ["-c", "/etc/txnode/config.yml"]' Dockerfile
+
+  runtime-stability:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    name: Node runtime stability
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+          cache: true
+      - run: make test-runtime-stability
+
+  image-smoke:
+    name: Node image metadata and canonical configuration
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build runtime image with Node repository metadata
+        env:
+          BUILD_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || format('dev-sha-{0}', github.sha) }}
+        run: |
+          set -euo pipefail
+          build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          docker build --build-arg VERSION="$BUILD_VERSION" \
+            --build-arg COMMIT="$GITHUB_SHA" --build-arg BUILD_TIME="$build_time" \
+            --build-arg SOURCE_URL="https://github.com/$GITHUB_REPOSITORY" \
+            -t txboard-node:config-path-ci .
+          test "$(docker run --rm txboard-node:config-path-ci -v)" = "tx-node $BUILD_VERSION (built $build_time)"
+          test "$(docker image inspect txboard-node:config-path-ci --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$GITHUB_SHA"
+          test "$(docker image inspect txboard-node:config-path-ci --format '{{ index .Config.Labels "org.opencontainers.image.source" }}')" = "https://github.com/$GITHUB_REPOSITORY"
+      - name: Verify canonical image command
+        run: |
+          set -euo pipefail
+          test "$(docker image inspect txboard-node:config-path-ci --format '{{json .Config.Cmd}}')" = '["-c","/etc/txnode/config.yml"]'
+      - name: Verify offline Installer capability in the exact built image
+        run: |
+          docker run --rm --network none txboard-node:config-path-ci --capabilities > "$RUNNER_TEMP/node-capabilities.json"
+          python3 - "$GITHUB_SHA" "$RUNNER_TEMP/node-capabilities.json" <<'PY'
+          import json,sys
+          with open(sys.argv[2]) as source:
+              proof=json.load(source)
+          assert proof['protocol_version']==1 and proof['runtime']=='tx-node'
+          assert proof['commit']==sys.argv[1]
+          assert 'node_authorization_snapshot_v1' in proof['capabilities']
+          assert 'node_runtime_checkpoint_v1' in proof['capabilities']
+          print('Exact-image offline authorization capability passed')
+          PY
+
+  build:
+    name: Node release binaries
+    runs-on: ubuntu-latest
+    needs: [test, runtime-stability, image-smoke, core-compatibility]
+    if: startsWith(github.ref, 'refs/tags/v')
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+          cache: true
+      - name: Build release binary
+        env:
+          VERSION: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          if [[ "$GOARCH" == amd64 ]]; then
+            make build-linux
+          else
+            make build-linux-arm64
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tx-node-linux-${{ matrix.goarch }}
+          path: tx-node-linux-${{ matrix.goarch }}
+          if-no-files-found: error
+
+  publish-image:
+    name: Publish independent Node image
+    runs-on: ubuntu-latest
+    needs: [changes, test, runtime-stability, image-smoke, core-compatibility]
+    if: >-
+      ${{ !cancelled() && needs.changes.result == 'success' && needs.test.result == 'success' &&
+          needs.image-smoke.result == 'success' && needs.core-compatibility.result == 'success' &&
+          ((github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+            needs.changes.outputs.runtime == 'true' && needs.runtime-stability.result == 'skipped') ||
+           (startsWith(github.ref, 'refs/tags/v') && needs.runtime-stability.result == 'success')) }}
+    permissions:
+      contents: read
+      packages: write
+    # Serialize the build and alias promotion together across main SHAs.
+    # Documentation pushes do not enter this job or cancel its running build.
+    concurrency:
+      group: node-image-${{ github.ref_type == 'tag' && (contains(github.ref_name, '-') && 'preview' || 'stable') || 'dev' }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve unified image channel
+        id: channel
+        working-directory: .
+        env:
+          TXBOARD_IMAGE_REPO: ghcr.io/anrcm0/txboard-node
+        run: bash scripts/resolve-image-tags.sh
+      - name: Select immutable build tags and metadata
+        id: build
+        env:
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+          CHANNEL_TAGS: ${{ steps.channel.outputs.tags }}
+        run: |
+          set -euo pipefail
+          tags="$CHANNEL_TAGS"
+          version="$GITHUB_REF_NAME"
+          if [[ "$CHANNEL" == dev ]]; then
+            tags="$(grep -F ':dev-sha-' <<<"$CHANNEL_TAGS")"
+            version="dev-sha-${GITHUB_SHA:0:12}"
+          fi
+          {
+            printf 'tags<<NODE_BUILD_TAGS\n%s\nNODE_BUILD_TAGS\n' "$tags"
+            printf 'version=%s\n' "$version"
+            printf 'build_time=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Build and push Node image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=txnode
+          cache-to: type=gha,mode=max,scope=txnode
+          tags: ${{ steps.build.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.build.outputs.version }}
+            COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ steps.build.outputs.build_time }}
+            SOURCE_URL=https://github.com/${{ github.repository }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.build.outputs.version }}
+      - name: Promote current main image to dev
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || {
+            echo "main no longer contains this commit; skip dev promotion"
+            exit 0
+          }
+          # A docs/tests-only commit may advance main while this build runs.
+          # It must not cancel publication of the unchanged Node runtime.
+          runtime_advanced=false
+          changed_files="$(mktemp)"
+          git diff --no-renames --name-only -z "$GITHUB_SHA" origin/main > "$changed_files"
+          while IFS= read -r -d '' file; do
+            case "$file" in
+              docs/*|*.md|.github/release/*|*_test.go|.gitignore) ;;
+              *) runtime_advanced=true ;;
+            esac
+          done < "$changed_files"
+          rm -f "$changed_files"
+          if [[ "$runtime_advanced" == true ]]; then
+            echo "Node runtime advanced; retain immutable image without rolling dev back"
+            exit 0
+          fi
+          docker buildx imagetools create --tag ghcr.io/anrcm0/txboard-node:dev \
+            "ghcr.io/anrcm0/txboard-node:dev-sha-${GITHUB_SHA:0:12}"
+
+  release-assets:
+    name: Attach Node binaries to Node release
+    runs-on: ubuntu-latest
+    needs: [build, publish-image]
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve release channel
+        id: channel
+        working-directory: .
+        env:
+          TXBOARD_IMAGE_REPO: ghcr.io/anrcm0/txboard-node
+        run: bash scripts/resolve-image-tags.sh
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: tx-node-linux-*
+          merge-multiple: true
+          path: dist
+      # Node tags and release assets belong only to this repository.
+      - name: Create Node release if missing and upload Node binaries
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          CHANNEL: ${{ steps.channel.outputs.channel }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            flags=(--latest)
+            if [[ "$CHANNEL" == preview ]]; then
+              flags=(--prerelease --latest=false)
+            fi
+            gh release create "$RELEASE_TAG" --verify-tag --generate-notes \
+              --title "TX-Node $RELEASE_TAG" "${flags[@]}"
+          fi
+          gh release upload "$RELEASE_TAG" dist/tx-node-linux-amd64 dist/tx-node-linux-arm64 --clobber
+
+  core-compatibility:
+    name: Native compatibility with pinned Core
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: 25
+    services:
+      redis:
+        image: redis:7.4
+        ports: ['6379:6379']
+        options: --health-cmd="redis-cli ping" --health-interval 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read supported Core baseline
+        id: core
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          value = json.load(open('compatibility/core.v1.json'))
+          assert value['repository'] == 'ANRCM0/TXBoard'
+          assert re.fullmatch('[0-9a-f]{40}', value['revision'])
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as target:
+              target.write('revision=' + value['revision'] + '\n')
+          PY
+      - uses: actions/checkout@v4
+        with:
+          repository: ANRCM0/TXBoard
+          ref: ${{ steps.core.outputs.revision }}
+          path: .compat/core
+          persist-credentials: false
+      - name: Select candidate Node without changing Core source
+        run: python3 scripts/prepare-core-compatibility.py
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, pdo_sqlite, curl, openssl, sodium, bcmath, redis
+          coverage: none
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Prepare pinned Core
+        working-directory: .compat/core/api
+        run: |
+          composer install --no-interaction --prefer-dist
+          cp .env.example .env
+          APP_ENV=testing php artisan key:generate
+      - name: Check Core and candidate renderer compatibility
+        run: python3 .compat/core/scripts/check-renderer-registry.py
+      - name: Actual Core activation, authorization, Provider, Node and settlement
+        run: python3 .compat/core/scripts/verify-native-c2.py
+      - name: Retain non-secret compatibility sources
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-core-compatibility-${{ github.sha }}
+          path: artifacts/core-compatibility-sources.json
+          if-no-files-found: error

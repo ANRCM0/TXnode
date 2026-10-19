@@ -37,3 +37,6 @@ cmd/xboard-node-bench
 /tx-node
 /tx-node-linux-*
 /dist/
+
+/.compat/
+/artifacts/
