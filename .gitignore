@@ -40,3 +40,4 @@ cmd/xboard-node-bench
 
 /.compat/
 /artifacts/
+__pycache__/
