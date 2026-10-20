@@ -20,9 +20,11 @@ type authorizationSource interface {
 	RefreshAuthorization(context.Context) (controlplane.Snapshot, error)
 }
 type authorizationResult struct {
-	snapshot    controlplane.Snapshot
-	err         error
-	certChanged bool
+	snapshot            controlplane.Snapshot
+	err                 error
+	certChanged         bool
+	configGeneration    uint64
+	hasConfigGeneration bool
 }
 
 func (s *Service) initAuthorization() error {
@@ -156,6 +158,7 @@ func (s *Service) requestAuthorizationSnapshot(ctx context.Context, full bool) {
 	source := s.source.(authorizationSource)
 	s.latchCertificateRenewal()
 	certChanged := s.pendingCertRenewal
+	configGeneration := s.desiredGeneration
 	s.authorizationWorkers.Add(1)
 	go func() {
 		defer s.authorizationWorkers.Done()
@@ -169,7 +172,8 @@ func (s *Service) requestAuthorizationSnapshot(ctx context.Context, full bool) {
 		// The flag stays set until the main loop consumes the result, so two
 		// channels cannot apply signed revisions out of delivery order.
 		select {
-		case s.authorizationResults <- authorizationResult{snapshot: snapshot, err: err, certChanged: certChanged}:
+		case s.authorizationResults <- authorizationResult{snapshot: snapshot, err: err, certChanged: certChanged,
+			configGeneration: configGeneration, hasConfigGeneration: full}:
 		case <-ctx.Done():
 			s.authorizationRefresh.Store(false)
 		}
@@ -189,6 +193,11 @@ func (s *Service) applyAuthorizationResult(ctx context.Context, result authoriza
 	}
 	if s.authorityTerminal(ctx) {
 		return context.Cause(ctx)
+	}
+	// An older full poll may still carry fresh signed authority. Keep it, but
+	// never let its config roll back a newer authenticated WS port update.
+	if result.hasConfigGeneration && result.configGeneration != s.desiredGeneration {
+		result.snapshot.Config = nil
 	}
 	if s.nativeUsageMode() {
 		return s.applyNativeAuthorization(ctx, result.snapshot, result.certChanged)

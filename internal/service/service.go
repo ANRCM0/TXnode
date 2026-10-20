@@ -494,6 +494,9 @@ func (s *Service) handleWSEvent(ctx context.Context, event controlplane.Event) {
 	if s.authorizationEnabled() {
 		switch event.Type {
 		case controlplane.EventSyncUsers, controlplane.EventSyncUserDelta, controlplane.EventSyncConfig:
+			if event.Type == controlplane.EventSyncConfig && s.reloadNativeWSPort(ctx, event.Config) {
+				return
+			}
 			s.requestAuthorizationPoll(ctx)
 			return
 		}
