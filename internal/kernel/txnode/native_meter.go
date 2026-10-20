@@ -1,11 +1,13 @@
 package txnode
 
 import (
+	"context"
 	"errors"
 	"io"
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/ANRCM0/TX-Node/internal/dataplane/core"
 	"github.com/ANRCM0/TX-Node/internal/usagebucket"
@@ -23,8 +25,13 @@ import (
 // Both are optional; a meter with neither enabled is inert. The type implements
 // core.ChunkHook so the relay can call it directly.
 type nativeMeter struct {
-	collector *usageinterval.NativeCollector
-	users     map[string]int
+	gateMu      sync.Mutex
+	paused      bool
+	wake        chan struct{}
+	renewal     *nativeRenewalTicket
+	readPausers map[*nativeReadBinding]struct{}
+	collector   *usageinterval.NativeCollector
+	users       map[string]int
 
 	enforcing atomic.Bool
 	stopped   atomic.Bool
@@ -39,15 +46,23 @@ type nativeMeter struct {
 }
 
 type chunkTokens struct {
-	native  *usageinterval.Operation
-	session *usagebucket.Session
-	bucket  usagebucket.Operation
+	issuer    *nativeMeter
+	collector *usageinterval.NativeCollector
+	completed atomic.Bool
+	native    *usageinterval.Operation
+	session   *usagebucket.Session
+	bucket    usagebucket.Operation
 }
 
 // AllowSplice keeps authorization-enforcing collectors on their existing copy
 // path. Only the original, active local observation owner opts in.
 func (m *nativeMeter) AllowSplice() bool {
-	return m != nil && m.collector == nil && m.events != nil && !m.stopped.Load()
+	if m == nil {
+		return false
+	}
+	m.gateMu.Lock()
+	defer m.gateMu.Unlock()
+	return m.collector == nil && m.events != nil && !m.stopped.Load() && !m.paused
 }
 
 // replaceNativeMeterLocked leaves all old hooks bound to their own collector.
@@ -81,7 +96,12 @@ func (m *nativeMeter) setEventMeter(meter *usagebucket.Meter) {
 
 // EnableEnforcingBounded implements usageinterval.Meter.
 func (m *nativeMeter) EnableEnforcingBounded() bool {
-	if m == nil || m.collector == nil || m.collector.Unknown() || m.stopped.Load() {
+	if m == nil {
+		return false
+	}
+	m.gateMu.Lock()
+	defer m.gateMu.Unlock()
+	if m.collector == nil || m.collector.Unknown() || m.stopped.Load() || m.paused {
 		return false
 	}
 	m.enforcing.Store(true)
@@ -139,11 +159,14 @@ func (m *nativeMeter) retire() {
 	if m == nil {
 		return
 	}
+	m.gateMu.Lock()
+	defer m.gateMu.Unlock()
 	m.stopped.Store(true)
 	m.enforcing.Store(false)
 	if m.collector != nil {
 		m.collector.Fail()
 	}
+	m.signalLocked()
 }
 
 func (m *nativeMeter) enforcingNow() bool {
@@ -155,13 +178,24 @@ func (m *nativeMeter) Begin(c core.Chunk) (any, error) {
 	if m == nil {
 		return nil, nil
 	}
+	m.gateMu.Lock()
 	if m.stopped.Load() || (m.collector != nil && !m.enforcingNow()) {
+		m.gateMu.Unlock()
 		return nil, usageinterval.ErrUnknown
 	}
-	t := &chunkTokens{}
-	if m.collector != nil {
-		op := m.collector.BeginIO(c.UserID, directionName(c.Dir), c.N)
+	if m.paused {
+		m.gateMu.Unlock()
+		return nil, core.ErrReadPaused
+	}
+	t := &chunkTokens{issuer: m, collector: m.collector}
+	// Register before BeginIO can block in durable persistence. Stop never waits
+	// for that disk operation, while renewal must include it in quiescence.
+	m.inflight.Add(1)
+	m.gateMu.Unlock()
+	if t.collector != nil {
+		op := t.collector.BeginIO(c.UserID, directionName(c.Dir), c.N)
 		if op == nil {
+			m.finishChunk()
 			return nil, usageinterval.ErrUnknown
 		}
 		t.native = op
@@ -173,9 +207,9 @@ func (m *nativeMeter) Begin(c core.Chunk) (any, error) {
 		}
 	}
 	if t.native == nil && t.session == nil {
+		m.finishChunk()
 		return nil, nil
 	}
-	m.inflight.Add(1)
 	return t, nil
 }
 
@@ -185,10 +219,17 @@ func (m *nativeMeter) Complete(c core.Chunk, token any) {
 	if !ok || t == nil {
 		return
 	}
-	defer m.inflight.Add(-1)
+	if t.issuer != m || !t.completed.CompareAndSwap(false, true) {
+		if t.collector != nil {
+			t.collector.RejectOperation()
+		}
+		m.StopBoundedUsageTraffic()
+		return
+	}
+	defer m.finishChunk()
 	ioError := c.Err != nil && !errors.Is(c.Err, io.EOF)
 	if t.native != nil {
-		_ = m.collector.CompleteIO(t.native, directionName(c.Dir), c.N, ioError)
+		_ = t.collector.CompleteIO(t.native, directionName(c.Dir), c.N, ioError)
 	}
 	if t.session != nil {
 		t.session.Complete(t.bucket, pathOf(c), physicalDirection(c.Dir), usagebucket.Direction(directionName(c.Dir)), c.N, ioError, true)
@@ -257,4 +298,226 @@ func transportOf(c core.Chunk) string {
 		return "udp"
 	}
 	return "tcp"
+}
+
+type nativeReadBinding struct{ pauser core.ReadPauser }
+
+type nativeRenewalTicket struct {
+	kernel    *Kernel
+	meter     *nativeMeter
+	old       *usageinterval.NativeCollector
+	boundary  time.Time
+	retired   bool
+	retiring  bool
+	committed bool
+	finished  bool
+}
+
+func (m *nativeMeter) signalLocked() {
+	if m.wake != nil {
+		close(m.wake)
+		m.wake = nil
+	}
+}
+
+func (m *nativeMeter) finishChunk() {
+	m.gateMu.Lock()
+	m.inflight.Add(-1)
+	m.signalLocked()
+	m.gateMu.Unlock()
+}
+
+func (m *nativeMeter) WaitReady(ctx context.Context) error {
+	for {
+		m.gateMu.Lock()
+		if m.stopped.Load() {
+			m.gateMu.Unlock()
+			return usageinterval.ErrUnknown
+		}
+		if !m.paused {
+			m.gateMu.Unlock()
+			return ctx.Err()
+		}
+		if m.wake == nil {
+			m.wake = make(chan struct{})
+		}
+		wake := m.wake
+		m.gateMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wake:
+		}
+	}
+}
+
+func (m *nativeMeter) BindReadPause(pauser core.ReadPauser) (func(), error) {
+	m.gateMu.Lock()
+	defer m.gateMu.Unlock()
+	if m.stopped.Load() {
+		return nil, usageinterval.ErrUnknown
+	}
+	if m.paused {
+		if pauser == nil {
+			return nil, core.ErrReadPauseUnsupported
+		}
+		if err := pauser.PauseRead(); err != nil {
+			return nil, err
+		}
+	}
+	binding := &nativeReadBinding{pauser: pauser}
+	if m.readPausers == nil {
+		m.readPausers = make(map[*nativeReadBinding]struct{})
+	}
+	m.readPausers[binding] = struct{}{}
+	var once sync.Once
+	return func() {
+		once.Do(func() { m.gateMu.Lock(); delete(m.readPausers, binding); m.signalLocked(); m.gateMu.Unlock() })
+	}, nil
+}
+
+func (k *Kernel) PauseNativeRenewal(expected usageinterval.Meter) (usageinterval.RenewalTicket, error) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	m, ok := expected.(*nativeMeter)
+	if !ok || m == nil || k.meter != m {
+		return nil, usageinterval.ErrUnknown
+	}
+	m.gateMu.Lock()
+	if !m.enforcingNow() || m.paused || m.renewal != nil || m.collector.CheckCurrent() != nil {
+		m.gateMu.Unlock()
+		return nil, usageinterval.ErrUnknown
+	}
+	for binding := range m.readPausers {
+		if binding.pauser == nil {
+			m.gateMu.Unlock()
+			return nil, usageinterval.ErrNativeRenewalUnsupported
+		}
+	}
+	ticket := &nativeRenewalTicket{kernel: k, meter: m, old: m.collector}
+	m.paused, m.renewal = true, ticket
+	for binding := range m.readPausers {
+		if err := binding.pauser.PauseRead(); err != nil {
+			m.gateMu.Unlock()
+			ticket.Abort()
+			return nil, err
+		}
+	}
+	m.signalLocked()
+	m.gateMu.Unlock()
+	return ticket, nil
+}
+
+func (t *nativeRenewalTicket) WaitQuiescent(ctx context.Context) error {
+	m := t.meter
+	for {
+		m.gateMu.Lock()
+		if m.stopped.Load() || t.finished || m.renewal != t {
+			m.gateMu.Unlock()
+			return usageinterval.ErrUnknown
+		}
+		if err := ctx.Err(); err != nil {
+			m.gateMu.Unlock()
+			return err
+		}
+		if m.inflight.Load() == 0 {
+			m.gateMu.Unlock()
+			return nil
+		}
+		if m.wake == nil {
+			m.wake = make(chan struct{})
+		}
+		wake := m.wake
+		m.gateMu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-wake:
+		}
+	}
+}
+
+func (t *nativeRenewalTicket) Retire(ctx context.Context) (time.Time, error) {
+	if err := t.WaitQuiescent(ctx); err != nil {
+		return time.Time{}, err
+	}
+	m := t.meter
+	m.gateMu.Lock()
+	if t.retired {
+		boundary := t.boundary
+		m.gateMu.Unlock()
+		return boundary, nil
+	}
+	if t.retiring || m.stopped.Load() || t.finished || m.renewal != t {
+		m.gateMu.Unlock()
+		return time.Time{}, usageinterval.ErrUnknown
+	}
+	t.retiring = true
+	m.gateMu.Unlock()
+	boundary, err := t.old.RetireQuiescent(ctx)
+	m.gateMu.Lock()
+	defer m.gateMu.Unlock()
+	t.retiring = false
+	if err != nil {
+		return time.Time{}, err
+	}
+	if m.stopped.Load() || t.finished || m.renewal != t {
+		return time.Time{}, usageinterval.ErrUnknown
+	}
+	t.retired, t.boundary = true, boundary
+	return boundary, nil
+}
+
+func (t *nativeRenewalTicket) Commit(next *usageinterval.NativeCollector) error {
+	t.kernel.mu.Lock()
+	defer t.kernel.mu.Unlock()
+	m := t.meter
+	m.gateMu.Lock()
+	defer m.gateMu.Unlock()
+	if t.kernel.meter != m || m.stopped.Load() || !m.paused || m.renewal != t || t.finished || !t.retired || t.committed ||
+		m.collector != t.old || m.inflight.Load() != 0 || !t.old.RenewalSuccessor(next, t.boundary) {
+		return usageinterval.ErrUnknown
+	}
+	m.collector = next
+	t.committed = true
+	return nil
+}
+
+func (t *nativeRenewalTicket) Resume() error {
+	m := t.meter
+	m.gateMu.Lock()
+	if m.stopped.Load() || !m.paused || m.renewal != t || t.finished || !t.committed || m.collector.CheckCurrent() != nil {
+		m.gateMu.Unlock()
+		return usageinterval.ErrUnknown
+	}
+	for binding := range m.readPausers {
+		if binding.pauser == nil {
+			m.gateMu.Unlock()
+			t.Abort()
+			return core.ErrReadPauseUnsupported
+		}
+		if err := binding.pauser.ResumeRead(); err != nil {
+			m.gateMu.Unlock()
+			t.Abort()
+			return err
+		}
+	}
+	t.finished = true
+	m.paused, m.renewal = false, nil
+	m.signalLocked()
+	m.gateMu.Unlock()
+	return nil
+}
+
+func (t *nativeRenewalTicket) Abort() {
+	m := t.meter
+	m.gateMu.Lock()
+	if t.finished {
+		m.gateMu.Unlock()
+		return
+	}
+	t.finished = true
+	t.old.Fail()
+	m.gateMu.Unlock()
+	m.StopBoundedUsageTraffic()
 }
