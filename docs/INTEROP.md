@@ -67,6 +67,9 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 
 ## 历史结果（Xray 26.3.27 / Mihomo v1.19.32 / sing-box 1.14.3，本机回环）
 
+本节保留旧版记录。严格门禁已发现其中 Mieru 拨号失败及复用夹具不能充分证明目标行为，
+当前源码和候选状态以清单、对应提交的 Actions 与 `OUTSTANDING-WORK.zh.md` 为准。
+
 通过（29 个用例，覆盖 24 条链路）：
 
 | 用例 | 客户端 | 备注 |
@@ -125,30 +128,30 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 交回应用（服务端日志确认响应已按正确 nonce/序号发出）。互通用例因此每轮使用新连接；该行为需
 官方客户端侧进一步确认，不计入服务端缺陷。
 
-## 尚未覆盖的互通项
+## 当前严格矩阵范围
 
-当前用例集覆盖 24 条链路（29 个用例，含 2 个 mux 子用例）通过、6 个跳过。
-以下能力还没有真实客户端用例，逐项证据与下一步见 `docs/OUTSTANDING-WORK.zh.md`：
+清单已将 Naive、Mihomo TUIC、smux/yamux UDP、官方 Mieru UDP 承载和显式低熵/整形
+组合列为受支持用例，运行错误必须失败。Naive 增加不可信根及错误 SAN，TUIC 对比
+参考/native 服务端的 native/quic UDP 中继，并检查错误密码。清单同时核对各子用例，
+不能只凭父用例 PASS。
 
-1. **Mieru**：`traffic_pattern` 与低熵编码（type 10/11）未实现；官方客户端默认关闭，需显式夹具才能覆盖；
-2. **地址头 mux 的 UDP**（smux/yamux `FlagUDP` 流）：sing-box 在该流上发自己的 packet 头（`03 | 目标 | 源 | len | 数据`），用 Xray 26.3.27 作参考服务端实测**同样不回应**（抓包只有请求、无回包）。因此这里不做猜测性实现，UDP 流保持明确关闭（`End`），等待 sing-box 侧文档或新版本；VLESS UDP 已由 XUDP 覆盖；
-3. **Mieru v2 UDP 承载**：官方 v3.38 客户端的 `Transport=udp` 需要包会话状态机（open 请求未被 ACK 时会重传、metadata 与 payload 共用同一 nonce）；TCP 承载已互通，UDP 承载未完成；
-4. **测试基建**：`usageinterval` 的 SIGKILL 故障注入用例在慢盘上偶发失败（单跑稳定），需要在整套运行前加环境判定；
-5. **传输剩余**：h2 已被上游移除，其余组合已覆盖。
+仅保留固定 sing-box 不含 Mieru outbound、固定 Xray 移除独立 h2 两个不适用组合；
+它们不计入通过数。REALITY 在测试内产生匹配密钥，不依赖外部公钥才能执行。
 
-修复顺序建议：先补 mieru v2 UDP 承载（包会话状态机），再按 sing-box 文档补地址头 mux 的 UDP。
+SIGKILL 使用 ready/ARM/gate 事件握手，在准确持久化阶段杀进程；超时仍失败，不能
+自动变成环境不足或 Skip。当前源码和实际候选结果见 `docs/OUTSTANDING-WORK.zh.md`。
 
 ## 复现
 
 客户端由 `scripts/fetch-interop-clients.sh` 下载，按版本和 SHA-256 固定；
-`--check` 只校验已有缓存。CI 的 `interop` job（nightly / dispatch / tag）跑同一套用例：
+`--check` 只校验已有缓存。以下命令仅供 Actions，使用与 CI 相同的严格 runner：
 
 ```bash
-scripts/fetch-interop-clients.sh .clients
-TXNODE_INTEROP_XRAY=$PWD/../.clients/xray/xray \
-TXNODE_INTEROP_MIHOMO=$PWD/../.clients/mihomo/mihomo \
-TXNODE_INTEROP_SINGBOX=$PWD/../.clients/singbox/sing-box \
-TXNODE_INTEROP_MIERU=$PWD/../.clients/mieru/mieru \
-TXNODE_INTEROP_REALITY_PRIV=... TXNODE_INTEROP_REALITY_PUB=... \
-go test ./internal/kernel/txnode/ -run TestInterop -v
+scripts/fetch-interop-clients.sh "$RUNNER_TEMP/interop-clients"
+TXNODE_INTEROP_XRAY="$RUNNER_TEMP/interop-clients/xray/xray" \
+TXNODE_INTEROP_MIHOMO="$RUNNER_TEMP/interop-clients/mihomo/mihomo" \
+TXNODE_INTEROP_SINGBOX="$RUNNER_TEMP/interop-clients/singbox/sing-box" \
+TXNODE_INTEROP_MIERU="$RUNNER_TEMP/interop-clients/mieru/mieru" \
+TXNODE_INTEROP_CURL=/usr/bin/curl \
+python3 scripts/interop_gate.py --profile full --output artifacts/interop-full
 ```

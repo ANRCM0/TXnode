@@ -20,6 +20,7 @@
 | 存储失败隔离与进程归属 | 同文件的 `TestNativeObservationStorageFailureKeepsActualTrafficAndStopsRetrying`、`TestNativeObservationDirectoriesAndProcessOwnerRemainScoped` | observer 容量/不可写、event store 容量和关闭时 v1 仍精确；禁用无 I/O、失败不重试、目录隔离、进程单一 owner | 新增源码仍须在候选 Actions 执行 |
 | 原生 packet 周期 | 同文件的 `TestNativePacketPeriodKeepsUnsampledOldTailAndFreshBytesSeparate` | 真实 UDP 原周期 13 已采样 + 7 未采样尾部，切换后 57 字节；旧控制连接关闭，旧20/新57分段 | 不是任意 packet 承载协议的互通证明 |
 | 原生 I/O 错误边界 | `internal/dataplane/core/download_accounting_test.go`、`udp_accounting_test.go`、`chunk_hook_test.go` | 实际 relay copy 对短写、正字节伴错误、零成功写、取消限速及 packet 关闭完成 I/O 的计数 | 不恢复已移除内核的内部 wrapper；功能结果以候选 CI 为准 |
+| 固定 Core machine 契约 | `internal/machine/native_core_machine_live_test.go`、`scripts/tests/node-native-machine/`，CI `core-machine` | 生产 Orchestrator、双 Node、共享 WS/503/后继心跳、设备事实、异域隔离、节点禁用/恢复、token 轮换与原 terminal 重放 | 固定 Core 使用既有兼容 installation 路径；不宣称原生 installation machine 准入或真实数据库计费已验证。需单独取得候选 job 结果 |
 
 ## SIGKILL 夹具约束
 
@@ -41,7 +42,7 @@
 | `docs/removed-tests/usage_observer_adapter_test.go.txt` | 原生 Service 测试已编写真实 I/O、身份、关闭、错误隔离、禁用和恢复断言；用户 delta/Reload 失败的细分边界仍由各自生命周期测试承担 |
 | `docs/removed-tests/store_io_test.go.txt` | 原生 core relay 测试覆盖短写/正字节伴错/失败写和取消；使用当前物理方向口径，不恢复旧 wrapper |
 | `docs/removed-tests/traffic_period_packet_test.go.txt` | 已编写真实 SOCKS UDP 周期切换、原周期尾部和精确分段断言；待候选 Actions |
-| `docs/removed-tests/native_core_machine_live_test.go.txt` | 重新明确私有 Core checkout、machine 与原生 Node 的执行前提和独立入口；现有 C2 覆盖不能自动宣告该文件全部恢复 |
+| `docs/removed-tests/native_core_machine_live_test.go.txt` | 已编写固定 Core、生产 Orchestrator、真实原生 VLESS/VMess 和 machine 契约的独立入口；结果保存 Node/Core SHA/tree 及明确的未验证项，待候选 `core-machine` Actions |
 
 恢复时应逐项写出实际 owner 调用链和精确断言，再将替代测试纳入 Actions。只把旧文件
 改成可编译、改用 mock，或引用现有单层测试，都不足以关闭这些缺口。
