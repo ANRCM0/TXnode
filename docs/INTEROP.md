@@ -100,9 +100,8 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 当前用例集覆盖 23 条链路（31 个用例，含 2 个 mux 子用例），全部通过。以下能力还没有真实客户端用例，发布前建议补齐：
 
 1. **Mieru**：`traffic_pattern` 与低熵编码（type 10/11）未实现；官方客户端默认关闭，需显式夹具才能覆盖；
-2. **XUDP**：sing-box 走 VLESS 的 UDP 关联使用 Xray XUDP 帧（每包目标头 + 可选 UUID 提示/global ID），节点只实现明文长度前缀 VLESS UDP；用例以 skip 记录（VLESS-UDP-1）；
-3. **mux UDP**：`FlagUDP` 流与 Mux.Cool 的 UDP 会话暂未承载（明确关闭，不串流）；
-4. **Mieru v2 UDP 承载**：官方 v3.38 客户端的 `Transport=udp`（每包自带 nonce、metadata 与 payload 共用同一 nonce）尚未实现；TCP 承载已互通；
+2. **XUDP / mux UDP**：sing-box 的 VLESS UDP 走 Mux.Cool 的 UDP 会话（`NEW NETWORK=UDP`），body 是 XUDP 帧。已确认首段 body 形如 `SIZE(2)|payload`，但客户端在 `openSessionResponse`/首个数据帧的确认语义上仍需实测对齐；目前 mux 只承载 TCP，UDP 会话以 End 明确关闭（不串流）；
+3. **Mieru v2 UDP 承载**：官方 v3.38 客户端的 `Transport=udp` 需要包会话状态机（open 请求未被 ACK 时会重传、metadata 与 payload 共用同一 nonce）；TCP 承载已互通，UDP 承载未完成；
 5. **传输剩余**：h2 已被上游移除，其余组合已覆盖。
 
 修复顺序建议：先补 mieru v2 UDP 承载，再补 XUDP 帧，最后补 mux UDP。
