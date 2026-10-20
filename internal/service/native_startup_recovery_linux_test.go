@@ -28,18 +28,20 @@ import (
 )
 
 type nativeStartupTransport struct {
-	mu          sync.Mutex
-	session     usagev2.Session
-	gets        int
-	submissions []usagev2.Submission
-	preAck      bool
-	mismatch    bool
-	cutoff      bool
-	localOnly   bool
-	failure     error
-	blockAt     int
-	entered     chan struct{}
-	release     chan struct{}
+	mu             sync.Mutex
+	session        usagev2.Session
+	gets           int
+	submissions    []usagev2.Submission
+	preAck         bool
+	mismatch       bool
+	cutoff         bool
+	localOnly      bool
+	failure        error
+	blockAt        int
+	entered        chan struct{}
+	release        chan struct{}
+	captureRuntime func() *nativeUsageRuntime
+	blockedRuntime *nativeUsageRuntime
 }
 
 func (p *nativeStartupTransport) receipt(q usagev2.Query) usagev2.Receipt {
@@ -62,6 +64,9 @@ func (p *nativeStartupTransport) Get(ctx context.Context, q usagev2.Query) (usag
 	block := p.gets == p.blockAt
 	p.mu.Unlock()
 	if block {
+		// Publish the runtime before signalling; cleanup may clear Service's
+		// pointer as soon as this blocked call reaches its deadline.
+		p.blockedRuntime = p.captureRuntime()
 		close(p.entered)
 		select {
 		case <-ctx.Done():
@@ -130,7 +135,8 @@ func nativeStartupFixture(t *testing.T, empty bool) (*Service, *nativeStartupTra
 	if err != nil {
 		t.Fatal(err)
 	}
-	transport := &nativeStartupTransport{session: *verified.Payload.UsageV2}
+	transport := &nativeStartupTransport{session: *verified.Payload.UsageV2,
+		captureRuntime: func() *nativeUsageRuntime { return s.nativeUsage }}
 	plane.bootstrap.Authorization, plane.bootstrap.Users = verified, snapshot.Users
 	plane.bootstrap.UsageV2Session = verified.Payload.UsageV2
 	plane.bootstrap.UsageV2Transport, plane.bootstrap.UsageV2NativeHTTP = transport, true
@@ -231,7 +237,7 @@ func TestNativeStartupRecoveryAcknowledgesAllPagesBeforeRealListener(t *testing.
 	case <-time.After(5 * time.Second):
 		t.Fatal("second recovery page not reached")
 	}
-	if nativeStartupListening(s) || s.nativeUsage.collector.Load() != nil {
+	if nativeStartupListening(s) || transport.blockedRuntime == nil || transport.blockedRuntime.collector.Load() != nil {
 		t.Fatal("listener or collector installed before all recovery pages were acknowledged")
 	}
 	close(transport.release)
@@ -330,7 +336,7 @@ func TestNativeStartupRecoveryFailuresKeepRealListenerClosed(t *testing.T) {
 				case <-time.After(5 * time.Second):
 					t.Fatal("recovery transport not reached")
 				}
-				if nativeStartupListening(s) || s.nativeUsage.collector.Load() != nil {
+				if nativeStartupListening(s) || transport.blockedRuntime == nil || transport.blockedRuntime.collector.Load() != nil {
 					t.Fatal("blocked recovery installed a listener or collector")
 				}
 				if mode == "cancel" {
