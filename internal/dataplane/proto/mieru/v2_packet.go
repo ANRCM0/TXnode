@@ -665,6 +665,9 @@ func (p *v2DatagramConn) Close() error {
 
 func (p *v2DatagramConn) abort(err error) {
 	p.once.Do(func() {
+		// Wait for an in-flight packet and prevent any send from passing the
+		// done check after the close/authorization boundary has returned.
+		p.sendMu.Lock()
 		p.mu.Lock()
 		p.closed = true
 		p.closeErr = err
@@ -677,6 +680,7 @@ func (p *v2DatagramConn) abort(err error) {
 		p.mu.Unlock()
 		p.cancel()
 		close(p.done)
+		p.sendMu.Unlock()
 		p.srv.mu.Lock()
 		if p.srv.v2Peers[p.peerKey] == p {
 			delete(p.srv.v2Peers, p.peerKey)

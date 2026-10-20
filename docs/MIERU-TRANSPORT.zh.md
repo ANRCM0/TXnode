@@ -10,6 +10,7 @@ GitHub Actions 功能、race、官方客户端或负载验收结论。不能据�
 `a2208ee7a38fb41d843a13ecdde858e67ef2f485`。以下路径均相对于该 commit：
 
 - `pkg/protocol/underlay_packet.go`：UDP 每包显式 nonce、metadata 与 payload 加密、padding。
+- `pkg/protocol/underlay_stream.go`：TCP underlay 共享隐式 nonce、按 session ID 分发与连接复用。
 - `pkg/protocol/session.go`：open/response 的序号占位、累计 ACK、窗口、数据重排和关闭。
 - `pkg/protocol/metadata.go`：32 字节 metadata；type 10/11 的低熵模式、mask、原始长度和旋转。
 - `pkg/protocol/low_entropy.go`、`underlay_base.go`：8 字节低熵编码、tag 保留和 canonical padding。
@@ -42,6 +43,13 @@ UDP underlay 会话带真实来源和当前快照 `AuthValid`，读写与重传�
 快照替换或 socket 关闭会取消旧 peer；相同凭据重新构造 handler 时保留旧 session
 identity tombstone，旧 open 不能仅通过换 nonce 再建旧会话。
 
+TCP underlay 使用一个认证密钥、唯一读游标和串行化写游标，多条逻辑 session 独立拥有
+业务序号、SOCKS 请求、关闭与 core relay 生命周期。只有首条服务端 record 附显式 nonce；
+后续 open/data/ACK/close 都沿同一游标前进。session 的 close request/response 不关闭
+underlay，已结束 session 的迟到控制帧也先完整解密以保持游标。每个新 session 重新检查
+当前认证快照并进入 `Server.ServeSession`。逻辑读写截止时间不会设置其他 session 的
+读截止时间；无法完整写出的加密 record 则关闭整个 underlay，禁止以失步游标继续发送。
+
 ## 两种 UDP 必须分别验收
 
 | 承载 | 应用业务 | 适配入口 |
@@ -68,6 +76,7 @@ identity tombstone，旧 open 不能仅通过换 nonce 再建旧会话。
 | 资源 | 候选默认上限/处理 |
 |---|---|
 | 同一监听的 peer | 1024，官方 v2 与旧 packet 模式共享总数；超限不建立新 peer |
+| TCP underlay 逻辑 session | 同时至多 64 个，每个接收队列至多 64 个 segment；队列溢出关闭对应 session，不静默丢业务字节继续传输 |
 | v2 未确认发送窗口 | 64 个 segment，同时遵守远端窗口 |
 | v2 接收重排/交付队列 | 合计 64 个 segment、256 KiB；超限保留累计 ACK 游标，等待发送端重试 |
 | v2 数据报发送大小 | 最多 1400 字节，同时尊重更小的显式 MTU；低熵扩展和 padding 计入该限额 |
@@ -110,6 +119,8 @@ traffic_pattern: >-
 |---|---|
 | `internal/dataplane/proto/mieru/entropy_test.go` | 固定 wire vector、旋转常量、四种模式、末片不足、padding 篡改、严格配置拒绝 |
 | `internal/dataplane/proto/mieru/v2_packet_test.go` | 乱序/重复/窗口、累计 ACK、独立重传 nonce、重传耗尽关闭、快照 replay、piggyback/延迟 SOCKS 请求进入统一 relay |
+| `internal/dataplane/proto/mieru/v2_tcp_test.go` | 同一 TCP underlay 的失败拨号后复用、empty-open、并发 CONNECT/UDP ASSOCIATE、独立 session 关闭与共享 nonce 连续性 |
+| `internal/dataplane/proto/mieru/v2_failure_test.go` | TCP 部分 record 写入后不可继续、UDP abort 等待发送边界 |
 | `TestInteropMieruOfficialUDPTransport` | 官方 v3.38.1 的 TCP-over-UDP 大流量、应用 UDP-over-UDP 跨 MTU、idle/reuse |
 | `TestInteropMieruOfficialTrafficPatterns` | TCP/UDP × 四种低熵模式；显式 nonce/padding/TCP 分段；双向 bulk 和应用 UDP |
 

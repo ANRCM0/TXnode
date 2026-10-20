@@ -285,6 +285,9 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) (*core.Session, err
 	_ = conn.SetReadDeadline(deadline)
 	br := bufio.NewReaderSize(conn, 4096)
 	if kk, plain, nonce, ok := h.v2Try(br); ok {
+		if h.packetRelay != nil {
+			return h.v2ServeTCP(ctx, conn, br, kk, plain, nonce)
+		}
 		return h.v2Handshake(conn, br, kk, plain, nonce)
 	}
 	conn = &bufConn{Conn: conn, r: br}

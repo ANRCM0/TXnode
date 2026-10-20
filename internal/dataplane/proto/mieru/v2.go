@@ -1,6 +1,6 @@
 package mieru
 
-// mieru protocol v2 (official client) — TCP, single session, XChaCha20-Poly1305
+// mieru protocol v2 (official client) — TCP records, XChaCha20-Poly1305
 // with implicit nonces. Derived from docs/protocol.md (mieru 3.38):
 //
 //	key: sha256(password || 0x00 || username) -> PBKDF2-64(sha256, salt =
@@ -375,6 +375,7 @@ func v2Socks5Code(err error) byte {
 // v2Conn is the record connection handed to the relay. It is both the session
 // net.Conn and the inner SOCKS5 responder.
 type v2Conn struct {
+	transport *v2TCPTransport
 	net.Conn
 	conn      net.Conn
 	rr        io.Reader
@@ -403,6 +404,10 @@ type v2Conn struct {
 	remainder []byte
 	closeOne  sync.Once
 	clientLow bool
+	dlmu      sync.Mutex
+	readDL    time.Time
+	writeDL   time.Time
+	wake      chan struct{}
 }
 
 // HandshakeSucceeded answers the inner SOCKS5 CONNECT after the relay dialed the
@@ -436,6 +441,7 @@ func (c *v2Conn) writeDataCount(p []byte) (int, error) {
 			n = c.mtu
 		}
 		if err := c.writeSegmentLocked(p[:n]); err != nil {
+			c.failWriteLocked()
 			return written, err
 		}
 		written += n
@@ -446,6 +452,13 @@ func (c *v2Conn) writeDataCount(p []byte) (int, error) {
 
 // writeSegmentLocked seals one dataServerToClient segment. Caller holds wmu.
 func (c *v2Conn) writeSegmentLocked(payload []byte) error {
+	if c.transport != nil {
+		c.transport.wmu.Lock()
+		defer c.transport.wmu.Unlock()
+		if !c.transport.valid() {
+			return io.ErrClosedPipe
+		}
+	}
 	if c.wseq == ^uint32(0) {
 		return errors.New("mieru: sequence space exhausted")
 	}
@@ -483,7 +496,7 @@ func (c *v2Conn) writeSegmentLocked(payload []byte) error {
 	out = append(out, prefix...)
 	out = append(out, sealedPayload...)
 	out = append(out, suffix...)
-	if err := c.pattern.writeTCP(c.conn, out); err != nil {
+	if err := c.writeWireLocked(out); err != nil {
 		return err
 	}
 	c.wseq++
@@ -494,10 +507,21 @@ func (c *v2Conn) writeSegmentLocked(payload []byte) error {
 // writeAckLocked replies to one client ACK with the current receive cursor.
 // Caller holds wmu.
 func (c *v2Conn) writeAckLocked() error {
+	if c.closed {
+		return io.ErrClosedPipe
+	}
+	if c.transport != nil {
+		c.transport.wmu.Lock()
+		defer c.transport.wmu.Unlock()
+		if !c.transport.valid() {
+			return io.ErrClosedPipe
+		}
+	}
 	meta := v2DataMeta(v2ProtoAckS2C, c.sessionID, c.wseq-1, c.clientNext, 65535, 0, 0, 0, 0)
 	sealed := c.w.Seal(nil, c.wn, meta, nil)
 	v2IncreaseNonce(c.wn)
-	if err := c.pattern.writeTCP(c.conn, sealed); err != nil {
+	if err := c.writeWireLocked(sealed); err != nil {
+		c.failWriteLocked()
 		return err
 	}
 	c.lastTX = time.Now()
@@ -530,6 +554,7 @@ func (c *v2Conn) heartbeatLoop(interval time.Duration) {
 		}
 		if time.Since(c.lastTX) >= interval {
 			if err := c.writeSegmentLocked(nil); err != nil {
+				c.failWriteLocked()
 				c.wmu.Unlock()
 				return
 			}
@@ -539,6 +564,9 @@ func (c *v2Conn) heartbeatLoop(interval time.Duration) {
 }
 
 func (c *v2Conn) Read(p []byte) (int, error) {
+	if c.transport != nil {
+		return c.readMultiplexed(p)
+	}
 	c.rmu.Lock()
 	defer c.rmu.Unlock()
 	if len(p) == 0 {
@@ -691,6 +719,9 @@ func (c *v2Conn) readLoop() {
 
 // CloseWrite sends a closeSessionRequest.
 func (c *v2Conn) CloseWrite() error {
+	if c.transport != nil {
+		return c.Close()
+	}
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
 	if c.closed {
@@ -699,11 +730,30 @@ func (c *v2Conn) CloseWrite() error {
 	meta := v2SessionMeta(v2ProtoCloseRq, c.sessionID, c.wseq, 0, 0, 0)
 	sealed := c.w.Seal(nil, c.wn, meta, nil)
 	v2IncreaseNonce(c.wn)
-	return c.pattern.writeTCP(c.conn, sealed)
+	err := c.writeWireLocked(sealed)
+	if err != nil {
+		c.failWriteLocked()
+	}
+	return err
+}
+
+// A failed record may have partially reached the peer, so its implicit nonce
+// cursor can never be resumed. Caller holds wmu; Close needs that same lock.
+func (c *v2Conn) failWriteLocked() {
+	c.closed = true
+	if c.transport != nil {
+		c.transport.close()
+	} else {
+		_ = c.conn.Close()
+	}
 }
 
 // Close closes the session. The reader is left to observe the transport EOF.
 func (c *v2Conn) Close() error {
+	if c.transport != nil {
+		c.transport.endSession(c, v2ProtoCloseRq)
+		return nil
+	}
 	c.closeOne.Do(func() {
 		close(c.done)
 		_ = c.conn.Close()
