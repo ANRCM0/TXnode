@@ -62,8 +62,18 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 | 用例 | 客户端 | 现象 | 编号 |
 |---|---|---|---|
 | TUIC | Mihomo | QUIC 建连后不发送 v5 认证帧（客户端实现差异） | TUIC-mihomo |
-| Mieru | 官方 mieru 3.38 | 官方客户端按 mieru 协议 v2 组帧（时间盐 PBKDF2 + XChaCha20 分段），与样本自研帧不兼容：`mieru: segment length … exceeds 32768` | MIERU-1 |
+| Mieru | 官方 mieru 3.38 | v2 鉴权/会话打开已实现并用探针验证（首段可解出 openSessionRequest + SOCKS5 目标）；官方客户端在 openSessionResponse 后不再发送数据，数据/ACK 阶段未互通 | MIERU-1 |
 | VLESS + HTTP/2 | — | Xray 26 已移除独立 h2 传输 | H2-removed |
+
+### Mieru v2 进度（MIERU-1）
+
+已按 `docs/protocol.md` 实现并验证：
+
+- `sha256(password || 0x00 || username)` → `PBKDF2-64(sha256, salt=sha256(be64(2 分钟取整时间)))`；
+- 首段 `[nonce 24][metadata 32+tag]` 可用四个时间窗解密（`TestMieruProtocolFirstSegment` 对官方客户端实测通过，payload 解出 `05 01 00 01 7f 00 00 01 00 01`）；
+- `openSessionRequest` → `openSessionResponse` 服务端已能应答（服务端日志确认 session 与目标地址）。
+
+未完成：官方客户端收到 openSessionResponse 后不发数据；需要继续对齐 `openSessionResponse` 的字段（seq/status/suffix）或数据阶段的窗口/ACK 语义。
 
 ## 尚未覆盖的互通项
 

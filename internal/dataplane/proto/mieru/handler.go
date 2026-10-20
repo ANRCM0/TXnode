@@ -1,6 +1,7 @@
 package mieru
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -245,6 +246,11 @@ func (h *Handler) checkReplay(ts, seq uint32) bool {
 
 // Handle parses the opening segment and returns the session.
 func (h *Handler) Handle(ctx context.Context, conn net.Conn) (*core.Session, error) {
+	br := bufio.NewReaderSize(conn, 4096)
+	if u, aead, plain, nonce, ok := h.v2Try(br); ok {
+		return h.v2Handshake(conn, br, u, aead, plain, nonce)
+	}
+	conn = &bufConn{Conn: conn, r: br}
 	if dl, ok := ctx.Deadline(); ok {
 		_ = conn.SetReadDeadline(dl)
 	} else {

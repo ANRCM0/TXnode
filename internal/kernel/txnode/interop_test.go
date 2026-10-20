@@ -1345,12 +1345,18 @@ func TestInteropMieruOfficialClient(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := append(os.Environ(), "MIERU_CONFIG_JSON_FILE="+cfgPath)
-	logFile, err := os.Create(filepath.Join(dir, "mieru.log"))
+	logPath := filepath.Join(dir, "mieru.log")
+	logFile, err := os.Create(logPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer logFile.Close()
-	start := exec.Command(bin, "start")
+	t.Cleanup(func() {
+		if b, err := os.ReadFile(logPath); err == nil && len(b) > 0 {
+			t.Logf("mieru client log:\n%s", b)
+		}
+	})
+	start := exec.Command(bin, "run")
 	start.Env = env
 	// The mieru daemon keeps inherited descriptors open; give it a file rather
 	// than a pipe so Run() returns when the parent exits.
@@ -1380,10 +1386,10 @@ func TestInteropMieruOfficialClient(t *testing.T) {
 	}
 	body, err := fetchThroughE(t, addr, origin.Listener.Addr().String())
 	if err != nil {
-		// The official client uses mieru's protocol v2 framing (time-salted
-		// PBKDF2 + XChaCha20 segments); the replica speaks the sample's own
-		// framing, so the segment header is rejected before authentication.
-		t.Skipf("Mieru official-client framing incompatible (MIERU-1): %v", err)
+		// v2 authentication and session open are implemented (see v2.go and the
+		// probe test), but the official client stops after openSessionResponse:
+		// the data/ack phase is not yet interoperable.
+		t.Skipf("Mieru v2 data phase pending (MIERU-1): %v", err)
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
