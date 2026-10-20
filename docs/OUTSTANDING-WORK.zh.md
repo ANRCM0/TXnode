@@ -42,6 +42,13 @@ SS 紧凑历史缓存通过原预算，不能代替后续 mux 和 splice 修复�
 不 eligible。新增固定时钟的有效完成和保守拒绝回归。旧 EOF 的 journal 未保留
 当时完整 last stamp，修复机制不能冒充旧失败的最终因果证明。
 
+`6efec53` 的 Go/race、quick/full、runtime stability、七项故障、镜像冒烟与固定
+Core C2 已通过；严格 full 仍为 36 个适用顶层、24 个子项通过及两项不适用。
+正式 A/B 在旧树构建时因 Xray 模块 HTTP/2 下载错误中止，尚无样本；独立候选
+events/download 的 coordinator 返回 evidence 错误，账量未确认。测量工具随后
+增加两侧相同的只读原 meter 状态快照，以及有界模块预取和锁文件摘要核对；
+失败仍为失败，不变更容量、等待、模式或验收阈值。
+
 | 范围 | 已编写实现 | 待完成或待验收 |
 | --- | --- | --- |
 | S0 严格门禁 | 固定客户端/用例清单、quick/full、父子结果核对、意外 Skip 拒绝、SIGKILL 精确阶段握手 | 新候选 Go/race、严格矩阵、Core C2 均须通过；已支持链路的 EOF 不再跳过 |

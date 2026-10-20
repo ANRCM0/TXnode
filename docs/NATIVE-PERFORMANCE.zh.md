@@ -51,7 +51,7 @@
 - 旧基线：`a1ad2695e1143269168c36a274283de3342e91c7`，选择 sing-box 服务端。
 - 候选：工作流解析后的完整 SHA，选择唯一原生 txnode 服务端。
 
-两份源码均以固定 Go `1.26.0`、`GOTOOLCHAIN=local`、`CGO_ENABLED=0`、同一组 `-trimpath -ldflags=-s -w` 及既有 release build tags 编译。各 checkout 仅注入本候选版本携带的相同测量 server 模板及各自的 factory 适配；不修改原数据面或模块依赖。报告记录工具、模板、业务二进制和测量二进制摘要，避免将注入的测量入口冒充历史仓库的原生功能。
+两份源码均以固定 Go `1.26.0`、`GOTOOLCHAIN=local`、`CGO_ENABLED=0`、同一组 `-trimpath -ldflags=-s -w` 及既有 release build tags 编译。各 checkout 注入本候选版本携带的相同测量 server、只读 bucket 诊断 helper 和各自的 factory 适配；不修改原数据面或模块依赖。报告记录工具、模板、业务二进制和测量二进制摘要，避免将注入的测量入口冒充历史仓库的原生功能。每侧构建前最多三次模块预取，失败间隔五秒，保留完整日志及逐次退出码；耗尽仍为 incomplete，且预取改变任一已提交模块锁即失败。
 
 固定 SOCKS5/RFC1929、IPv4 回环、无 TLS、相同目标服务与 buffer。两侧都安装相同的结构化 `127.0.0.1/32 → direct` 路由，避免旧基线的默认私网封锁改变被测路径。每种模式分别执行上传、下载、短连接、长连接；每个样本 2 秒预热、10 秒计量、4 个客户端线程。至少 5 组采样，组内按旧→新、新→旧交替。每次使用新进程和全新的状态目录，预热计量与正式计量使用同一个配置。事件存储仅在 benchmark 显式设为 1 GiB；生产默认 64 MiB 和其他队列上限不变，容量耗尽仍然失败。usage_v2 使用合法的 91 秒授权窗口，预热加采样不得超过 60 秒；不绕过 NativeWindow 的 120 秒上限。
 
@@ -73,7 +73,7 @@
 
 固定初始调查阈值为候选吞吐不低于旧基线的 95%，CPU/GiB 不高于 105%。5 组中任一侧吞吐或 CPU 的变异系数超过 10% 则为未决；时钟分辨率不足、缺少样本或模式失败则为未完成。越过阈值要求复现和说明，不自动断言根因。
 
-`report.json` / `report.md` 保留每一份原始样本、失败原因、来源、构建参数和比较范围；每份样本的目录还保留 `server.log`、`sample.json`、持久化状态与 `evidence.json`。工作流保留所有失败产物。任意模式缺样本、语义投影不完整、噪声或阈值越界均使性能 job 失败；events 没有成功豁免。
+`report.json` / `report.md` 保留每一份原始样本、失败原因、来源、构建参数和比较范围；每份样本的目录还保留 `server.log`、`sample.json`、持久化状态与 `evidence.json`。events 在 Node Stop 后和 coordinator Close 返回后各写一份有界诊断，保留原 meter 的 Reason/FirstGap 及 coordinator/store 状态；Close 失败仍保留原错误并使样本失败。两个快照分别加锁，不代表原子状态，也不进入吞吐或 CPU 采样窗口。工作流保留所有失败产物。任意模式缺样本、语义投影不完整、噪声或阈值越界均使性能 job 失败；events 没有成功豁免。
 
 正式五组结束后，两侧各另跑相同参数的 ordinary/download 和 events/download CPU profile 诊断，共四份。harness 只在设置 `TXNODE_NATIVE_AB_CPU_PROFILE` 时启用 Go CPU profiler，覆盖该独立进程的启动、预热、测量与正常关闭。`diagnostic-*` 目录保留 `cpu.pprof`、`cpu-top.txt`、二进制及 profile SHA、样本状态和 `metadata.json`；这些样本单列于 `diagnostics`，不进入正式 120 份样本、比率或 accepted 计数。events 诊断仍执行同一物理字节投影核对，不退化为 ordinary。正式 usage_v2/short 存在失败时，另对两侧各做一次固定诊断，保留失败阶段、错误类型和服务端退出状态；独立诊断成功不消除原失败。
 

@@ -39,6 +39,27 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def prefetch_modules(checkout, output, side):
+    log_path = output / ("prefetch-%s.log" % side)
+    evidence = {"status": "incomplete", "log": log_path.name, "attempts": []}
+    with log_path.open("w") as log:
+        for attempt in range(1, 4):
+            result = subprocess.run(["go", "mod", "download"], cwd=checkout,
+                                    text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+            log.write("=== attempt %d ===\n" % attempt)
+            log.write(result.stdout)
+            log.write("\n=== exit %d ===\n" % result.returncode)
+            log.flush()
+            evidence["attempts"].append({"attempt": attempt, "status": "succeeded" if result.returncode == 0 else "failed",
+                                         "exit_code": result.returncode, "log": log_path.name})
+            if result.returncode == 0:
+                evidence["status"] = "complete"
+                break
+            if attempt < 3:
+                time.sleep(5)
+    return evidence
+
+
 def receive(conn, length):
     data = bytearray()
     while len(data) < length:
@@ -438,15 +459,28 @@ def run(args):
             harness.mkdir()
             shutil.copyfile(ROOT / "scripts/native-acceptance-server.go.tmpl", harness / "main.go")
             shutil.copyfile(ROOT / ("scripts/native-acceptance-%s.go.tmpl" % side), harness / "factory.go")
+            shutil.copyfile(ROOT / "scripts/native-acceptance-bucket-diagnostic.go.tmpl",
+                            checkout / "internal/usagebucket/native_ab_diagnostic.go")
             binary = output / ("server-" + side)
             app = output / ("tx-node-" + side)
+            module_locks = {name: digest(checkout / name) for name in ("go.mod", "go.sum")}
+            prefetch = prefetch_modules(checkout, output, side)
+            build = {"status": "incomplete", "sha": sha, "prefetch": prefetch,
+                     "module_lock_sha256": module_locks}
+            report["builds"][side] = build
+            if any(digest(checkout / name) != expected for name, expected in module_locks.items()):
+                build["error"] = "module prefetch changed checked-in module locks"
+                continue
+            if prefetch["status"] != "complete":
+                build["error"] = "module prefetch failed after three attempts"
+                continue
             try:
                 command(["go", "build", *FLAGS, "-o", str(binary), "./cmd/native-ab"], checkout)
                 command(["go", "build", *FLAGS, "-o", str(app), "./cmd/tx-node"], checkout)
-                report["builds"][side] = {"status": "built", "sha": sha, "binary_sha256": digest(app), "binary_bytes": app.stat().st_size,
-                                          "harness_sha256": digest(binary), "harness_bytes": binary.stat().st_size}
+                build.update(status="built", binary_sha256=digest(app), binary_bytes=app.stat().st_size,
+                             harness_sha256=digest(binary), harness_bytes=binary.stat().st_size)
             except subprocess.CalledProcessError as error:
-                report["builds"][side] = {"status": "incomplete", "error": error.output}
+                build["error"] = error.output
         if any(report["builds"][side]["status"] != "built" for side in ("legacy", "candidate")):
             return report
         if args.diagnostics_only:

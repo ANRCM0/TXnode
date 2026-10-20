@@ -1,0 +1,30 @@
+package usagebucket
+
+// NativeABDiagnostic is a bounded observational snapshot for the temporary A/B harness.
+// The independently locked statuses do not describe one atomic owner transition.
+type NativeABDiagnostic struct {
+	Schema      string            `json:"schema"`
+	Coordinator CoordinatorStatus `json:"coordinator"`
+	Store       StoreStatus       `json:"store"`
+	StoreExists bool              `json:"store_exists"`
+	Meters      []Status          `json:"meters"`
+}
+
+// NativeABSnapshot exists only in disposable measurement checkouts.
+func (c *Coordinator) NativeABSnapshot() NativeABDiagnostic {
+	var meters [8]*Meter
+	c.mu.Lock()
+	n := copy(meters[:], c.meters)
+	c.mu.Unlock()
+
+	snapshot := NativeABDiagnostic{
+		Schema: "txnode-native-bucket-diagnostic/v1",
+		Meters: make([]Status, 0, n),
+	}
+	for _, meter := range meters[:n] {
+		snapshot.Meters = append(snapshot.Meters, meter.Status())
+	}
+	snapshot.Coordinator = c.Status()
+	snapshot.Store, snapshot.StoreExists = c.StoreSnapshot()
+	return snapshot
+}
