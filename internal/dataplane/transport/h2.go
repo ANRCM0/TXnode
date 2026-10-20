@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/ANRCM0/TX-Node/internal/dataplane/core"
 )
@@ -94,9 +95,26 @@ func (i *Inbound) pathOK(path string) bool {
 // methods after net.Conn match naive.Stream structurally.
 type connectStream struct {
 	*httpStream
-	auth      string
-	authority string
-	padding   bool
+	auth        string
+	authority   string
+	padding     bool
+	writeClosed atomic.Bool
+}
+
+func (c *connectStream) Read(p []byte) (int, error) {
+	n, err := c.httpStream.Read(p)
+	if err != nil && c.writeClosed.Load() {
+		// Closing our request body wakes the upload reader with HTTP/2's
+		// private "body closed by handler" error. It is a graceful local EOF,
+		// not a relay fault that should reset the flushed response stream.
+		err = io.EOF
+	}
+	return n, err
+}
+
+func (c *connectStream) CloseWrite() error {
+	c.writeClosed.Store(true)
+	return c.httpStream.CloseWrite()
 }
 
 func (c *connectStream) ProxyAuthorization() string { return c.auth }
