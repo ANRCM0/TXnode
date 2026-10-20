@@ -58,6 +58,9 @@ needed.
 Upload only `sources.json` and `result.json` from the evidence directory.
 `sources.json` records candidate Node SHA/tree, fixed Core SHA/tree, kernel and
 installation mode. `result.json` records the assertions and observations hash.
+On failure, `result.json` records `failed_stage`, the test process exit code,
+test source line numbers and predefined diagnostic labels. Raw log lines and
+exception messages are excluded from this public summary.
 Keep fixture tokens, private keys, `fixture.json`, stage acknowledgement files,
 spools and process logs private; they are not public CI artifacts.
 

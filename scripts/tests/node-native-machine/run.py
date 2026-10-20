@@ -4,6 +4,7 @@ from pathlib import Path
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -51,6 +52,49 @@ def artifact(name,value):
     try:os.fsync(directory)
     finally:os.close(directory)
 
+active_stage = 'setup'
+
+def failure_summary(category):
+    # Private logs can contain fixture credentials. Publish only fixed labels,
+    # source line numbers, and process status, never log text or exception text.
+    diagnostics = {'category': category, 'assertions': [], 'signals': []}
+    log = evidence / 'node-live.log'
+    if log.is_file():
+        text = log.read_text(errors='replace')
+        source = (node / 'internal/machine/native_core_machine_live_test.go').read_text().splitlines()
+        for match in re.finditer(r'native_core_machine_live_test\.go:([0-9]+):', text):
+            line = int(match.group(1))
+            label = 'assertion'
+            if 0 < line <= len(source):
+                for function, kind in (
+                    ('machineCoreWait', 'readiness'), ('machineCoreDial', 'protocol_dial'),
+                    ('machineCoreEcho', 'protocol_echo'), ('machineCoreAlive', 'device_report'),
+                    ('machineCoreBarrier', 'barrier'), ('NewChecked', 'orchestrator_create')):
+                    if function in source[line - 1]:
+                        label = kind
+                        break
+            item = {'line': line, 'category': label}
+            if item not in diagnostics['assertions']:
+                diagnostics['assertions'].append(item)
+        for needle, label in (
+            ('actual machine readiness deadline', 'readiness_timeout'),
+            ('machine exited before readiness', 'orchestrator_early_exit'),
+            ('connection refused', 'connection_refused'), ('i/o timeout', 'io_timeout'),
+            ('context deadline exceeded', 'context_deadline'),
+            ('x509:', 'certificate_verification'), ('unknown cipher', 'cipher_configuration'),
+            ('unknown kernel', 'kernel_configuration'), ('panic:', 'panic')):
+            if needle in text:
+                diagnostics['signals'].append(label)
+    diagnostics['test_exit_code'] = None if test is None else test.poll()
+    result = {'schema': 'txnode-core-machine-result/v1', 'status': 'failed',
+              'failed_stage': active_stage, 'core_revision': actual,
+              'node_revision': node_revision, 'core_tree': core_tree, 'node_tree': node_tree,
+              'core_installation_mode': 'legacy', 'node_kernel': 'txnode',
+              'native_core_installation_admission': False, 'diagnostics': diagnostics}
+    if not (evidence / 'result.json').exists():
+        artifact('result.json', result)
+    print(json.dumps(result, sort_keys=True), flush=True)
+
 def command(name,args,cwd,timeout=180):
     path=evidence/(name+'.log')
     with path.open('xb')as out:
@@ -95,6 +139,8 @@ def request(path,method,payload,headers):
     except urllib.error.HTTPError as error:return error.code,json.loads(error.read(4<<20))
 
 def barrier(stage,action):
+    global active_stage
+    active_stage = stage
     deadline=time.monotonic()+25;path=evidence/(stage+'.ready.json')
     while not path.exists():
         if test.poll()is not None:raise RuntimeError('NATIVE_MACHINE_EXITED_BEFORE_'+stage.upper())
@@ -230,6 +276,9 @@ try:
     goresult=json.loads((evidence/'machine-live-result.json').read_text())
     artifact('result.json',{'actual_core_workerman_machine':True,'core_revision':actual,'node_revision':node_revision,'core_tree':core_tree,'node_tree':node_tree,'core_installation_mode':'legacy','node_kernel':'txnode','actual_transparent_trusted_tls':True,'actual_protocols':['vless','vmess'],'database':'txboard_native_machine_test','shared_machine_upgrade_count':sum(e['kind']=='ws-upgrade'and e['status']==101 for e in events),'ws_only_configuration_delivery':True,'native_core_installation_admission':False,'transient_disconnect_503_recovery':True,'successor_socket_device_facts':True,'foreign_machine_scope_matrix':True,'membership_withdrawal_proved':True,'machine_token_denial_proved':True,'original_batches_replayed':required,'actual_sql_unique_batch_rows':len(required),'independent_full_billing_reconciliation':False,'production_pki_attested':False,'go_result':goresult,'stage_states':stage_states,'observations_sha256':hashlib.sha256(observation.read_bytes()).hexdigest()})
     print('Native actual Core/Workerman two-node Machine gate passed; public result contains no credentials.')
+except Exception:
+    failure_summary('runner_failure')
+    raise
 finally:
     for process in reversed(processes):
         if process.poll()is None:
