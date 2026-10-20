@@ -95,11 +95,14 @@ func spliceOne(ctx context.Context, dst, src *net.TCPConn, count func(int64)) er
 	}
 	defer pr.Close()
 	defer pw.Close()
+	// Fd switches an os.File back to blocking mode, so obtain each descriptor
+	// once before enabling non-blocking splice callbacks.
+	prFD, pwFD := int(pr.Fd()), int(pw.Fd())
 	// The splice pipe is used from the raw callbacks in non-blocking mode.
-	if err := unix.SetNonblock(int(pr.Fd()), true); err != nil {
+	if err := unix.SetNonblock(prFD, true); err != nil {
 		return err
 	}
-	if err := unix.SetNonblock(int(pw.Fd()), true); err != nil {
+	if err := unix.SetNonblock(pwFD, true); err != nil {
 		return err
 	}
 
@@ -113,7 +116,7 @@ func spliceOne(ctx context.Context, dst, src *net.TCPConn, count func(int64)) er
 		var n int64
 		var serr error
 		readErr := srcRC.Read(func(fd uintptr) bool {
-			n, serr = unix.Splice(int(fd), nil, int(pw.Fd()), nil, copyBuf, unix.SPLICE_F_MOVE|unix.SPLICE_F_NONBLOCK)
+			n, serr = unix.Splice(int(fd), nil, pwFD, nil, copyBuf, unix.SPLICE_F_MOVE|unix.SPLICE_F_NONBLOCK)
 			if serr == unix.EAGAIN {
 				return false // wait for readability and retry
 			}
@@ -134,7 +137,7 @@ func spliceOne(ctx context.Context, dst, src *net.TCPConn, count func(int64)) er
 		for off < n {
 			var werr error
 			writeErr := dstRC.Write(func(fd uintptr) bool {
-				m, e := unix.Splice(int(pr.Fd()), nil, int(fd), nil, int(n-off), unix.SPLICE_F_MOVE|unix.SPLICE_F_NONBLOCK)
+				m, e := unix.Splice(prFD, nil, int(fd), nil, int(n-off), unix.SPLICE_F_MOVE|unix.SPLICE_F_NONBLOCK)
 				if e == unix.EAGAIN {
 					return false // socket buffer full; wait then retry
 				}
