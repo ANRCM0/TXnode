@@ -37,7 +37,7 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 
 ## 结果（Xray 26.3.27 / Mihomo v1.19.32 / sing-box 1.14.3，本机回环）
 
-通过（12）：
+通过（14）：
 
 | 用例 | 客户端 | 备注 |
 |---|---|---|
@@ -45,6 +45,8 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 | VMess over TCP / WebSocket | Xray | AEAD、分块掩码、padding、authlen 均已对齐 |
 | Trojan + TLS | Xray | 证书 pinning |
 | Shadowsocks（aes-128-gcm） | Xray | 经典 AEAD |
+| VLESS + gRPC | Xray | Hunk protobuf 帧（0x0a + varint 长度） |
+| VLESS + XHTTP（auto/stream-one） | Xray | auto = stream-up 双流配对（`x_session`） |
 | VLESS + REALITY | Xray / Mihomo | 参考 TLS 栈；借用站点握手记录 ≤8 KiB |
 | Hysteria2 | Mihomo / sing-box | TCP 请求帧与上游一致 |
 
@@ -52,11 +54,7 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 
 | 用例 | 客户端 | 现象 | 编号 |
 |---|---|---|---|
-| VLESS + gRPC | Xray | 客户端能拨号，服务端未完成数据流（连接被关闭） | GRPC-1 |
-| VLESS + HTTP/2 | — | Xray 26 已移除独立 h2 传输（迁移到 XHTTP stream-one） | H2-removed |
-| VLESS + XHTTP | Xray | 中继已建立、上游响应未回传（模式/流复用待查） | XHTTP-1 |
-| AnyTLS | sing-box | 服务端 `anytls: not an AnyTLS client`（协议版本差异） | ANYTLS-1 |
-| TUIC | Mihomo / sing-box | QUIC 会话未建立（服务端无 accept 日志） | TUIC-1 |
+| Hysteria2 UDP | sing-box | SOCKS5 UDP ASSOCIATE 请求超时；datagram 仍是复刻自有帧格式 | HY2-UDP-1 |
 | Shadowsocks 2022 | Xray / sing-box | 客户端 method 创建失败或 identity/PSK 夹具不匹配 | SS2022-1 |
 
 ## 尚未覆盖的互通项
@@ -65,8 +63,8 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 
 1. **Mieru / Snell / TUIC / AnyTLS / Naive / SS2022**：Mihomo 或官方客户端可用，但需要额外的服务端参数夹具；
 2. **VLESS Encryption**：样本/复刻只有服务端实现，客户端侧在 Xray 新版本中，需要按其参数生成用例；
-3. **传输矩阵**：目前只测了 tcp/ws；grpc/h2/xhttp/httpupgrade/TLS 组合待补；
-4. **UDP 数据面**：Hysteria2 UDP、TUIC UDP、xudp 的互通需要各自的客户端用例。
+3. **UDP 数据面**：Hysteria2 UDP 帧格式待对齐上游 UDPMessage（4B session、2B packet、frag、varint 地址字符串）；TUIC UDP 与 xudp 待补；
+4. **传输剩余**：h2 已被上游移除，其余组合已覆盖。
 
 修复顺序建议：先补传输组合（同协议、低成本），再补 UDP，最后处理 VLESS Encryption。
 

@@ -259,8 +259,15 @@ func (s *xhttpServer) serveHTTP(ctx context.Context, conn net.Conn, w http.Respo
 	case xhttpStreamUp, xhttpPacketUp:
 		// fallthrough to the pair logic below
 	case xhttpAuto:
-		if r.Method == http.MethodGet && id != "" {
-			s.pairDownload(ctx, conn, id, w, r)
+		// Xray's client maps "auto" to stream-up: one POST carries the uplink and
+		// a paired GET (same x_session) carries the downlink. A request without a
+		// session id is the stream-one shape.
+		if id != "" {
+			if r.Method == http.MethodGet {
+				s.pairDownload(ctx, conn, id, w, r)
+			} else {
+				s.pairUpload(ctx, conn, id, w, r, fl)
+			}
 			return
 		}
 		s.streamOne(ctx, conn, w, r)

@@ -105,6 +105,42 @@ type grpcConn struct {
 	pending []byte
 }
 
+// Hunk is Xray's gRPC message body: a single protobuf field 1 holding bytes
+// (MultiHunk repeats the same field). A message therefore carries
+// [0x0a][varint length][data]; plain stream bytes are never sent raw.
+const hunkDataField = 1
+
+func decodeHunks(msg []byte) ([]byte, error) {
+	var out []byte
+	for len(msg) > 0 {
+		tag, n := binary.Uvarint(msg)
+		if n <= 0 {
+			return nil, errors.New("transport: bad gRPC protobuf tag")
+		}
+		msg = msg[n:]
+		if tag>>3 != hunkDataField || tag&7 != 2 {
+			return nil, fmt.Errorf("transport: unexpected gRPC protobuf field %d", tag>>3)
+		}
+		l, n2 := binary.Uvarint(msg)
+		if n2 <= 0 || l > grpcMaxMessage || int(l) > len(msg)-n2 {
+			return nil, errors.New("transport: bad gRPC protobuf length")
+		}
+		out = append(out, msg[n2:n2+int(l)]...)
+		msg = msg[n2+int(l):]
+	}
+	return out, nil
+}
+
+func encodeHunk(data []byte) []byte {
+	var tmp [binary.MaxVarintLen64]byte
+	out := make([]byte, 0, 1+binary.MaxVarintLen64+len(data))
+	out = append(out, byte(hunkDataField<<3|2))
+	n := binary.PutUvarint(tmp[:], uint64(len(data)))
+	out = append(out, tmp[:n]...)
+	out = append(out, data...)
+	return out
+}
+
 func (c *grpcConn) Read(p []byte) (int, error) {
 	for len(c.pending) == 0 {
 		var hdr [5]byte
@@ -122,7 +158,11 @@ func (c *grpcConn) Read(p []byte) (int, error) {
 		if _, err := io.ReadFull(c.body, msg); err != nil {
 			return 0, fmt.Errorf("transport: unexpected gRPC message: %w", err)
 		}
-		c.pending = msg
+		data, err := decodeHunks(msg)
+		if err != nil {
+			return 0, err
+		}
+		c.pending = data
 	}
 	n := copy(p, c.pending)
 	c.pending = c.pending[n:]
@@ -130,16 +170,27 @@ func (c *grpcConn) Read(p []byte) (int, error) {
 }
 
 func (c *grpcConn) Write(p []byte) (int, error) {
-	var hdr [5]byte
-	binary.BigEndian.PutUint32(hdr[1:], uint32(len(p)))
-	if _, err := c.w.Write(hdr[:]); err != nil {
-		return 0, err
-	}
-	if _, err := c.w.Write(p); err != nil {
-		return 0, err
+	const maxChunk = grpcMaxMessage / 2
+	written := 0
+	for len(p) > 0 {
+		n := len(p)
+		if n > maxChunk {
+			n = maxChunk
+		}
+		body := encodeHunk(p[:n])
+		var hdr [5]byte
+		binary.BigEndian.PutUint32(hdr[1:], uint32(len(body)))
+		if _, err := c.w.Write(hdr[:]); err != nil {
+			return written, err
+		}
+		if _, err := c.w.Write(body); err != nil {
+			return written, err
+		}
+		written += n
+		p = p[n:]
 	}
 	c.fl.Flush()
-	return len(p), nil
+	return written, nil
 }
 
 func (c *grpcConn) Close() error { return c.body.Close() }
