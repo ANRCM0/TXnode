@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"os"
 	"sync"
 
 	"golang.org/x/sys/unix"
@@ -17,7 +16,7 @@ import (
 // core.spliceRelay @0x7b8280. Here both ends must reduce to a *net.TCPConn.
 //
 // Each direction is: splice(socket -> pipe) followed by splice(pipe -> socket),
-// using a private os.Pipe. When the syscall is unavailable (ENOSYS/EINVAL) the
+// using a private pipe. When the syscall is unavailable (ENOSYS/EINVAL) the
 // function reports ok=false so Pipe falls back to io.Copy.
 func splicePipe(ctx context.Context, a, b net.Conn, up, down func(int64)) (bool, error) {
 	ta, tb := tcpWriter(a), tcpWriter(b)
@@ -89,22 +88,15 @@ func spliceOne(ctx context.Context, dst, src *net.TCPConn, count func(int64)) er
 	if err != nil {
 		return err
 	}
-	pr, pw, err := os.Pipe()
-	if err != nil {
+	// Only the socket RawConns own readiness waits. The non-blocking splice
+	// pipe needs no Go poller registration for its own readability/writability.
+	var pipeFDs [2]int
+	if err := unix.Pipe2(pipeFDs[:], unix.O_CLOEXEC|unix.O_NONBLOCK); err != nil {
 		return err
 	}
-	defer pr.Close()
-	defer pw.Close()
-	// Fd switches an os.File back to blocking mode, so obtain each descriptor
-	// once before enabling non-blocking splice callbacks.
-	prFD, pwFD := int(pr.Fd()), int(pw.Fd())
-	// The splice pipe is used from the raw callbacks in non-blocking mode.
-	if err := unix.SetNonblock(prFD, true); err != nil {
-		return err
-	}
-	if err := unix.SetNonblock(pwFD, true); err != nil {
-		return err
-	}
+	prFD, pwFD := pipeFDs[0], pipeFDs[1]
+	defer unix.Close(prFD)
+	defer unix.Close(pwFD)
 
 	var pipeBuf [copyBuf]byte
 	_ = pipeBuf

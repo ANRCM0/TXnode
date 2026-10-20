@@ -83,6 +83,9 @@
 `6f8ae3c` 的独立下载 profile 总 CPU 为原生 6.85 秒、旧侧 5.95 秒；原生
 `spliceOne` 累计 5.15 秒，其中重复 `os.File.Fd` / `SetBlocking` 约 0.45 秒。
 Linux splice 实现将管道描述符保留到本次 relay 结束，避免在每段 I/O 中重复取描述符；
+内部管道使用带 CLOEXEC/NONBLOCK 的原始 Pipe2 描述符，不注册 Go 文件 poller；
+等待仍由两端 socket 的 RawConn 负责。真实 TCP 回归检查双向字节、上传 FIN 后下载、
+取消终止及返回后没有新增 pipe 遗留。
 TCP 两方向的计数闭包按会话创建一次，逐段仍调用原 Tracker/OnTraffic 计数。
 `RawConn` 的等待、EAGAIN、取消和半关闭边界继续保持。
 profile 支持定位开销，不证明修复后的性能结果，新候选仍按
