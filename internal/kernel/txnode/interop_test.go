@@ -9,14 +9,14 @@ import (
 	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha256"
+
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
-	"errors"
+
 	"fmt"
 	"io"
 	"log/slog"
@@ -809,36 +809,7 @@ func base64Raw16() string {
 	return base64.StdEncoding.EncodeToString([]byte("0123456789abcdef"))
 }
 
-func TestInteropMihomoTUIC(t *testing.T) {
-	mihomoBinary(t)
-	if skipInteropKnownGap(t, "TUIC-MIHOMO") {
-		return
-	}
-	origin := startInteropOrigin(t)
-	cert := selfSignedPEM(t)
-	port := startInteropKernel(t, &model.NodeSpec{
-		Protocol: "tuic", TLS: 1, ServerName: "localhost", CongestionControl: "bbr",
-	}, cert)
-	proxy := "  - name: interop\n" +
-		"    type: tuic\n" +
-		"    server: 127.0.0.1\n" +
-		"    port: " + strconv.Itoa(port) + "\n" +
-		"    uuid: " + interopUUID + "\n" +
-		"    password: " + interopUUID + "\n" +
-		"    sni: localhost\n" +
-		"    skip-cert-verify: true\n" +
-		"    alpn: [h3]\n" +
-		"    congestion-controller: bbr\n" +
-		"    udp: true\n"
-	socks := startMihomo(t, proxy)
-	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
-	if err != nil {
-		t.Fatalf("TUIC QUIC session not established with Mihomo: %v", err)
-	}
-	if body != "interop-ok" {
-		t.Fatalf("body = %q", body)
-	}
-}
+func TestInteropMihomoTUIC(t *testing.T) { mihomoBinary(t); testMihomoTUIC(t) }
 
 func singBoxBinary(t *testing.T) string {
 	t.Helper()
@@ -1214,14 +1185,8 @@ func TestInteropSingBoxMux(t *testing.T) {
 	}
 }
 
-// TestInteropSingBoxMuxUDP records why the address-header mux carries no UDP:
-// sing-box sends its own packet-stream header (`03 | dest | source | len |
-// data`), and the reference Xray server does not answer it either — the capture
-// against Xray 26.3.27 shows the request and no reply. UDP-on-mux therefore
-// stays unsupported instead of being guessed.
-func TestInteropSingBoxMuxUDP(t *testing.T) {
-	skipInteropKnownGap(t, "MUX-UDP")
-}
+// Fixed sing-box v1.14.3 / sing-mux caf09fe32475 packet stream framing.
+func TestInteropSingBoxMuxUDP(t *testing.T) { singBoxBinary(t); testSingBoxMuxUDP(t) }
 
 // TestInteropXrayMux drives Xray Mux.Cool (v1.mux.cool): the node parses the
 // [len][session][status][network][target] frames and relays each session.
@@ -1292,34 +1257,7 @@ func TestInteropSingBoxSnell(t *testing.T) {
 	}
 }
 
-func TestInteropSingBoxNaive(t *testing.T) {
-	singBoxBinary(t)
-	if skipInteropKnownGap(t, "NAIVE-CERT") {
-		return
-	}
-	origin := startInteropOrigin(t)
-	cert, _ := selfSignedFiles(t)
-	spki := certPublicKeySHA256(t, cert.CertPEM)
-	port := startInteropKernel(t, &model.NodeSpec{Protocol: "naive", Network: "h2", TLS: 1, ServerName: "localhost"}, cert)
-	outbound := map[string]any{
-		"type": "naive", "tag": "interop",
-		"server": "127.0.0.1", "server_port": port,
-		"username": "interop", "password": interopUUID,
-		"tls": map[string]any{"enabled": true, "server_name": "localhost",
-			"certificate_public_key_sha256": []any{spki}},
-	}
-	if !singBoxSupports(t, outbound) {
-		t.Fatal("sing-box Naive client configuration rejected")
-	}
-	socks := startSingBoxClient(t, outbound)
-	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
-	if err != nil {
-		t.Fatalf("Naive interop failed: %v", err)
-	}
-	if body != "interop-ok" {
-		t.Fatalf("body = %q", body)
-	}
-}
+func TestInteropSingBoxNaive(t *testing.T) { singBoxBinary(t); testSingBoxNaiveTrust(t) }
 
 func TestInteropXrayVLESSEncryption(t *testing.T) {
 	bin := xrayBinary(t)
@@ -1396,24 +1334,8 @@ func singBoxCheck(t *testing.T, outbound map[string]any) (string, error) {
 	return string(out), err
 }
 
-// certPublicKeySHA256 produces the SPKI digest used by the current Naive
-// certificate fixture. That client's trust behavior remains quarantined.
-func certPublicKeySHA256(t *testing.T, certPEM []byte) string {
-	t.Helper()
-	block, _ := pem.Decode(certPEM)
-	if block == nil {
-		t.Fatal("no PEM block")
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
-	return base64.StdEncoding.EncodeToString(sum[:])
-}
-
 // TestInteropCurlNaiveH2 drives the naive inbound with curl's HTTP/2 CONNECT
-// proxy mode independently of the quarantined sing-box certificate fixture.
+// proxy mode independently of the sing-box certificate fixture.
 func TestInteropCurlNaiveH2(t *testing.T) {
 	bin := interopCurlBinary(t)
 	version, err := exec.Command(bin, "--disable", "--version").CombinedOutput()
@@ -1593,27 +1515,8 @@ func TestInteropMieruOfficialIdle(t *testing.T) {
 // TestInteropMieruOfficialDialFailure checks that an unreachable destination
 // reaches the inner SOCKS5 client as an error instead of a stalled session.
 func TestInteropMieruOfficialDialFailure(t *testing.T) {
-	origin := startInteropOrigin(t)
-	port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "mieru", Transport: "tcp"}, kernel.TLSCert{},
-		[]model.UserSpec{{ID: 1, UUID: "interop:secret"}})
-	addr := startMieruOfficial(t, port, "TCP")
-
-	// Prove the complete client/kernel path works before closing our own target.
-	target := origin.Listener.Addr().String()
-	if got := fetchThrough(t, addr, target); got != "interop-ok" {
-		t.Fatalf("positive-control body = %q", got)
-	}
-	origin.Close()
-	conn, err := socksNoAuthConnectE(addr, target)
-	if err == nil {
-		_ = conn.Close()
-		t.Fatal("socks connect to a closed port succeeded")
-	}
-	var replyErr *socksConnectReplyError
-	if !errors.As(err, &replyErr) || replyErr.reply != 0x05 {
-		t.Fatalf("closed target must return SOCKS5 REP=0x05 (connection refused), got: %v", err)
-	}
-	t.Logf("closed target returned the expected SOCKS5 REP=0x%02x", replyErr.reply)
+	mieruBinary(t)
+	testMieruOfficialDialFailure(t)
 }
 
 // TestInteropMieruOfficialBulk moves 1 MiB each way through one session so the

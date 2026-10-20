@@ -392,9 +392,12 @@ func (c *client) acceptDatagrams() {
 		if len(raw) < frameHeaderLen {
 			continue
 		}
+		if raw[0] != version || raw[1] != cmdPacket {
+			continue
+		}
 		// The datagram body is the frame without the 2-byte (version, command)
 		// stream prefix: the same fields as readFrameFromStream.
-		f, err := readFrameFromStream(bytes.NewReader(raw[2:]))
+		f, err := parsePacketBody(raw[2:])
 		if err != nil {
 			continue
 		}
@@ -554,6 +557,7 @@ func (c *client) packet(str *quic.ReceiveStream) {
 		if err != nil {
 			return
 		}
+		f.stream = true
 		c.deliverPacket(f)
 	}
 }
@@ -620,6 +624,7 @@ func (c *client) connect(str *quic.Stream) {
 	sess := &core.Session{
 		UserID:    int(c.userIDLocked()),
 		AuthValid: c.authValid,
+		SourceIP:  c.sourceIP(),
 		Dest:      dest,
 		Conn:      &streamConn{Stream: str, conn: c.conn},
 	}
@@ -676,8 +681,11 @@ func readFrameFromStream(r io.Reader) (*frame, error) {
 	f := &frame{
 		assocID:   binary.BigEndian.Uint16(hdr[0:2]),
 		pktID:     binary.BigEndian.Uint16(hdr[2:4]),
-		fragID:    hdr[4],
-		fragTotal: hdr[5],
+		fragTotal: hdr[4],
+		fragID:    hdr[5],
+	}
+	if f.fragTotal > 1 && f.fragID >= f.fragTotal || f.fragTotal <= 1 && f.fragID != 0 {
+		return nil, errors.New("tuic: invalid fragment index")
 	}
 	payloadLen := int(binary.BigEndian.Uint16(hdr[6:8]))
 	var typeBuf [1]byte

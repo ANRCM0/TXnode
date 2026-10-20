@@ -23,10 +23,7 @@ type interopGap struct {
 
 var interopKnownGaps = map[string]interopGap{
 	"TestInteropXrayVLESSH2Removed": {id: "H2-REMOVED", reason: "standalone HTTP/2 transport removed by pinned Xray; covered by XHTTP"},
-	"TestInteropSingBoxMuxUDP":      {id: "MUX-UDP", reason: "address-header mux UDP is not accepted; Mux.Cool/XUDP is separate"},
 	"TestInteropSingBoxMieru":       {id: "SINGBOX-MIERU", reason: "pinned sing-box has no mieru outbound; official mieru covers TCP", diagnostic: true},
-	"TestInteropMihomoTUIC":         {id: "TUIC-MIHOMO", reason: "pinned Mihomo TUIC compatibility remains unaccepted", diagnostic: true},
-	"TestInteropSingBoxNaive":       {id: "NAIVE-CERT", reason: "pinned sing-box Naive certificate fixture remains unaccepted", diagnostic: true},
 }
 
 func interopMode(t interopTest, name string) bool {
@@ -179,12 +176,12 @@ func TestKnownInteropGapPolicy(t *testing.T) {
 		name, id, diagnostic string
 		fail, skip           bool
 	}{
-		{name: "TestInteropMihomoTUIC", id: "TUIC-MIHOMO", skip: true},
-		{name: "TestInteropMihomoTUIC", id: "TUIC-MIHOMO", diagnostic: "1"},
+		{name: "TestInteropSingBoxMieru", id: "SINGBOX-MIERU", skip: true},
+		{name: "TestInteropSingBoxMieru", id: "SINGBOX-MIERU", diagnostic: "1"},
 		{name: "TestInteropXrayVLESSH2Removed", id: "H2-REMOVED", diagnostic: "1", skip: true},
 		{name: "TestInteropSingBoxTUIC", id: "TUIC-MIHOMO", fail: true},
 		{name: "TestInteropMihomoTUIC", id: "NAIVE-CERT", fail: true},
-		{name: "TestInteropMihomoTUIC", id: "TUIC-MIHOMO", diagnostic: "true", fail: true},
+		{name: "TestInteropSingBoxMieru", id: "SINGBOX-MIERU", diagnostic: "true", fail: true},
 	} {
 		t.Run(test.name+"/"+test.id+"/"+test.diagnostic, func(t *testing.T) {
 			t.Setenv("TXNODE_INTEROP_DIAGNOSTIC_GAPS", test.diagnostic)

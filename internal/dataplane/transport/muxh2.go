@@ -9,6 +9,7 @@ import (
 
 	"github.com/ANRCM0/TX-Node/internal/dataplane/core"
 	"github.com/ANRCM0/TX-Node/internal/dataplane/mux"
+	"github.com/ANRCM0/TX-Node/internal/dataplane/socks"
 )
 
 // ServeMuxH2 is the h2/gRPC half of a mux port: mux.Serve sniffs kind 2 and
@@ -45,7 +46,10 @@ func ServeMuxH2(ctx context.Context, conn net.Conn, parent *core.Session, relay 
 		}
 		if flags&mux.FlagUDP != 0 {
 			sess.Conn = nil
-			sess.Packets = mux.NewPackets(stream)
+			sess.Packets = mux.NewServerPackets(stream, flags, dest)
+			if flags&mux.FlagAddr != 0 {
+				sess.Dest = socks.Addr{}
+			}
 		}
 		if err := relay(ctx, sess); err != nil && !errors.Is(err, io.EOF) {
 			return

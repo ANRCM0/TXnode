@@ -27,9 +27,14 @@ type udpSession struct {
 	done    chan struct{}
 	seen    atomic.Int64
 	packets chan queuedPacket
+	stream  bool
 
-	fragMu sync.Mutex
-	frags  map[uint8]*fragSet
+	fragMu      sync.Mutex
+	frags       map[uint16]*fragSet
+	recent      map[uint16]time.Time
+	recentIDs   [256]uint16
+	recentTimes [256]time.Time
+	recentNext  uint8
 }
 
 type queuedPacket struct {
@@ -38,13 +43,20 @@ type queuedPacket struct {
 }
 
 type fragSet struct {
-	total uint8
-	parts map[uint8][]byte
+	total   uint8
+	parts   map[uint8][]byte
+	addr    socks.Addr
+	bytes   int
+	created time.Time
 }
 
 func (s *udpSession) Close() error {
 	s.once.Do(func() {
 		close(s.done)
+		s.fragMu.Lock()
+		clear(s.frags)
+		clear(s.recent)
+		s.fragMu.Unlock()
 		if s.socket != nil {
 			_ = s.socket.Close()
 		}
@@ -62,12 +74,13 @@ func (c *client) deliverPacket(f *frame) {
 	c.mu.Unlock()
 
 	if sess == nil {
-		if !f.hasAddr || f.addr.IsZero() {
-			// No association and no address to create one from.
+		if (!f.hasAddr || f.addr.IsZero()) && !(c.srv.opts.Relay != nil && f.fragTotal > 1 && f.fragID < f.fragTotal) {
+			// A unified packet relay can wait for fragment zero to supply the
+			// address even when continuation fragments arrive first.
 			return
 		}
 		var err error
-		sess, err = c.openSession(f.assocID, f.addr)
+		sess, err = c.openSession(f.assocID, f.addr, f.stream)
 		if err != nil {
 			c.srv.log.Debug("tuic: udp dial failed", "dest", f.addr.String(), "error", err)
 			return
@@ -75,17 +88,16 @@ func (c *client) deliverPacket(f *frame) {
 	}
 	sess.seen.Store(time.Now().UnixNano())
 
-	payload := f.payload
-	if f.fragTotal > 0 {
-		payload = sess.reassemble(f.fragID, f.fragTotal, f.payload)
-		if payload == nil {
-			return
-		}
+	payload, addr := sess.reassemble(f)
+	if payload == nil {
+		return
 	}
 	if c.srv.opts.Relay != nil {
-		addr := f.addr
-		if !f.hasAddr || addr.IsZero() {
+		if addr.IsZero() {
 			addr = sess.dest
+		}
+		if addr.IsZero() {
+			return
 		}
 		packet := queuedPacket{addr: addr, payload: append([]byte(nil), payload...)}
 		select {
@@ -99,7 +111,7 @@ func (c *client) deliverPacket(f *frame) {
 }
 
 // openSession dials the destination and starts the return pump.
-func (c *client) openSession(id uint16, dest socks.Addr) (*udpSession, error) {
+func (c *client) openSession(id uint16, dest socks.Addr, stream bool) (*udpSession, error) {
 	var conn net.Conn
 	if c.srv.opts.Relay == nil {
 		raddr, err := net.ResolveUDPAddr("udp", dest.String())
@@ -117,8 +129,9 @@ func (c *client) openSession(id uint16, dest socks.Addr) (*udpSession, error) {
 		dest:    dest,
 		socket:  conn,
 		done:    make(chan struct{}),
-		frags:   make(map[uint8]*fragSet),
+		frags:   make(map[uint16]*fragSet),
 		packets: make(chan queuedPacket, 64),
+		stream:  stream,
 	}
 	s.seen.Store(time.Now().UnixNano())
 	c.mu.Lock()
@@ -126,6 +139,11 @@ func (c *client) openSession(id uint16, dest socks.Addr) (*udpSession, error) {
 		c.mu.Unlock()
 		_ = s.Close()
 		return old, nil
+	}
+	if len(c.sessions) >= 256 {
+		c.mu.Unlock()
+		_ = s.Close()
+		return nil, errors.New("tuic: UDP association limit")
 	}
 	c.sessions[id] = s
 	userID := int(c.userID)
@@ -200,15 +218,22 @@ func (s *udpSession) pump() {
 //	send the fragments as datagrams; on any other error fall back to a
 //	unidirectional stream with a 10 s write deadline.
 func (s *udpSession) writePacket(payload []byte, addr socks.Addr) error {
+	if len(payload) > 65535 {
+		return errors.New("tuic: UDP packet is too large")
+	}
 	base := &frame{
-		assocID: s.id,
-		pktID:   uint16(s.pktID.Add(1)),
+		assocID:   s.id,
+		pktID:     uint16(s.pktID.Add(1)),
+		fragTotal: 1,
 		// The peer needs the origin address back: a SOCKS5 UDP relay writes it
 		// into the reply header, and dropping it would leave the association
 		// without a source for the echoed datagram.
 		addr:    addr,
 		hasAddr: true,
 		payload: payload,
+	}
+	if s.stream {
+		return s.writeStream(base)
 	}
 	first := base.marshal()
 	err := s.c.conn.SendDatagram(first)
@@ -218,7 +243,11 @@ func (s *udpSession) writePacket(payload []byte, addr socks.Addr) error {
 	var tooLarge *quic.DatagramTooLargeError
 	if errors.As(err, &tooLarge) {
 		chunk := fragChunkSize(int(tooLarge.MaxDatagramPayloadSize))
-		for _, f := range fragment(base, payload, chunk) {
+		fragments := fragment(base, payload, chunk)
+		if len(fragments) == 0 {
+			return errors.New("tuic: UDP fragment limit")
+		}
+		for _, f := range fragments {
 			if e := s.c.conn.SendDatagram(f.marshal()); e != nil {
 				s.c.srv.log.Debug("tuic: fragmented datagram failed", "error", e)
 				return e
@@ -255,30 +284,92 @@ func (s *udpSession) writeStream(f *frame) error {
 	return st.Close()
 }
 
-// reassemble stores a fragment and returns the payload once all arrived.
-func (s *udpSession) reassemble(id, total uint8, part []byte) []byte {
-	if total == 0 || id >= total {
-		return nil
+// Packet IDs, not fragment counts, separate interleaved datagrams. A bounded
+// set expires incomplete packets and preserves the first fragment's address.
+func (s *udpSession) reassemble(f *frame) ([]byte, socks.Addr) {
+	if f.fragTotal > 1 && f.fragID >= f.fragTotal || f.fragTotal <= 1 && f.fragID != 0 {
+		return nil, socks.Addr{}
 	}
 	s.fragMu.Lock()
 	defer s.fragMu.Unlock()
-	set := s.frags[total]
+	select {
+	case <-s.done:
+		return nil, socks.Addr{}
+	default:
+	}
+	now := time.Now()
+	if seen, ok := s.recent[f.pktID]; ok && now.Sub(seen) < 30*time.Second {
+		return nil, socks.Addr{}
+	}
+	if f.fragTotal <= 1 {
+		if len(f.payload) > 65535 {
+			return nil, socks.Addr{}
+		}
+		s.rememberPacket(f.pktID, now)
+		return append([]byte{}, f.payload...), f.addr
+	}
+	for id, set := range s.frags {
+		if now.Sub(set.created) > 10*time.Second {
+			delete(s.frags, id)
+		}
+	}
+	set := s.frags[f.pktID]
 	if set == nil {
-		set = &fragSet{total: total, parts: make(map[uint8][]byte)}
-		s.frags[total] = set
+		if len(s.frags) >= 64 {
+			return nil, socks.Addr{}
+		}
+		set = &fragSet{total: f.fragTotal, parts: make(map[uint8][]byte), created: now}
+		if s.frags == nil {
+			s.frags = make(map[uint16]*fragSet)
+		}
+		s.frags[f.pktID] = set
 	}
-	cp := make([]byte, len(part))
-	copy(cp, part)
-	set.parts[id] = cp
-	if len(set.parts) < int(total) {
-		return nil
+	if set.total != f.fragTotal {
+		delete(s.frags, f.pktID)
+		return nil, socks.Addr{}
 	}
-	var out []byte
-	for i := uint8(0); i < total; i++ {
+	if _, ok := set.parts[f.fragID]; ok {
+		return nil, socks.Addr{}
+	}
+	if set.bytes+len(f.payload) > 65535 {
+		delete(s.frags, f.pktID)
+		return nil, socks.Addr{}
+	}
+	if f.fragID == 0 {
+		if !f.hasAddr || f.addr.IsZero() {
+			delete(s.frags, f.pktID)
+			return nil, socks.Addr{}
+		}
+		set.addr = f.addr
+	}
+	set.parts[f.fragID] = append([]byte(nil), f.payload...)
+	set.bytes += len(f.payload)
+	if len(set.parts) < int(set.total) {
+		return nil, socks.Addr{}
+	}
+	out := make([]byte, 0, set.bytes)
+	for i := uint8(0); i < set.total; i++ {
 		out = append(out, set.parts[i]...)
 	}
-	delete(s.frags, total)
-	return out
+	delete(s.frags, f.pktID)
+	s.rememberPacket(f.pktID, now)
+	return out, set.addr
+}
+
+// Called under fragMu. The bounded completion window rejects replayed packet
+// fragments without retaining an ever-growing history or blocking ID wrap.
+func (s *udpSession) rememberPacket(id uint16, now time.Time) {
+	if s.recent == nil {
+		s.recent = make(map[uint16]time.Time)
+	}
+	index := s.recentNext
+	oldID, oldTime := s.recentIDs[index], s.recentTimes[index]
+	if oldTime == s.recent[oldID] {
+		delete(s.recent, oldID)
+	}
+	s.recentIDs[index], s.recentTimes[index] = id, now
+	s.recent[id] = now
+	s.recentNext++
 }
 
 // sweep closes associations idle for longer than the configured timeout.

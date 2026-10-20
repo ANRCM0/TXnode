@@ -1,23 +1,11 @@
 package mux
 
-// UDP over mux.
-//
-// Framing recovered from (*Packets).ReadPacket @0x7764a0 and WritePacket
-// @0x7767a0:
-//
-//	[LEN BE16][socks address][payload]
-//
-// LEN covers the address and the payload (WritePacket rejects anything above
-// 0xffff), the address is the same encoding mux stream requests use
-// (socks.AppendAddr / socks.ReadAddr), and each side keeps its own 300 s read
-// deadline.
-//
-// UNVERIFIED: how the peer marks a stream as UDP (readStreamRequest exposes a
-// boolean at +0x60 that the sample consults before dispatching to Packets); this
-// package exposes Packets for the caller that owns that decision.
+// Wire reference: sing-box v1.14.3 pins sing-mux caf09fe32475.
+// Fixed-target UDP: [payload length BE16][payload]; packet-address UDP:
+// [SOCKS address][payload length BE16][payload]. The first server reply
+// starts with stream status, outside the datagram length.
 
 import (
-	"bytes"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -25,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ANRCM0/TX-Node/internal/dataplane/pool"
 	"github.com/ANRCM0/TX-Node/internal/dataplane/socks"
 )
 
@@ -34,56 +21,94 @@ const (
 	packetsMaxSize = 0xffff
 )
 
-// Packets adapts one mux stream to core.PacketStream.
+// Packets strips framing before the core relay meters application datagrams.
 type Packets struct {
-	c  net.Conn
-	mu sync.Mutex
+	c               net.Conn
+	dest            socks.Addr
+	packetAddr      bool
+	server          bool
+	responseRead    bool
+	responseWritten bool
+	readMu          sync.Mutex
+	writeMu         sync.Mutex
 }
 
-// NewPackets wraps a mux stream.
-func NewPackets(c net.Conn) *Packets { return &Packets{c: c} }
+// NewPackets wraps packet-address framing without a stream response exchange.
+// Callers serving a client request must use NewServerPackets instead.
+func NewPackets(c net.Conn) *Packets {
+	return &Packets{c: c, packetAddr: true, responseRead: true, responseWritten: true}
+}
 
-// ReadPacket reads one datagram and its destination address.
+// NewServerPackets accepts the UDP mode selected by the stream flags.
+func NewServerPackets(c net.Conn, flags uint16, dest socks.Addr) *Packets {
+	return &Packets{c: c, dest: dest, packetAddr: flags&FlagAddr != 0, server: true, responseRead: true}
+}
+
+func newClientPackets(c net.Conn, flags uint16, dest socks.Addr) *Packets {
+	return &Packets{c: c, dest: dest, packetAddr: flags&FlagAddr != 0, responseWritten: true}
+}
+
 func (p *Packets) ReadPacket(buf []byte) (int, socks.Addr, error) {
+	p.readMu.Lock()
+	defer p.readMu.Unlock()
 	_ = p.c.SetReadDeadline(time.Now().Add(packetsIdle))
+	if !p.responseRead {
+		if err := readStreamResponse(p.c); err != nil {
+			return 0, socks.Addr{}, err
+		}
+		p.responseRead = true
+	}
+	addr := p.dest
+	if p.packetAddr {
+		var err error
+		addr, err = ReadAddr(p.c)
+		if err != nil {
+			return 0, socks.Addr{}, err
+		}
+	}
 	var hdr [2]byte
 	if _, err := io.ReadFull(p.c, hdr[:]); err != nil {
 		return 0, socks.Addr{}, err
 	}
 	n := int(binary.BigEndian.Uint16(hdr[:]))
-	body := pool.Get(n)
-	defer pool.Put(body)
-	if _, err := io.ReadFull(p.c, body); err != nil {
-		return 0, socks.Addr{}, err
+	if n > len(buf) {
+		// Preserve framing if a caller continues after rejecting this datagram.
+		if _, err := io.CopyN(io.Discard, p.c, int64(n)); err != nil {
+			return 0, socks.Addr{}, err
+		}
+		return 0, socks.Addr{}, io.ErrShortBuffer
 	}
-	br := bytes.NewReader(body)
-	addr, err := ReadAddr(br)
-	if err != nil {
-		return 0, socks.Addr{}, err
-	}
-	data := body[len(body)-br.Len():]
-	if len(data) > len(buf) {
-		data = data[:len(buf)]
-	}
-	copy(buf, data)
-	return len(data), addr, nil
+	n, err := io.ReadFull(p.c, buf[:n])
+	return n, addr, err
 }
 
-// WritePacket writes one datagram to addr.
 func (p *Packets) WritePacket(data []byte, addr socks.Addr) error {
-	head := AppendAddr(nil, addr)
-	if len(head)+len(data) > packetsMaxSize {
+	if len(data) > packetsMaxSize {
 		return errors.New("mux: UDP packet is too large")
 	}
-	frame := make([]byte, 2, 2+len(head)+len(data))
-	binary.BigEndian.PutUint16(frame, uint16(len(head)+len(data)))
-	frame = append(frame, head...)
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	frame := make([]byte, 0, 1+260+2+len(data))
+	if p.server && !p.responseWritten {
+		frame = append(frame, 0)
+	}
+	if p.packetAddr {
+		if addr.IsZero() {
+			addr = p.dest
+		}
+		if addr.IsZero() || len(addr.Host) > 255 {
+			return errors.New("mux: invalid UDP packet address")
+		}
+		frame = AppendAddr(frame, addr)
+	}
+	frame = binary.BigEndian.AppendUint16(frame, uint16(len(data)))
 	frame = append(frame, data...)
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	_, err := p.c.Write(frame)
-	return err
+	if err := writeFull(p.c, frame); err != nil {
+		_ = p.c.Close()
+		return err
+	}
+	p.responseWritten = true
+	return nil
 }
 
-// Close closes the underlying stream.
 func (p *Packets) Close() error { return p.c.Close() }

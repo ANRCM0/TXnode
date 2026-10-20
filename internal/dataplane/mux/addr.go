@@ -21,11 +21,11 @@ const (
 	atypIPv6   = 4
 )
 
-// Stream request flags (readStreamRequest @0x774de0 reads two big-endian bytes
-// before the address; Serve reads bit0 as UDP and bit1 as an inner mux stream).
+// sing-mux caf09fe32475: UDP streams optionally carry an address per packet.
 const (
-	FlagUDP = 1 << 0
-	FlagMux = 1 << 1
+	FlagUDP  = 1 << 0
+	FlagAddr = 1 << 1
+	FlagMux  = FlagAddr // Historical name retained for source compatibility.
 )
 
 // WriteStreamRequest writes [flags BE16][SOCKS5 address].
@@ -46,6 +46,9 @@ func ReadStreamRequest(r io.Reader) (flags uint16, a socks.Addr, err error) {
 		return 0, socks.Addr{}, err
 	}
 	flags = binary.BigEndian.Uint16(hdr[:])
+	if flags & ^uint16(FlagUDP|FlagAddr) != 0 || flags&FlagAddr != 0 && flags&FlagUDP == 0 {
+		return 0, socks.Addr{}, fmt.Errorf("mux: invalid stream flags 0x%x", flags)
+	}
 	a, err = ReadAddr(r)
 	return flags, a, err
 }
