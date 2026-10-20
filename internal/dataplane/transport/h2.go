@@ -23,6 +23,30 @@ func (h *h2Handler) Handle(ctx context.Context, conn net.Conn) (*core.Session, e
 	// Each HTTP/2 stream is a session of its own, so the connection is served
 	// in place and the sessions are handed to the relay hook.
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodConnect {
+			// naive: HTTP/2 CONNECT with Basic auth. The protocol handler
+			// recognises this stream through its structural interface.
+			stream, err := newHTTPStream(w, r)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			defer stream.Close()
+			w.WriteHeader(http.StatusOK)
+			stream.flusher.Flush()
+			cs := &connectStream{httpStream: stream, auth: r.Header.Get("Proxy-Authorization"), authority: connectAuthority(r)}
+			sess, err := h.next.Handle(ctx, cs)
+			if err != nil || sess == nil {
+				return
+			}
+			if sess.Conn == nil {
+				sess.Conn = cs
+			}
+			if err := h.in.relaySession(ctx, sess); err != nil && !errors.Is(err, io.EOF) {
+				h.in.logger().Debug("h2 connect ended", "err", err)
+			}
+			return
+		}
 		if !h.in.pathOK(r.URL.Path) || !hostAllowed(h.in.Host, r.Host) {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -64,4 +88,27 @@ func (h *h2Handler) Handle(ctx context.Context, conn net.Conn) (*core.Session, e
 
 func (i *Inbound) pathOK(path string) bool {
 	return pathAllowed(i.Path, path)
+}
+
+// connectStream adapts an HTTP/2 CONNECT request to the naive inbound: the
+// request body is the uplink and the response writer is the downlink. The
+// methods after net.Conn match naive.Stream structurally.
+type connectStream struct {
+	*httpStream
+	auth      string
+	authority string
+}
+
+func (c *connectStream) ProxyAuthorization() string { return c.auth }
+func (c *connectStream) Authority() string          { return c.authority }
+func (c *connectStream) Accept() net.Conn           { return c }
+
+func connectAuthority(r *http.Request) string {
+	if r.Host != "" {
+		return r.Host
+	}
+	if r.URL != nil {
+		return r.URL.Host
+	}
+	return ""
 }

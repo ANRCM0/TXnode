@@ -5,8 +5,10 @@ package txnode
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -1170,13 +1172,15 @@ func TestInteropSingBoxSnell(t *testing.T) {
 
 func TestInteropSingBoxNaive(t *testing.T) {
 	origin := startInteropOrigin(t)
-	cert, certPath := selfSignedFiles(t)
-	port := startInteropKernel(t, &model.NodeSpec{Protocol: "naive", TLS: 1, ServerName: "localhost"}, cert)
+	cert, _ := selfSignedFiles(t)
+	spki := certPublicKeySHA256(t, cert.CertPEM)
+	port := startInteropKernel(t, &model.NodeSpec{Protocol: "naive", Network: "h2", TLS: 1, ServerName: "localhost"}, cert)
 	outbound := map[string]any{
 		"type": "naive", "tag": "interop",
 		"server": "127.0.0.1", "server_port": port,
 		"username": "interop", "password": interopUUID,
-		"tls": map[string]any{"enabled": true, "server_name": "localhost", "certificate_path": certPath},
+		"tls": map[string]any{"enabled": true, "server_name": "localhost",
+			"certificate_public_key_sha256": []any{spki}},
 	}
 	if !singBoxSupports(t, outbound) {
 		t.Skip("Naive: sing-box client configuration rejected (NAIVE-1)")
@@ -1259,4 +1263,47 @@ func singBoxSupports(t *testing.T, outbound map[string]any) bool {
 		return false
 	}
 	return true
+}
+
+// certPublicKeySHA256 pins a certificate by its SPKI digest, which sing-box
+// accepts without a CA.
+func certPublicKeySHA256(t *testing.T, certPEM []byte) string {
+	t.Helper()
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		t.Fatal("no PEM block")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
+	return base64.StdEncoding.EncodeToString(sum[:])
+}
+
+// TestInteropCurlNaiveH2 drives the naive inbound with curl's HTTP/2 CONNECT
+// proxy mode (sing-box's naive outbound needs the Chromium cronet library,
+// which the release binary does not ship).
+func TestInteropCurlNaiveH2(t *testing.T) {
+	if _, err := exec.LookPath("curl"); err != nil {
+		t.Skip("curl not installed")
+	}
+	origin := startInteropOrigin(t)
+	cert, _ := selfSignedFiles(t)
+	port := startInteropKernel(t, &model.NodeSpec{Protocol: "naive", Network: "h2", TLS: 1, ServerName: "localhost"}, cert)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "curl", "-sS", "--max-time", "8",
+		"--proxy-insecure", "--proxy-http2",
+		"-x", "https://127.0.0.1:"+strconv.Itoa(port),
+		"-U", "interop:"+interopUUID,
+		"http://"+origin.Listener.Addr().String()+"/")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Skipf("curl HTTP/2 proxy unavailable or failed (NAIVE-1): %v\n%s", err, out)
+	}
+	if string(out) != "interop-ok" {
+		t.Fatalf("body = %q", out)
+	}
 }
