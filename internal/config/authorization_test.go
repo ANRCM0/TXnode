@@ -13,7 +13,7 @@ import (
 func TestNativeAuthorizationConfigurationIsExplicitAndBounded(t *testing.T) {
 	key := ed25519.NewKeyFromSeed(make([]byte, 32))
 	root := t.TempDir()
-	base := Config{Panel: PanelConfig{Provider: "txboard", URL: "https://panel.example.test", NodeID: 42}, Kernel: KernelConfig{Type: "singbox", ConfigDir: root}, Authorization: AuthorizationConfig{Enabled: true, StateDir: filepath.Join(root, "auth"), PublicKey: base64.RawURLEncoding.EncodeToString(key.Public().(ed25519.PublicKey)), KeyID: "native-key", KeyEpoch: "1", CoreInstanceID: "core-instance-fixture", Provider: AuthorizationProviderConfig{Endpoint: "https://provider.example.test", ProviderID: "primary-provider", ProviderInstanceEpoch: "1", CAFile: filepath.Join(root, "ca.pem"), ClientCert: filepath.Join(root, "node.pem"), ClientKey: filepath.Join(root, "node.key")}}}
+	base := Config{Panel: PanelConfig{Provider: "txboard", URL: "https://panel.example.test", NodeID: 42}, Kernel: KernelConfig{Type: "txnode", ConfigDir: root}, Authorization: AuthorizationConfig{Enabled: true, StateDir: filepath.Join(root, "auth"), PublicKey: base64.RawURLEncoding.EncodeToString(key.Public().(ed25519.PublicKey)), KeyID: "native-key", KeyEpoch: "1", CoreInstanceID: "core-instance-fixture", Provider: AuthorizationProviderConfig{Endpoint: "https://provider.example.test", ProviderID: "primary-provider", ProviderInstanceEpoch: "1", CAFile: filepath.Join(root, "ca.pem"), ClientCert: filepath.Join(root, "node.pem"), ClientKey: filepath.Join(root, "node.key")}}}
 	if err := base.ValidateAuthorization(); err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +55,7 @@ func TestNativeAuthorizationConfigurationIsExplicitAndBounded(t *testing.T) {
 			}
 		})
 	}
-	for _, kernel := range []string{"singbox", "xray"} {
+	for _, kernel := range []string{"txnode", "txnode"} {
 		c := base
 		c.Kernel.Type = kernel
 		if err := c.ValidateAuthorization(); err != nil {
@@ -65,7 +65,7 @@ func TestNativeAuthorizationConfigurationIsExplicitAndBounded(t *testing.T) {
 }
 
 func TestLoadRootRefusesTopLevelAuthorizationWithInstancesWithoutSilentDowngrade(t *testing.T) {
-	child := Config{Panel: PanelConfig{Provider: "txboard", URL: "https://panel.example.test", Token: "synthetic-node-token", NodeID: 42}, Kernel: KernelConfig{Type: "singbox", ConfigDir: t.TempDir()}}
+	child := Config{Panel: PanelConfig{Provider: "txboard", URL: "https://panel.example.test", Token: "synthetic-node-token", NodeID: 42}, Kernel: KernelConfig{Type: "txnode", ConfigDir: t.TempDir()}}
 	root := RootConfig{Config: Config{Authorization: AuthorizationConfig{Enabled: true}}, Instances: []Config{child}}
 	body, err := yaml.Marshal(root)
 	if err != nil {
@@ -87,8 +87,8 @@ func TestLoadRootRefusesTopLevelAuthorizationWithInstancesWithoutSilentDowngrade
 func TestLoadRootPreservesExplicitPerInstanceAuthorization(t *testing.T) {
 	key := ed25519.NewKeyFromSeed(make([]byte, 32))
 	public := base64.RawURLEncoding.EncodeToString(key.Public().(ed25519.PublicKey))
-	signed := Config{Panel: PanelConfig{Provider: "txboard", URL: "https://panel.example.test", Token: "synthetic-node-token", NodeID: 42}, Kernel: KernelConfig{Type: "singbox", ConfigDir: filepath.Join(t.TempDir(), "signed")}, Authorization: AuthorizationConfig{Enabled: true, StateDir: filepath.Join(t.TempDir(), "authority"), CoreInstanceID: "core-instance-fixture", KeyID: "native-key", KeyEpoch: "1", PublicKey: public, Provider: AuthorizationProviderConfig{Endpoint: "https://provider.example.test", ProviderID: "primary-provider", ProviderInstanceEpoch: "1", CAFile: filepath.Join(t.TempDir(), "ca.pem"), ClientCert: filepath.Join(t.TempDir(), "node.pem"), ClientKey: filepath.Join(t.TempDir(), "node.key")}}}
-	ordinary := Config{Panel: PanelConfig{Provider: "txboard", URL: "https://panel.example.test", Token: "synthetic-other-node", NodeID: 43}, Kernel: KernelConfig{Type: "xray", ConfigDir: filepath.Join(t.TempDir(), "ordinary")}}
+	signed := Config{Panel: PanelConfig{Provider: "txboard", URL: "https://panel.example.test", Token: "synthetic-node-token", NodeID: 42}, Kernel: KernelConfig{Type: "txnode", ConfigDir: filepath.Join(t.TempDir(), "signed")}, Authorization: AuthorizationConfig{Enabled: true, StateDir: filepath.Join(t.TempDir(), "authority"), CoreInstanceID: "core-instance-fixture", KeyID: "native-key", KeyEpoch: "1", PublicKey: public, Provider: AuthorizationProviderConfig{Endpoint: "https://provider.example.test", ProviderID: "primary-provider", ProviderInstanceEpoch: "1", CAFile: filepath.Join(t.TempDir(), "ca.pem"), ClientCert: filepath.Join(t.TempDir(), "node.pem"), ClientKey: filepath.Join(t.TempDir(), "node.key")}}}
+	ordinary := Config{Panel: PanelConfig{Provider: "txboard", URL: "https://panel.example.test", Token: "synthetic-other-node", NodeID: 43}, Kernel: KernelConfig{Type: "txnode", ConfigDir: filepath.Join(t.TempDir(), "ordinary")}}
 	root := RootConfig{Instances: []Config{signed, ordinary}}
 	body, err := yaml.Marshal(root)
 	if err != nil {

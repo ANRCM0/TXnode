@@ -19,9 +19,6 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/authorization"
 	"github.com/ANRCM0/TX-Node/internal/config"
 	"github.com/ANRCM0/TX-Node/internal/usagev2"
-	"github.com/sagernet/sing-vmess/vless"
-	"github.com/sagernet/sing/common/logger"
-	M "github.com/sagernet/sing/common/metadata"
 )
 
 // The CI runner uses production admission, HTTP routes, queue jobs, Provider
@@ -38,13 +35,13 @@ func TestNativeC2RuntimeEndToEnd(t *testing.T) {
 		SecondaryPort int `json:"secondary_port"`
 		OriginPort    int `json:"origin_port"`
 	}
-	liveProtocolDecode(t, filepath.Join(directory, "fixture.json"), &fixture)
+	nativeC2Decode(t, filepath.Join(directory, "fixture.json"), &fixture)
 	var bundle struct {
 		Connections []struct {
 			UUID string `json:"uuid"`
 		} `json:"connections"`
 	}
-	liveProtocolDecode(t, filepath.Join(directory, "subscription.json"), &bundle)
+	nativeC2Decode(t, filepath.Join(directory, "subscription.json"), &bundle)
 	if fixture.NodeID != 1 || len(bundle.Connections) != 2 || len(bundle.Connections[0].UUID) != 36 {
 		t.Fatal("invalid native C2 consumer fixture")
 	}
@@ -141,8 +138,8 @@ func TestNativeC2RuntimeEndToEnd(t *testing.T) {
 			t.Fatal("native C2 signed billing grant missing")
 		}
 		uuid := current.Users[0].UUID
-		raw, stream := liveProtocolDial(t, "vless", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
-			uuid, M.ParseSocksaddr(origin.Addr().String()))
+		raw, stream := nativeC2VLESSDial(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
+			uuid, origin.Addr())
 		t.Cleanup(func() { raw.Close() })
 		t.Cleanup(func() { stream.Close() })
 		echo(stream)
@@ -423,11 +420,7 @@ func TestNativeC2RuntimeEndToEnd(t *testing.T) {
 		t.Fatal("native C2 rotation closed the new listener")
 	}
 	_ = raw.SetDeadline(time.Now().Add(time.Second))
-	client, err := vless.NewClient(renewedUUID, "", logger.NOP())
-	if err != nil {
-		t.Fatal("retired credential fixture malformed")
-	}
-	retired, err := client.DialConn(raw, M.ParseSocksaddr(origin.Addr().String()))
+	retired, err := nativeC2VLESSClient(raw, renewedUUID, origin.Addr())
 	if err == nil {
 		_, _ = retired.Write([]byte("retired"))
 		var b [1]byte
@@ -467,13 +460,4 @@ func TestNativeC2RuntimeEndToEnd(t *testing.T) {
 		}
 	}
 	t.Log("Production native activation, HTTP identity/checkout, real queued fulfillment, recipient render, VLESS, durable billing, offline expiry, original-period restart replay, reset, renewal, rotation with real reserved cutoff receipts and revoke passed.")
-}
-
-func mustNativeC2JSON(t *testing.T, value any) []byte {
-	t.Helper()
-	result, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal("native C2 evidence serialization failed")
-	}
-	return result
 }

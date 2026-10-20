@@ -14,6 +14,16 @@ func RouteSupportMatrix() map[string]KernelRouteSupport {
 			},
 			Actions: []string{"block", "direct", "route"},
 		},
+		"txnode": {
+			Matchers: []string{
+				"domains",
+				"domain_suffixes",
+				"ip_cidrs",
+				"ports",
+				"networks",
+			},
+			Actions: []string{"block", "direct", "route"},
+		},
 		"singbox": {
 			Matchers: []string{
 				"domains",

@@ -54,8 +54,8 @@ func (p *reportTestControlPlane) Report(payload controlplane.ReportPayload) erro
 	return err
 }
 func (p *reportTestControlPlane) ReportDevices(controlplane.PushClient, map[int][]string) {}
-func (p *reportTestControlPlane) SupportsReporting() bool                                  { return true }
-func (p *reportTestControlPlane) SupportsDeviceReports() bool                              { return false }
+func (p *reportTestControlPlane) SupportsReporting() bool                                 { return true }
+func (p *reportTestControlPlane) SupportsDeviceReports() bool                             { return false }
 
 func (p *reportTestControlPlane) snapshot() (int, controlplane.ReportPayload) {
 	p.mu.Lock()

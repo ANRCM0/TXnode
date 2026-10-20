@@ -10,7 +10,28 @@ panel:
   node_id: 1
 
 kernel:
-  type: singbox  # 可选 singbox 或 xray
+  type: txnode  # 唯一取值：原生 txnode 数据面（sing-box / Xray 已移除）
+
+# 数据面行为参数（可省略，省略时使用括号内默认值）。
+# dataplane:
+#   trusted_proxies: "private,cloudflare"  # PROXY protocol 可信来源
+#   proxy_protocol: false
+#   require_proxy_protocol: false
+#   auto_out_ip: false
+#   max_fresh: 4096            # 未认证并发上限
+#   handshake_timeout: 10      # 秒
+#   tcp_timeout: 300           # 秒，0 = 不超时
+#   udp_timeout: 60            # 秒
+#   forbidden_private_ip: false
+#   forbidden_bittorrent: false
+#   forbidden_ports: ""
+#   user_tcp_limit: 0          # 每用户并发连接，0 = 不限
+#   device_limit: 0            # 节点级设备上限，与面板取小
+#   device_ipv6_prefix: 64
+#   invalid_access_enable: false
+#   invalid_access_count: 30
+#   invalid_access_duration: 60
+#   invalid_access_forbidden_time: 600
 log:
   level: info
 audit:
@@ -24,7 +45,7 @@ audit:
 #   machine_id: 2
 #   token: "REPLACE_WITH_MACHINE_TOKEN"
 # kernel:
-#   type: singbox
+#   type: txnode
 # audit:
 #   enabled: false
 
@@ -55,7 +76,7 @@ audit:
 #       machine_id: 6
 #       token: "REPLACE_WITH_TXBOARD_MACHINE_TOKEN"
 
-# 可选嵌入式访问审计：需 sing-box；Xboard 使用已安装的旧插件，TXBoard 使用原生 TXAPI。
+# 可选嵌入式访问审计：原生钩子（每会话一次）；Xboard 使用已安装的旧插件，TXBoard 使用原生 TXAPI。
 # 两者共用采集与规则匹配；仅在确认面板端已更新并做好隐私策略后开启。
 # audit:
 #   enabled: true

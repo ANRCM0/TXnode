@@ -21,7 +21,7 @@ func TestNodeSpecFromPanelValidated(t *testing.T) {
 				Action: panel.RouteAction{Type: "route", Target: "proxy"},
 				Match:  panel.RouteMatch{DomainSuffixes: []string{"example.com"}},
 			}},
-		}, config.KernelConfig{Type: "singbox"})
+		}, config.KernelConfig{Type: "txnode"})
 		if err != nil {
 			t.Fatalf("NodeSpecFromPanelValidated: %v", err)
 		}
@@ -37,7 +37,7 @@ func TestNodeSpecFromPanelValidated(t *testing.T) {
 			CustomOutbounds: []panel.OutboundConfig{{
 				Tag: "proxy", Protocol: "socks", ProxyTag: "missing", Settings: map[string]any{"server": "2.2.2.2", "server_port": 1080},
 			}},
-		}, config.KernelConfig{Type: "singbox"})
+		}, config.KernelConfig{Type: "txnode"})
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
@@ -53,11 +53,11 @@ func TestNodeSpecFromPanelValidated(t *testing.T) {
 			CustomOutbounds: []panel.OutboundConfig{{
 				Tag: "hy2", Protocol: "hysteria2", Settings: map[string]any{"server": "2.2.2.2", "server_port": 8443},
 			}},
-		}, config.KernelConfig{Type: "xray"})
+		}, config.KernelConfig{Type: "txnode"})
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
-		if !strings.Contains(err.Error(), `protocol "hysteria2" is not supported by kernel "xray"`) {
+		if !strings.Contains(err.Error(), `protocol "hysteria2" is not supported by kernel "txnode"`) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
@@ -73,7 +73,7 @@ func TestNodeSpecFromPanelValidated(t *testing.T) {
 				Action: panel.RouteAction{Type: "route", Target: "missing"},
 				Match:  panel.RouteMatch{DomainSuffixes: []string{"example.com"}},
 			}},
-		}, config.KernelConfig{Type: "singbox"})
+		}, config.KernelConfig{Type: "txnode"})
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}

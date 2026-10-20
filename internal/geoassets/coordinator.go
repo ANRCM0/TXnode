@@ -1,33 +1,27 @@
 package geoassets
 
 import (
-	"os"
-
 	"github.com/ANRCM0/TX-Node/internal/config"
 	"github.com/ANRCM0/TX-Node/internal/kernel"
 	"github.com/ANRCM0/TX-Node/internal/kernel/geodata"
 	"github.com/ANRCM0/TX-Node/internal/model"
 )
 
-// Backend is the existing geo-data acquisition runtime.
-//
-// The default backend delegates to kernel/geodata and remains authoritative for
-// download URLs, filesystem writes and retry/error behavior. Coordinator only
-// decides whether Xray needs those optional assets and prepares compatibility
-// process state.
+// Backend is the geo-data acquisition runtime. The default backend delegates to
+// kernel/geodata and owns the download URLs, filesystem writes and retry/error
+// behavior.
 type Backend interface {
-	Ensure(dir string, needGeoIP, needGeoSite bool, kernelType string) error
+	Ensure(dir string, needGeoIP, needGeoSite bool) error
 }
 
 type defaultBackend struct{}
 
-func (defaultBackend) Ensure(dir string, needGeoIP, needGeoSite bool, kernelType string) error {
-	return geodata.Ensure(dir, needGeoIP, needGeoSite, kernelType)
+func (defaultBackend) Ensure(dir string, needGeoIP, needGeoSite bool) error {
+	return geodata.Ensure(dir, needGeoIP, needGeoSite)
 }
 
-// Coordinator isolates optional geo-data acquisition from the Xray kernel
-// implementation. Route compilation remains a core data-plane responsibility;
-// only asset acquisition/preparation is delegated here.
+// Coordinator decides whether the native kernel needs geoip.dat / geosite.dat
+// and asks the backend to acquire them. The data plane itself only reads files.
 type Coordinator struct {
 	backend Backend
 }
@@ -43,31 +37,17 @@ func NewWithBackend(backend Backend) *Coordinator {
 	return &Coordinator{backend: backend}
 }
 
-// PrepareXray preserves the pre-S3 behavior:
-//   - assets are requested only when panel route rules reference geoip/geosite;
-//   - the existing geodata backend performs acquisition;
-//   - XRAY_LOCATION_ASSET is set even when acquisition reports an error, so
-//     already-present partial/manual assets remain discoverable.
-//
-// XRAY_LOCATION_ASSET is process-scoped legacy compatibility state. This
-// coordinator makes that side effect explicit but intentionally does not change
-// its semantics in S3.
-func (c *Coordinator) PrepareXray(cfg config.KernelConfig, spec *model.NodeSpec) error {
+// PrepareTxnode downloads the v2ray-format databases when any panel or custom
+// route references geoip:/geosite:. Missing files are not fatal: the kernel logs
+// the lookup failure and keeps running with the rules it could compile.
+func (c *Coordinator) PrepareTxnode(cfg config.KernelConfig, spec *model.NodeSpec) error {
 	if c == nil || spec == nil {
 		return nil
 	}
-
-	needIP := kernel.NeedsGeoIP(spec.Routes)
-	needSite := kernel.NeedsGeoSite(spec.Routes)
+	needIP := kernel.NeedsGeoIP(spec.Routes) || kernel.NeedsGeoIPRules(spec.CustomRouteRules)
+	needSite := kernel.NeedsGeoSite(spec.Routes) || kernel.NeedsGeoSiteRules(spec.CustomRouteRules)
 	if !needIP && !needSite {
 		return nil
 	}
-
-	dir := cfg.GeoDataDir
-	err := c.backend.Ensure(dir, needIP, needSite, "xray")
-
-	// Preserve existing compatibility behavior: the Xray runtime resolves geo
-	// assets through this process-level environment variable.
-	_ = os.Setenv("XRAY_LOCATION_ASSET", dir)
-	return err
+	return c.backend.Ensure(cfg.GeoDataDir, needIP, needSite)
 }

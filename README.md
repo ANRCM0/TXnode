@@ -4,7 +4,8 @@ Independent Go data plane and Credential Provider for TXBoard. Source history wa
 extracted from TXBoard's `node/` directory at Core revision `ca25f21`.
 The existing Go module namespace `github.com/ANRCM0/TX-Node` is retained.
 
-`cmd/tx-node` runs the Node runtime with embedded sing-box or Xray kernels.
+`cmd/tx-node` runs the Node runtime with the native `txnode` data plane
+(`internal/dataplane`); the sing-box and Xray kernels were removed.
 `cmd/credential-provider` owns private credential storage and authorized delivery.
 They remain separate processes and authorities even though they share this module.
 Core owns identity, entitlement and settlement; Node consumes versioned protocols.
@@ -14,7 +15,12 @@ Core owns identity, entitlement and settlement; Node consumes versioned protocol
 Use Go 1.26 and the checked-in module locks. `make build` is a local static build.
 Run functional, race, network, browser and container acceptance in GitHub Actions.
 `make test` covers both commands and internal packages; `make test-runtime-stability`
-repeats focused lifecycle suites. Keep local kernel replacements, licenses and
+repeats focused lifecycle suites. The third-party interop matrix is not part of the
+default gates: `scripts/fetch-interop-clients.sh` downloads the pinned clients
+(version + SHA-256) and the `interop` workflow job runs
+`go test ./internal/kernel/txnode/ -run TestInterop` nightly, on dispatch and on tags.
+Interop results and the remaining protocol gaps are recorded in `docs/INTEROP.md` and
+`docs/OUTSTANDING-WORK.zh.md`. Keep local kernel replacements, licenses and
 `TXNODE-PATCH.md` notes together with their sources under `internal/deps/`.
 
 The independent workflow owns tests, actual image checks and a real native Core

@@ -25,7 +25,7 @@ panel:
   node_id: 5
   node_type: "v2ray"
 kernel:
-  type: singbox
+  type: txnode
   log_level: warn
 log:
   level: debug
@@ -46,7 +46,7 @@ log:
 	if cfg.Panel.NodeType != "v2ray" {
 		t.Errorf("node_type: got %q", cfg.Panel.NodeType)
 	}
-	if cfg.Kernel.Type != "singbox" {
+	if cfg.Kernel.Type != "txnode" {
 		t.Errorf("kernel.type: got %q", cfg.Kernel.Type)
 	}
 	if cfg.Log.Level != "debug" {
@@ -65,7 +65,7 @@ panel:
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Kernel.Type != "singbox" {
+	if cfg.Kernel.Type != "txnode" {
 		t.Errorf("default kernel.type: got %q, want singbox", cfg.Kernel.Type)
 	}
 	// config_dir should default to the directory containing the config file.
@@ -163,13 +163,13 @@ panel:
   token: "tok"
   node_id: 1
 kernel:
-  type: xray
+  type: txnode
 `)
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Kernel.Type != "xray" {
+	if cfg.Kernel.Type != "txnode" {
 		t.Errorf("kernel.type: got %q, want xray", cfg.Kernel.Type)
 	}
 }
@@ -286,7 +286,7 @@ standalone:
     - id: 1
       uuid: "11111111-1111-1111-1111-111111111111"
 kernel:
-  type: xray
+  type: txnode
 cert:
   cert_mode: none
 `)
@@ -319,14 +319,13 @@ standalone:
     protocol: "trojan"
     server_port: 443
 kernel:
-  type: singbox
+  type: txnode
 `)
 	_, err := Load(path)
 	if err == nil {
 		t.Fatal("expected error for standalone mode without users")
 	}
 }
-
 
 func TestLoadRoot_LegacyConfigNormalizesToSingleInstance(t *testing.T) {
 	path := writeTemp(t, `
@@ -362,14 +361,14 @@ instances:
       token_env: "PANEL_A_TOKEN"
       node_id: 1
     kernel:
-      type: singbox
+      type: txnode
   - panel:
       url: "https://panel-b.example.com"
     machine:
       machine_id: 2
       token_env: "PANEL_B_MACHINE_TOKEN"
     kernel:
-      type: singbox
+      type: txnode
 `)
 	t.Setenv("PANEL_A_TOKEN", "token-a")
 	t.Setenv("PANEL_B_MACHINE_TOKEN", "token-b")
@@ -417,7 +416,7 @@ log:
   level: "debug"
   output: "stderr"
 kernel:
-  type: xray
+  type: txnode
   log_level: "error"
 node:
   push_interval: 42
@@ -449,8 +448,8 @@ instances:
 	if inst0.Log.Output != "stderr" {
 		t.Errorf("inst0 log.output: got %q, want %q", inst0.Log.Output, "stderr")
 	}
-	if inst0.Kernel.Type != "xray" {
-		t.Errorf("inst0 kernel.type: got %q, want %q", inst0.Kernel.Type, "xray")
+	if inst0.Kernel.Type != "txnode" {
+		t.Errorf("inst0 kernel.type: got %q, want %q", inst0.Kernel.Type, "txnode")
 	}
 	if inst0.Kernel.LogLevel != "error" {
 		t.Errorf("inst0 kernel.log_level: got %q, want %q", inst0.Kernel.LogLevel, "error")
@@ -469,8 +468,8 @@ instances:
 	if inst1.Log.Output != "stderr" {
 		t.Errorf("inst1 log.output: got %q, want %q", inst1.Log.Output, "stderr")
 	}
-	if inst1.Kernel.Type != "xray" {
-		t.Errorf("inst1 kernel.type: got %q, want %q", inst1.Kernel.Type, "xray")
+	if inst1.Kernel.Type != "txnode" {
+		t.Errorf("inst1 kernel.type: got %q, want %q", inst1.Kernel.Type, "txnode")
 	}
 }
 
@@ -545,12 +544,14 @@ func TestInheritFrom_AutoTLSInheritedWhenChildHasNoCertConfig(t *testing.T) {
 }
 
 func TestPanelProviderInheritance(t *testing.T) {
- for _,tc:=range []struct{name,child,want string}{{"inherit","","xboard"},{"override","xboard","xboard"},{"preserve unknown","custom","custom"}} {
-  t.Run(tc.name,func(t *testing.T){
-   parent:=&Config{Panel:PanelConfig{Provider:"xboard"}}
-   child:=&Config{Panel:PanelConfig{Provider:tc.child}}
-   child.inheritFrom(parent)
-   if child.Panel.Provider!=tc.want {t.Fatalf("provider = %q, want %q",child.Panel.Provider,tc.want)}
-  })
- }
+	for _, tc := range []struct{ name, child, want string }{{"inherit", "", "xboard"}, {"override", "xboard", "xboard"}, {"preserve unknown", "custom", "custom"}} {
+		t.Run(tc.name, func(t *testing.T) {
+			parent := &Config{Panel: PanelConfig{Provider: "xboard"}}
+			child := &Config{Panel: PanelConfig{Provider: tc.child}}
+			child.inheritFrom(parent)
+			if child.Panel.Provider != tc.want {
+				t.Fatalf("provider = %q, want %q", child.Panel.Provider, tc.want)
+			}
+		})
+	}
 }

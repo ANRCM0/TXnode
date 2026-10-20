@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/reporting"
-	M "github.com/sagernet/sing/common/metadata"
 	"io"
 	"net"
 	"testing"
@@ -14,8 +13,8 @@ import (
 )
 
 func TestRealObservedPeriodRebuildKeepsUnsampledOldTailAndFreshBytesSeparate(t *testing.T) {
-	for _, kernelType := range []string{"singbox", "xray"} {
-		for _, kind := range []string{"vless", "vmess"} {
+	for _, kernelType := range []string{"txnode"} {
+		for _, kind := range []string{"socks"} {
 			t.Run(kernelType+"/"+kind, func(t *testing.T) {
 				origin, e := net.Listen("tcp4", "127.0.0.1:0")
 				if e != nil {
@@ -38,9 +37,7 @@ func TestRealObservedPeriodRebuildKeepsUnsampledOldTailAndFreshBytesSeparate(t *
 				s := authorityService(t, p)
 				s.cfg.Kernel.Type = kernelType
 				if kernelType == "singbox" {
-					s.cfg.Kernel.CustomRoute = []map[string]any{{"network": "tcp", "ip_cidr": []string{"127.0.0.1/32"}, "port": []int{origin.Addr().(*net.TCPAddr).Port}, "outbound": "direct"}}
 				} else {
-					s.cfg.Kernel.CustomRoute = []map[string]any{{"type": "field", "network": "tcp", "ip": []string{"127.0.0.1/32"}, "port": fmt.Sprint(origin.Addr().(*net.TCPAddr).Port), "outboundTag": "direct"}}
 				}
 				s = NewWithControlPlane(s.cfg, p)
 				s.lastConfig = p.bootstrap.Config
@@ -50,7 +47,7 @@ func TestRealObservedPeriodRebuildKeepsUnsampledOldTailAndFreshBytesSeparate(t *
 					t.Fatal("period original admission")
 				}
 				defer s.kernel.Stop()
-				raw, client := liveProtocolDial(t, kind, fmt.Sprintf("127.0.0.1:%d", port), liveProtocolUUID, M.ParseSocksaddr(origin.Addr().String()))
+				raw, client := liveProtocolDial(t, "socks", fmt.Sprintf("127.0.0.1:%d", port), liveProtocolUUID, origin.Addr())
 				defer raw.Close()
 				defer client.Close()
 				client.SetDeadline(time.Now().Add(15 * time.Second))

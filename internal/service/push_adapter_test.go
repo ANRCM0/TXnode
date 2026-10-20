@@ -39,8 +39,8 @@ func (noPollControlPlane) Report(controlplane.ReportPayload) error {
 	return nil
 }
 func (noPollControlPlane) ReportDevices(controlplane.PushClient, map[int][]string) {}
-func (noPollControlPlane) SupportsReporting() bool                                  { return false }
-func (noPollControlPlane) SupportsDeviceReports() bool                              { return false }
+func (noPollControlPlane) SupportsReporting() bool                                 { return false }
+func (noPollControlPlane) SupportsDeviceReports() bool                             { return false }
 
 func TestHandlePushStatusKeepsTransportStateOutOfService(t *testing.T) {
 	cp := noPollControlPlane{}

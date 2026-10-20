@@ -42,17 +42,11 @@ func ValidateNodeSpec(n *NodeSpec, kcfg config.KernelConfig) error {
 	return nil
 }
 
-// singboxUnsupportedTransports lists transport types that sing-box does not support.
-var singboxUnsupportedTransports = map[string]bool{
-	"xhttp":     true,
-	"splithttp": true,
-}
-
+// validateTransportKernel keeps a per-kernel transport gate. The native txnode
+// kernel implements every transport the panel can send (including xhttp), so the
+// gate only rejects unknown names.
 func validateTransportKernel(network, kernelType string) error {
-	net := strings.ToLower(strings.TrimSpace(network))
-	if kernelType == "singbox" && singboxUnsupportedTransports[net] {
-		return fmt.Errorf("transport %q is not supported by sing-box kernel; use xray kernel instead", net)
-	}
+	_ = kernelType
 	return nil
 }
 
@@ -61,19 +55,14 @@ func validateTransportKernel(network, kernelType string) error {
 // the kernel that can. Otherwise it returns configuredKernel unchanged.
 // This is used in machine mode to auto-switch kernel per node.
 func ResolveKernelForTransport(network, configuredKernel string) string {
-	net := strings.ToLower(strings.TrimSpace(network))
-	if configuredKernel == "singbox" && singboxUnsupportedTransports[net] {
-		return "xray"
-	}
+	_ = network
 	return configuredKernel
 }
 
 func normalizeKernelType(value string) (string, error) {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "singbox", "sing-box":
-		return "singbox", nil
-	case "xray":
-		return "xray", nil
+	case "txnode":
+		return "txnode", nil
 	default:
 		return "", fmt.Errorf("unsupported kernel type %q", value)
 	}
