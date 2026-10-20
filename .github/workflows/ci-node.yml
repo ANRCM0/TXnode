@@ -6,6 +6,12 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      native_acceptance:
+        description: Run the complete native soak and same-runner performance evidence
+        required: false
+        default: false
+        type: boolean
   schedule:
     # The interop matrix downloads pinned third-party clients; run it nightly
     # so an upstream release cannot silently break the data plane.
@@ -27,6 +33,13 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  native-evidence:
+    name: Native stability and performance evidence
+    if: github.event_name == 'workflow_dispatch' && inputs.native_acceptance
+    uses: ./.github/workflows/native-acceptance.yml
+    with:
+      candidate: ${{ github.sha }}
+
   changes:
     name: Classify Node runtime changes
     runs-on: ubuntu-latest

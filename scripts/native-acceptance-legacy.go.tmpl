@@ -1,0 +1,15 @@
+package main
+
+import (
+	"github.com/ANRCM0/TX-Node/internal/config"
+	"github.com/ANRCM0/TX-Node/internal/kernel/singbox"
+	"github.com/ANRCM0/TX-Node/internal/usageinterval"
+)
+
+func makeKernel() *singbox.SingBox {
+	return singbox.New(config.KernelConfig{Type: "sing-box", LogLevel: "error"})
+}
+func installNative(k *singbox.SingBox, c *usageinterval.NativeCollector) bool {
+	m := singbox.NewNativeUsageTracker(c, map[string]int{"native-ab-secret": 7})
+	return m.EnableEnforcingBounded() && k.SetNativeUsageTracker(m)
+}

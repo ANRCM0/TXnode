@@ -1,0 +1,136 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"flag"
+	"fmt"
+	"net"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/ANRCM0/TX-Node/internal/kernel"
+	"github.com/ANRCM0/TX-Node/internal/model"
+	"github.com/ANRCM0/TX-Node/internal/usagebucket"
+	"github.com/ANRCM0/TX-Node/internal/usageinterval"
+	"github.com/ANRCM0/TX-Node/internal/usagev2"
+)
+
+func main() {
+	mode := flag.String("mode", "ordinary", "ordinary, events, usage_v2")
+	root := flag.String("state", "", "fresh state directory")
+	flag.Parse()
+	if *root == "" {
+		panic("state directory required")
+	}
+	node := makeKernel()
+	var coordinator *usagebucket.Coordinator
+	var collector *usageinterval.NativeCollector
+	var store *usageinterval.NativeStore
+	var spool *usagev2.Spool
+	var err error
+	switch *mode {
+	case "ordinary":
+	case "events":
+		coordinator, err = usagebucket.NewAsyncCoordinator(filepath.Join(*root, "events"), usagebucket.StoreOptions{}, usagebucket.CoordinatorOptions{})
+		if err != nil || !node.SetLocalEventConsumer(coordinator) {
+			panic(fmt.Sprintf("event installation: %v", err))
+		}
+	case "usage_v2":
+		now := time.Now().Unix()
+		session := usagev2.Session{ProtocolVersion: 2, CoreInstanceID: "native-ab", NodeID: "3", SourceEpoch: "5", ReceiptGeneration: "1", RetentionSeconds: 86400, MaxLateReportSeconds: 3600, ReceiptRetentionSeconds: 86400, IssuedAt: now - 1,
+			Grants: []usagev2.Grant{{UserID: "7", AccessSubjectID: "8", AuthSnapshotID: "11", TariffRevisionID: "12", TermsID: "13", UsagePeriodID: "14", IssuedAt: now - 1, LeaseExpiresAt: now + 3600, RevocationVersion: "0"}}}
+		spool, err = usagev2.OpenSpool(filepath.Join(*root, "spool"), 0)
+		if err != nil {
+			panic(err)
+		}
+		store, err = usageinterval.OpenNativeStore(filepath.Join(*root, "native"), session, spool)
+		if err != nil {
+			panic(err)
+		}
+		collector, err = store.NewCollector(session, usageinterval.NativeWindow{Revision: "1", Digest: strings.Repeat("a", 64), IssuedAt: now - 1, ExpiresAt: now + 3600}, map[string]int{"native-ab-secret": 7})
+		if err != nil {
+			panic(err)
+		}
+		if delay := time.Until(collector.ReadyAt()); delay > 0 {
+			time.Sleep(delay)
+		}
+		if !installNative(node, collector) {
+			panic("native usage installation refused")
+		}
+	default:
+		panic("unsupported mode")
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		panic(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	if err := node.Start(&model.NodeSpec{Protocol: "socks", ListenIP: "127.0.0.1", ServerPort: port}, []model.UserSpec{{ID: 7, UUID: "native-ab-secret"}}, kernel.TLSCert{}); err != nil {
+		panic(err)
+	}
+	fmt.Println("NATIVE_AB_READY " + strconv.Itoa(port))
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
+	<-signals
+	node.Stop()
+	evidence := map[string]any{"mode": *mode, "stopped": true}
+	if collector != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err = collector.Drain(ctx)
+		cancel()
+		if err != nil {
+			panic(err)
+		}
+		records, e := spool.Records()
+		if e != nil || len(records) == 0 {
+			panic(fmt.Sprintf("missing durable usage records: %v", e))
+		}
+		evidence["usage_records"] = len(records)
+		var up, down uint64
+		for _, record := range records {
+			for _, entry := range record.Submission.Payload.Entries {
+				n, e := strconv.ParseUint(entry.RawUpBytes, 10, 64)
+				if e != nil {
+					panic(e)
+				}
+				up += n
+				n, e = strconv.ParseUint(entry.RawDownBytes, 10, 64)
+				if e != nil {
+					panic(e)
+				}
+				down += n
+			}
+		}
+		evidence["usage_raw_up_bytes"], evidence["usage_raw_down_bytes"] = up, down
+		if err = store.Close(); err != nil {
+			panic(err)
+		}
+		if err = spool.Close(); err != nil {
+			panic(err)
+		}
+	}
+	if coordinator != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err = coordinator.Close(ctx)
+		cancel()
+		if err != nil {
+			panic(err)
+		}
+		status, ok := coordinator.StoreSnapshot()
+		if !ok || status.Buckets == 0 || status.Degraded {
+			panic(fmt.Sprintf("event evidence incomplete: %+v %v", status, ok))
+		}
+		evidence["event_store"] = status
+	}
+	body, _ := json.MarshalIndent(evidence, "", "  ")
+	if err = os.WriteFile(filepath.Join(*root, "evidence.json"), body, 0600); err != nil {
+		panic(err)
+	}
+}

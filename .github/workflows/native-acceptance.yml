@@ -1,0 +1,149 @@
+name: Native stability and performance evidence
+
+on:
+  workflow_call:
+    inputs:
+      candidate:
+        description: Immutable candidate commit
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      candidate:
+        description: Candidate commit or ref (empty uses workflow SHA)
+        required: false
+        type: string
+  schedule:
+    - cron: '43 20 * * *'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GOTOOLCHAIN: local
+  CGO_ENABLED: '0'
+
+jobs:
+  source:
+    name: Resolve immutable candidate
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate || github.sha }}
+          fetch-depth: 0
+      - id: source
+        name: Record candidate commit and tree
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          mkdir -p artifacts/source
+          git rev-parse HEAD | tee artifacts/source/commit.txt
+          git rev-parse 'HEAD^{tree}' > artifacts/source/tree.txt
+          git status --porcelain --untracked-files=no > artifacts/source/status.txt
+          test ! -s artifacts/source/status.txt
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-source-${{ steps.source.outputs.sha }}
+          path: artifacts/source/
+          if-no-files-found: error
+
+  soak:
+    name: Native 30 minute TCP UDP mux soak
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+          cache-dependency-path: go.sum
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/interop-clients
+          key: interop-clients-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-interop-clients.sh') }}
+      - name: Fetch fixed client binaries
+        run: scripts/fetch-interop-clients.sh "$RUNNER_TEMP/interop-clients"
+      - name: Record source toolchain and runner evidence
+        env:
+          CANDIDATE_SHA: ${{ needs.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          mkdir -p artifacts/native-soak
+          git rev-parse HEAD > artifacts/native-soak/commit.txt
+          git rev-parse 'HEAD^{tree}' > artifacts/native-soak/tree.txt
+          go version > artifacts/native-soak/go-version.txt
+          uname -a > artifacts/native-soak/runner.txt
+          lscpu >> artifacts/native-soak/runner.txt
+          free -b >> artifacts/native-soak/runner.txt
+          sha256sum "$RUNNER_TEMP/interop-clients/singbox/sing-box" > artifacts/native-soak/client-sha256.txt
+      - name: Execute complete load window
+        env:
+          TXNODE_NATIVE_SOAK: '1'
+          TXNODE_NATIVE_ARTIFACTS: ${{ github.workspace }}/artifacts/native-soak
+          TXNODE_INTEROP_SINGBOX: ${{ runner.temp }}/interop-clients/singbox/sing-box
+        run: |
+          set -euo pipefail
+          ulimit -n 32768
+          go test -json ./internal/kernel/txnode -run '^TestNativeSessionSoak$' -count=1 -timeout=40m 2>artifacts/native-soak/stderr.log | tee artifacts/native-soak/events.jsonl
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('artifacts/native-soak/soak-summary.json').read_text())
+          if not report['accepted'] or report['elapsed_seconds'] < 1800 or len(report['phases']) != 4:
+              raise SystemExit('native soak acceptance incomplete')
+          PY
+      - name: Retain exact source load evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-soak-${{ needs.source.outputs.sha }}
+          path: artifacts/native-soak/
+          if-no-files-found: error
+
+  performance:
+    name: Same runner legacy candidate A B
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+          cache-dependency-path: go.sum
+      - name: Build both revisions and alternate five measurement groups
+        env:
+          CANDIDATE_SHA: ${{ needs.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --output artifacts/native-performance
+      - name: Publish comparison to job summary
+        if: always()
+        run: |
+          if [[ -f artifacts/native-performance/report.md ]]; then
+            cat artifacts/native-performance/report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Retain exact source comparison evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-performance-${{ needs.source.outputs.sha }}
+          path: artifacts/native-performance/
+          if-no-files-found: error
