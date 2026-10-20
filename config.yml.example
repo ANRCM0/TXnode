@@ -18,6 +18,7 @@ kernel:
 #   proxy_protocol: false
 #   require_proxy_protocol: false
 #   auto_out_ip: false
+#   diagnostics: false         # 显式启用固定字段的原生会话/代际/重载/待完成 I/O 指标
 #   max_fresh: 4096            # 未认证并发上限
 #   handshake_timeout: 10      # 秒
 #   tcp_timeout: 300           # 秒，0 = 不超时

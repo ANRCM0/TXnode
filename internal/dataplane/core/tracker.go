@@ -49,6 +49,8 @@ type Tracker struct {
 	dyn               *DynamicLimit
 	totalSessions     atomic.Int64
 	deviceRefusals    atomic.Int64
+	revocationCloses  atomic.Uint64
+	userCloseRequests atomic.Uint64
 	activeSince       map[int]time.Time
 	deviceGate        DeviceGate
 }
@@ -119,6 +121,7 @@ func (t *Tracker) SetUsers(users []User) {
 	t.applySpeedLocked()
 	t.mu.Unlock()
 	// Close outside the tracker lock: session teardown may record final traffic.
+	t.revocationCloses.Add(uint64(len(closeAfter)))
 	for _, c := range closeAfter {
 		_ = c.Close()
 	}
@@ -346,6 +349,7 @@ func (t *Tracker) CloseUserConns(userID int) int {
 		closers = append(closers, c)
 	}
 	u.mu.Unlock()
+	t.userCloseRequests.Add(uint64(len(closers)))
 	for _, c := range closers {
 		_ = c.Close()
 	}
@@ -595,6 +599,11 @@ func (t *Tracker) TotalSessions() int64 { return t.totalSessions.Load() }
 
 // DeviceRefusals returns the lifetime device-limit refusal count.
 func (t *Tracker) DeviceRefusals() int64 { return t.deviceRefusals.Load() }
+
+// CloseDiagnostics uses fixed reasons and never exposes credential identities.
+func (t *Tracker) CloseDiagnostics() (revoked, requested uint64) {
+	return t.revocationCloses.Load(), t.userCloseRequests.Load()
+}
 
 // Users returns the current user list ordered by ID.
 func (t *Tracker) Users() []User {

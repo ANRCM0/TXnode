@@ -38,6 +38,13 @@ type Kernel struct {
 	gate     *deviceGate
 	running  bool
 
+	configGeneration        uint64
+	credentialGeneration    uint64
+	reloadAttempts          uint64
+	reloadSucceeded         uint64
+	reloadFailed            uint64
+	connectionCloseRequests atomic.Uint64
+
 	router atomic.Pointer[core.Router]
 
 	limitFn  func(uuid string) *rate.Limiter
@@ -91,15 +98,14 @@ func (k *Kernel) Protocols() []string {
 	}
 }
 
-// Capabilities implements kernel.Kernel. CloseConnection by id is not part of the
-// native runtime yet, so ForceCloseConnection stays false.
+// Capabilities implements kernel.Kernel.
 func (k *Kernel) Capabilities() kernel.Capabilities {
 	return kernel.Capabilities{
 		PerUserSpeedLimit:    true,
 		DeviceLimit:          true,
 		BuiltInTrafficStats:  true,
 		AliveIPTracking:      true,
-		ForceCloseConnection: false,
+		ForceCloseConnection: true,
 		ForceCloseUser:       true,
 	}
 }
@@ -150,9 +156,17 @@ func (k *Kernel) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls k
 }
 
 // Reload swaps listeners without losing counters or the online table.
-func (k *Kernel) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
+func (k *Kernel) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) (err error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	k.reloadAttempts++
+	defer func() {
+		if err != nil {
+			k.reloadFailed++
+		} else {
+			k.reloadSucceeded++
+		}
+	}()
 	if !k.running {
 		return fmt.Errorf("txnode: Reload requires a running runtime")
 	}
@@ -275,6 +289,7 @@ func (k *Kernel) installLocked(sp *spec, router *core.Router, srv *core.Server, 
 	k.meter.attachServer(srv)
 	k.spec = sp
 	k.running = true
+	k.configGeneration++
 	serveTCP(srv, res.ln, k.log)
 	return nil
 }
@@ -413,12 +428,6 @@ func (k *Kernel) GetUserTraffic(_ context.Context) (map[int][2]int64, map[int]ma
 		count += n
 	}
 	return traffic, alive, count, nil
-}
-
-// CloseConnection is not supported by the native runtime: sessions are closed by
-// user (CloseUserConnections). Capabilities.ForceCloseConnection is false.
-func (k *Kernel) CloseConnection(_ context.Context, connID string) error {
-	return fmt.Errorf("txnode: CloseConnection(%q) is not supported", connID)
 }
 
 // CloseUserConnections closes every live session of one user UUID.
@@ -608,12 +617,14 @@ func (k *Kernel) replaceUsersLocked(users []model.UserSpec) error {
 		k.users = previous
 		return err
 	}
+	k.credentialGeneration++
 	return nil
 }
 
 func (k *Kernel) publishUsersLocked(users []model.UserSpec) {
 	k.publishUserMapLocked(users)
 	k.refreshPolicyLocked(users)
+	k.credentialGeneration++
 }
 
 func (k *Kernel) publishUserMapLocked(users []model.UserSpec) {

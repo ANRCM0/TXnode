@@ -28,6 +28,7 @@ type nativeMeter struct {
 
 	enforcing atomic.Bool
 	stopped   atomic.Bool
+	inflight  atomic.Int64
 
 	events *usagebucket.Meter
 
@@ -168,6 +169,7 @@ func (m *nativeMeter) Begin(c core.Chunk) (any, error) {
 	if t.native == nil && t.session == nil {
 		return nil, nil
 	}
+	m.inflight.Add(1)
 	return t, nil
 }
 
@@ -177,6 +179,7 @@ func (m *nativeMeter) Complete(c core.Chunk, token any) {
 	if !ok || t == nil {
 		return
 	}
+	defer m.inflight.Add(-1)
 	ioError := c.Err != nil && !errors.Is(c.Err, io.EOF)
 	if t.native != nil {
 		_ = m.collector.CompleteIO(t.native, directionName(c.Dir), c.N, ioError)

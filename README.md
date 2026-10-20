@@ -27,6 +27,8 @@ planned in `docs/NEXT-DEVELOPMENT.zh.md`. Keep local kernel replacements, licens
 Native billing coverage and pending recovery assertions are mapped in
 `docs/NATIVE-ACCEPTANCE-COVERAGE.zh.md`; the current image publishing blocker is
 recorded in `docs/RELEASE-BLOCKERS.zh.md`.
+Native configuration changes, connection identities and opt-in diagnostics are
+described in `docs/NATIVE-OPERATIONS.zh.md`.
 
 The independent workflow owns tests, actual image checks and a real native Core
 compatibility test. `compatibility/core.v1.json` pins the supported Core baseline.

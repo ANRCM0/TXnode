@@ -585,6 +585,11 @@ func (s *Service) buildMetrics(status monitor.Status) map[string]interface{} {
 	}
 
 	m := make(map[string]interface{})
+	if s.cfg != nil && s.cfg.Dataplane.Diagnostics {
+		if d, ok := s.kernel.(kernel.RuntimeDiagnosticProvider); ok {
+			m["native_dataplane"] = d.RuntimeDiagnostics()
+		}
+	}
 	if s.cfg != nil && s.cfg.UsageObserver.Enabled {
 		m["usage_observer"] = s.usageObserverMetrics()
 	}

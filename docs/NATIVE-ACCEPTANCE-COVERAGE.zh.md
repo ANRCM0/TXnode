@@ -16,6 +16,10 @@
 | bounded journal 突发退出 | `internal/usageinterval/crash_linux_test.go` 的 `TestBoundedIntervalSIGKILLRetainsOriginalSealedJournalAndNeverResumesTail` | 6 个精确故障点被父进程 SIGKILL；未发布尾部不导出、已发布原批次恢复、重复恢复保持 batch ID/digest、旧尾部不能续用 | 该入口覆盖 bounded Journal / Collector；不等于 NativeStore、Service 或真实协议进程端到端崩溃验收 |
 | spool 与交付恢复 | `internal/usagev2/spool_test.go`、`quarantine_test.go`、`retention_test.go` | fsync/容量/损坏拒绝、原批次重放、收据查询、cutoff 隔离、保留窗口 | 不能仅凭包级恢复断言证明 Service 关闭顺序或真实 packet 计数正确 |
 | 私有 Core 到原生 Node | `internal/service/native_c2_interop_test.go` 的 `TestNativeC2RuntimeEndToEnd`，CI `core-compatibility` | 源码提供 Core/Provider mTLS、真实 VLESS、离线到期、重放、轮换和结算路径 | 必须另外取得候选 Node SHA 与 pinned Core revision 的实际 CI 证据；不能替代以下挂起套件 |
+| Service 的事件和 observer 全链路 | `internal/service/native_observation_linux_test.go` 的 `TestNativeServiceObservationPersistsExactTCPUDPAndRecoversOriginalEvidence` | 真实 Service.Run + SOCKS TCP/UDP；31/27 字节逐方向落盘、身份映射、关闭、两次原 digest/receipt 恢复、observer 原始记录和 v1 58 字节计数 | 本地事件仍无结算权威；不能替代 usage_v2 进程崩溃恢复 |
+| 存储失败隔离与进程归属 | 同文件的 `TestNativeObservationStorageFailureKeepsActualTrafficAndStopsRetrying`、`TestNativeObservationDirectoriesAndProcessOwnerRemainScoped` | observer 容量/不可写、event store 容量和关闭时 v1 仍精确；禁用无 I/O、失败不重试、目录隔离、进程单一 owner | 新增源码仍须在候选 Actions 执行 |
+| 原生 packet 周期 | 同文件的 `TestNativePacketPeriodKeepsUnsampledOldTailAndFreshBytesSeparate` | 真实 UDP 原周期 13 已采样 + 7 未采样尾部，切换后 57 字节；旧控制连接关闭，旧20/新57分段 | 不是任意 packet 承载协议的互通证明 |
+| 原生 I/O 错误边界 | `internal/dataplane/core/download_accounting_test.go`、`udp_accounting_test.go`、`chunk_hook_test.go` | 实际 relay copy 对短写、正字节伴错误、零成功写、取消限速及 packet 关闭完成 I/O 的计数 | 不恢复已移除内核的内部 wrapper；功能结果以候选 CI 为准 |
 
 ## SIGKILL 夹具约束
 
@@ -29,16 +33,16 @@
 `after_dir_sync`、`before_spool`、`after_spool`。本轮只调整测试监督机制，
 不调整生产计量、持久化提交点或恢复策略，也不把超时直接视为成功注入故障。
 
-## 尚缺的原生跨层恢复
+## 挂起文件与原生替代断言
 
 | 挂起文件 | 原生恢复验收应覆盖 |
 |---|---|
-| `docs/removed-tests/usage_event_store_adapter_test.go.txt` | 用真实 txnode 流量驱动 `Service.Run` 安装的 Coordinator；断言初始化、退役、关闭、持久化故障处理，以及恢复后逐用户/逐方向原始事件与桶不重复、不丢失 |
-| `docs/removed-tests/usage_observer_adapter_test.go.txt` | 真实 txnode + Service + observer 全链路；断言真实 I/O 导致的 observer 输出、身份映射、生命周期关闭、错误隔离和原始计量口径 |
-| `docs/removed-tests/store_io_test.go.txt` | 通过原生数据面 TCP/packet 夹具验证部分成功 I/O、正字节伴随错误、拒绝或失败写入的计数边界；避免恢复 sing-box 内部包装器依赖 |
-| `docs/removed-tests/traffic_period_packet_test.go.txt` | 真实原生 UDP/packet 会话跨流量周期切换、迟到 packet、撤销与尾部关闭；断言物理方向、原周期身份和精确字节不被重新归属 |
+| `docs/removed-tests/usage_event_store_adapter_test.go.txt` | 原生 Service 测试已编写真实 TCP/UDP、关闭、持久化恢复、失败隔离和进程归属断言；待候选 Actions |
+| `docs/removed-tests/usage_observer_adapter_test.go.txt` | 原生 Service 测试已编写真实 I/O、身份、关闭、错误隔离、禁用和恢复断言；用户 delta/Reload 失败的细分边界仍由各自生命周期测试承担 |
+| `docs/removed-tests/store_io_test.go.txt` | 原生 core relay 测试覆盖短写/正字节伴错/失败写和取消；使用当前物理方向口径，不恢复旧 wrapper |
+| `docs/removed-tests/traffic_period_packet_test.go.txt` | 已编写真实 SOCKS UDP 周期切换、原周期尾部和精确分段断言；待候选 Actions |
 | `docs/removed-tests/native_core_machine_live_test.go.txt` | 重新明确私有 Core checkout、machine 与原生 Node 的执行前提和独立入口；现有 C2 覆盖不能自动宣告该文件全部恢复 |
 
 恢复时应逐项写出实际 owner 调用链和精确断言，再将替代测试纳入 Actions。只把旧文件
 改成可编译、改用 mock，或引用现有单层测试，都不足以关闭这些缺口。
-本轮不新增这些 Service 端到端测试，也不宣告挂起项已恢复。
+本轮新增测试的实际功能结果仍待对应提交 Actions；不按文件数量宣告旧套件全部恢复。
