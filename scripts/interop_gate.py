@@ -47,7 +47,8 @@ def validate_manifest(manifest, discovered=None):
             raise ValueError("invalid expected result: " + name)
         children = case.get("subtests", [])
         if (not isinstance(children, list) or not all(isinstance(x, str) for x in children)
-                or len(children) != len(set(children)) or any(not re.fullmatch(r"[\w-]+", x) for x in children)):
+                or len(children) != len(set(children))
+                or any(not re.fullmatch(r"[\w-]+(?:/[\w-]+)*", x) for x in children)):
             raise ValueError("invalid subtest declaration: " + name)
         if case["expected"] != "pass":
             gap = case.get("gap", {})

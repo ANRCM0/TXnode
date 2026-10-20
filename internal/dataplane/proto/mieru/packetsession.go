@@ -1,6 +1,7 @@
 package mieru
 
 import (
+	"errors"
 	"sync"
 	"time"
 )
@@ -48,6 +49,7 @@ type PacketSession struct {
 	send func([]byte) error
 
 	mu      sync.Mutex
+	wmu     sync.Mutex
 	nextSeq uint32 // next expected inbound sequence
 	pending map[uint32][]byte
 	ready   chan []byte
@@ -138,17 +140,32 @@ func (p *PacketSession) Read(b []byte) (int, error) {
 // Write seals nothing itself: the caller supplies the sealed segment for the
 // assigned sequence and gets the sequence back for tracking.
 func (p *PacketSession) Write(seal func(seq uint32) []byte) error {
+	p.wmu.Lock()
+	defer p.wmu.Unlock()
 	p.mu.Lock()
+	select {
+	case <-p.closed:
+		p.mu.Unlock()
+		return netErrClosed{}
+	default:
+	}
+	if len(p.unacked) >= reorderWindow || p.outSeq == ^uint32(0) {
+		p.mu.Unlock()
+		return errors.New("mieru: compatibility packet send window exhausted")
+	}
 	seq := p.outSeq
 	p.outSeq++
 	p.mu.Unlock()
 	seg := seal(seq)
-	if err := p.send(seg); err != nil {
-		return err
-	}
 	p.mu.Lock()
 	p.unacked[seq] = &outPacket{seq: seq, seg: seg, sent: time.Now()}
 	p.mu.Unlock()
+	if err := p.send(seg); err != nil {
+		p.mu.Lock()
+		delete(p.unacked, seq)
+		p.mu.Unlock()
+		return err
+	}
 	return nil
 }
 

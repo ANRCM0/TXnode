@@ -130,6 +130,21 @@ class InteropResults(unittest.TestCase):
 
 
 class InteropManifest(unittest.TestCase):
+    def test_nested_subtests_are_explicit_paths_and_cannot_hide_failures(self):
+        value = manifest()
+        value["cases"][0]["subtests"] = ["one", "one/two"]
+        gate.validate_manifest(value)
+        names = ["TestInteropSupported", "TestInteropSupported/one", "TestInteropSupported/one/two"]
+        events = [event("run", name) for name in names] + [event("pass", name) for name in reversed(names)] + [event("pass")]
+        report = gate.summarize(value, "quick", [json.dumps(item) for item in events], 0)
+        self.assertTrue(report["accepted"])
+        events[3]["Action"] = "skip"
+        self.assertFalse(gate.summarize(value, "quick", [json.dumps(item) for item in events], 0)["accepted"])
+        for child in ["one//two", "/one", "one/", "one/../two", "one.*"]:
+            with self.subTest(child=child), self.assertRaisesRegex(ValueError, "invalid subtest"):
+                value["cases"][0]["subtests"] = [child]
+                gate.validate_manifest(value)
+
     def test_new_source_case_must_be_explicitly_classified(self):
         value = manifest()
         with self.assertRaisesRegex(ValueError, "manifest/source mismatch"):

@@ -193,13 +193,17 @@
       "profiles": [
         "full"
       ],
-      "expected": "known-gap",
-      "owner": "unresolved native/Mihomo TUIC compatibility",
-      "gap": {
-        "id": "TUIC-MIHOMO",
-        "reason": "pinned Mihomo TUIC compatibility remains unaccepted",
-        "marker": "INTEROP_KNOWN_GAP:TUIC-MIHOMO"
-      }
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility",
+      "subtests": [
+        "reference",
+        "reference/native",
+        "reference/quic",
+        "native",
+        "native/native",
+        "native/quic",
+        "wrong-password"
+      ]
     },
     {
       "test": "TestInteropSingBoxAnyTLS",
@@ -286,13 +290,12 @@
       "profiles": [
         "full"
       ],
-      "expected": "known-gap",
-      "owner": "native address-header mux packet compatibility",
-      "gap": {
-        "id": "MUX-UDP",
-        "reason": "address-header mux UDP is not accepted; Mux.Cool/XUDP is separate",
-        "marker": "INTEROP_KNOWN_GAP:MUX-UDP"
-      }
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility",
+      "subtests": [
+        "smux",
+        "yamux"
+      ]
     },
     {
       "test": "TestInteropXrayMux",
@@ -332,13 +335,12 @@
       "profiles": [
         "full"
       ],
-      "expected": "known-gap",
-      "owner": "sing-box Naive certificate trust fixture",
-      "gap": {
-        "id": "NAIVE-CERT",
-        "reason": "pinned sing-box Naive certificate fixture remains unaccepted",
-        "marker": "INTEROP_KNOWN_GAP:NAIVE-CERT"
-      }
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility",
+      "subtests": [
+        "untrusted-root",
+        "wrong-san"
+      ]
     },
     {
       "test": "TestInteropXrayVLESSEncryption",
@@ -393,6 +395,39 @@
       ],
       "expected": "pass",
       "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropMieruOfficialUDPTransport",
+      "client": "mieru",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native Mieru packet underlay",
+      "subtests": [
+        "tcp-over-udp-bulk",
+        "application-udp-over-udp",
+        "idle-and-reuse"
+      ]
+    },
+    {
+      "test": "TestInteropMieruOfficialTrafficPatterns",
+      "client": "mieru",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native Mieru explicit traffic patterns",
+      "subtests": [
+        "TCP/low-entropy-32",
+        "TCP/low-entropy-40",
+        "TCP/low-entropy-48",
+        "TCP/low-entropy-56",
+        "UDP/low-entropy-32",
+        "UDP/low-entropy-40",
+        "UDP/low-entropy-48",
+        "UDP/low-entropy-56"
+      ]
     }
   ]
 }
