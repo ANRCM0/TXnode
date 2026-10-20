@@ -16,12 +16,50 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/ANRCM0/TX-Node/internal/kernel"
 	"github.com/ANRCM0/TX-Node/internal/model"
 	"github.com/ANRCM0/TX-Node/internal/usagebucket"
 	"github.com/ANRCM0/TX-Node/internal/usageinterval"
 	"github.com/ANRCM0/TX-Node/internal/usagev2"
 )
+
+const cpuMethod = "process-cputime-ns-v1"
+
+func writeCPUSnapshot(root, nonce string, sequence int) {
+	var before, after, cpu, resolution unix.Timespec
+	for _, read := range []struct {
+		clock int32
+		value *unix.Timespec
+	}{{unix.CLOCK_MONOTONIC, &before}, {unix.CLOCK_PROCESS_CPUTIME_ID, &cpu}, {unix.CLOCK_MONOTONIC, &after}} {
+		if err := unix.ClockGettime(read.clock, read.value); err != nil {
+			panic(err)
+		}
+	}
+	if err := unix.ClockGetres(unix.CLOCK_PROCESS_CPUTIME_ID, &resolution); err != nil {
+		panic(err)
+	}
+	if nonce == "" || sequence < 1 || sequence > 2 || resolution.Nano() <= 0 {
+		panic("invalid process CPU snapshot request")
+	}
+	body, err := json.Marshal(map[string]any{
+		"schema": "txnode-process-cpu-snapshot/v1", "method": cpuMethod,
+		"clock_id": unix.CLOCK_PROCESS_CPUTIME_ID, "pid": os.Getpid(), "nonce": nonce, "sequence": sequence,
+		"cpu_nanos": cpu.Nano(), "resolution_nanos": resolution.Nano(),
+		"monotonic_before_nanos": before.Nano(), "monotonic_after_nanos": after.Nano(),
+	})
+	if err != nil {
+		panic(err)
+	}
+	name := filepath.Join(root, fmt.Sprintf("cpu-%d.json", sequence))
+	if err := os.WriteFile(name+".tmp", body, 0600); err != nil {
+		panic(err)
+	}
+	if err := os.Rename(name+".tmp", name); err != nil {
+		panic(err)
+	}
+}
 
 func main() {
 	mode := flag.String("mode", "ordinary", "ordinary, events, usage_v2")
@@ -92,9 +130,16 @@ func main() {
 	}
 	fmt.Println("NATIVE_AB_READY " + strconv.Itoa(port))
 	signals := make(chan os.Signal, 4)
-	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT, syscall.SIGUSR1)
+	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT, syscall.SIGUSR1, syscall.SIGUSR2)
+	cpuSnapshots := 0
 	for snapshots := 0; ; {
-		if received := <-signals; received != syscall.SIGUSR1 {
+		received := <-signals
+		if received == syscall.SIGUSR2 {
+			cpuSnapshots++
+			writeCPUSnapshot(*root, os.Getenv("TXNODE_NATIVE_AB_CPU_NONCE"), cpuSnapshots)
+			continue
+		}
+		if received != syscall.SIGUSR1 {
 			break
 		}
 		var memory runtime.MemStats

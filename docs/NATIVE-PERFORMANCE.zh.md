@@ -67,6 +67,28 @@
 
 每份样本保留应用有效字节吞吐、实际完成量、客户端观测的 p50/p95/p99、独立 Node 测量进程 CPU 秒/GiB 与 50ms 采样峰值 RSS。预热结束和正式采样结束时，harness 通过 SIGUSR1 请求被测进程原子写出 `runtime.MemStats` 快照，用 TotalAlloc / Mallocs 差值报告每业务字节分配量和分配次数；快照操作位于 CPU 计量窗口外。CPU 不包括外部 Python 客户端和目标服务，但吞吐仍可能受它们制约。延迟使用每线程有界确定性样本，不作为无损全量直方图。
 
+CPU 方法版本为 `process-cputime-ns-v1`，报告 schema 为 `txnode-native-performance/v2`。
+两侧注入同一个临时 harness，通过独立 SIGUSR2 分支读取 Linux
+`CLOCK_PROCESS_CPUTIME_ID`，覆盖该 Node 进程全部线程的 CPU，不采用线程 CPU 时钟。
+顺序为预热、MemStats 起点、CPU 起点、原 10 秒业务采样、CPU 终点、MemStats 终点。
+每次 CPU 读取前后分别采 `CLOCK_MONOTONIC`，并保留 `clock_getres` 返回的正分辨率、
+原始 CPU 纳秒值、PID、严格 1/2 序号、每进程随机 nonce 与原子快照文件。
+控制器记录请求和收到文件的单调时间及往返时长，核对读取落在请求/确认之间、
+两次分辨率一致、CPU 差值为正，且整个业务采样位于两个 CPU 观察之间。
+不支持、超时、身份/顺序错误或任何无效证据均为 incomplete，不退回旧时钟。
+
+`/proc/<pid>/stat` 的 utime/stime 与 CLK_TCK 继续作为次要诊断，窗口包含快照请求与
+确认的边缘时间，不用于 v2 的比率或验收。纳秒数值和内核宣告的分辨率不等于实际测量
+精度；信号调度、起点快照写入和进程后台工作仍可进入 CPU 窗口，往返诊断不将这些
+开销扣除，也不引入新的 CPU 上限或低负载豁免。五组、2 秒预热、10 秒计量、4 线程、
+全部 120 个样本及原 5%/10% 预算不变。旧 v1 的 a8 普通上传 1.10 与 71 事件长连接
+1.05263 越界继续保留，不与 v2 样本合并或用新结果抹除。v2 仍须独立通过完整验收。
+时钟定义参照 Linux man-pages `clock_gettime(2)` 与 `proc_pid_stat(5)`；本工具不以
+纳秒接口宣称消除调度噪声。
+
+分配窗口仍由两次 MemStats 观察界定，因此包含 CPU 快照的编码与写入等少量工具分配。
+两侧使用完全相同的工具，报告不扣除这些开销，也不将结果表述为数据面自身的净分配量。
+
 构建结果保留两侧相同参数的业务二进制体积。镜像测量先解析同一 Alpine 3.20 的不可变 RepoDigest，使用同一 runtime Dockerfile、ca-certificates/tzdata 与入口包装已构建的两份业务二进制；真实执行 docker build 和 inspect，保留 recipe、build.log、image ID 与未压缩 Size。此项比较相同 runtime 封装，不能代替两版历史 Dockerfile、注册表压缩传输体积或发布镜像验收。旧 Xray 服务端、其他协议、跨地域实网、TLS 与正式 Core 结算未纳入 A/B 工具。事件内部路径、时间戳和事件数量允许不同并原样记录，物理字节投影通过不证明这些内部边界完全相同。不能用本回环结果推广整个双内核版本或生产场景。
 
 ## 判定与保留物

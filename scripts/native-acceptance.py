@@ -13,6 +13,7 @@ import math
 import os
 from pathlib import Path
 import platform
+import secrets
 import shutil
 import signal
 import socket
@@ -29,6 +30,7 @@ BASELINE = "a1ad2695e1143269168c36a274283de3342e91c7"
 MODES = ("ordinary", "usage_v2", "events")
 WORKLOADS = ("upload", "download", "short", "long")
 FLAGS = ["-trimpath", "-ldflags=-s -w", "-tags", "with_quic with_utls with_wireguard with_acme with_clash_api"]
+CPU_METHOD = "process-cputime-ns-v1"
 
 
 def command(args, cwd=ROOT):
@@ -226,6 +228,58 @@ def runtime_snapshot(process, state, number):
     return json.loads(path.read_text())
 
 
+def cpu_snapshot(process, state, number, nonce):
+    path = state / ("cpu-%d.json" % number)
+    if path.exists():
+        raise ValueError("process CPU snapshot already exists")
+    requested = time.monotonic_ns()
+    process.send_signal(signal.SIGUSR2)
+    deadline = time.monotonic() + 5
+    while not path.exists():
+        if process.poll() is not None or time.monotonic() >= deadline:
+            raise RuntimeError("process CPU snapshot missing")
+        time.sleep(0.001)
+    received = time.monotonic_ns()
+    proof = json.loads(path.read_text())
+    if (proof.get("schema") != "txnode-process-cpu-snapshot/v1"
+            or proof.get("method") != CPU_METHOD or proof.get("nonce") != nonce):
+        raise ValueError("process CPU snapshot method or identity mismatch")
+    for key in ("clock_id", "pid", "sequence", "cpu_nanos", "resolution_nanos",
+                "monotonic_before_nanos", "monotonic_after_nanos"):
+        if type(proof.get(key)) is not int:
+            raise ValueError("process CPU snapshot integer field missing: " + key)
+    if proof["clock_id"] != 2 or proof["pid"] != process.pid or proof["sequence"] != number:
+        raise ValueError("process CPU snapshot clock, PID or sequence mismatch")
+    if proof["cpu_nanos"] <= 0 or proof["resolution_nanos"] <= 0:
+        raise ValueError("process CPU snapshot has nonpositive value or resolution")
+    if not requested <= proof["monotonic_before_nanos"] <= proof["monotonic_after_nanos"] <= received:
+        raise ValueError("process CPU snapshot escaped request/acknowledgement bounds")
+    proof.update(requested_monotonic_nanos=requested, received_monotonic_nanos=received,
+                 round_trip_nanos=received-requested)
+    return proof
+
+
+def cpu_measurement(start, end, business_bytes):
+    if type(business_bytes) is not int or business_bytes <= 0:
+        raise ValueError("process CPU measurement has invalid business bytes")
+    for proof in (start, end):
+        for key in ("cpu_nanos", "resolution_nanos", "monotonic_before_nanos", "monotonic_after_nanos"):
+            if type(proof.get(key)) is not int or proof[key] <= 0:
+                raise ValueError("process CPU measurement has invalid paired field: " + key)
+    if (start["resolution_nanos"] != end["resolution_nanos"]
+            or start["nonce"] != end["nonce"] or start["pid"] != end["pid"]
+            or start["sequence"] != 1 or end["sequence"] != 2):
+        raise ValueError("process CPU snapshot pair is inconsistent")
+    delta = end["cpu_nanos"] - start["cpu_nanos"]
+    elapsed = end["monotonic_before_nanos"] - start["monotonic_after_nanos"]
+    if delta <= 0 or elapsed <= 0 or business_bytes <= 0:
+        raise ValueError("process CPU measurement has nonpositive CPU, elapsed time or bytes")
+    return {"method": CPU_METHOD, "start": start, "end": end,
+            "delta_nanos": delta, "monotonic_inner_elapsed_nanos": elapsed,
+            "resolution_nanos": start["resolution_nanos"],
+            "cpu_seconds_per_gib": (delta / 1_000_000_000) / (business_bytes / 1073741824)}
+
+
 def build_runtime_images(output, report):
     command(["docker", "pull", "--platform", "linux/amd64", "alpine:3.20"])
     base = json.loads(command(["docker", "image", "inspect", "alpine:3.20"]))[0]["RepoDigests"][0]
@@ -255,6 +309,8 @@ def sample(binary, state, mode, workload, args, origin, cpu_profile=None):
     state.mkdir(parents=True)
     log = (state / "server.log").open("w")
     environment = os.environ.copy()
+    nonce = secrets.token_hex(32)
+    environment["TXNODE_NATIVE_AB_CPU_NONCE"] = nonce
     environment.pop("TXNODE_NATIVE_AB_CPU_PROFILE", None)
     if cpu_profile is not None:
         environment["TXNODE_NATIVE_AB_CPU_PROFILE"] = str(cpu_profile)
@@ -287,16 +343,33 @@ def sample(binary, state, mode, workload, args, origin, cpu_profile=None):
         measurements["stage"] = "warmup"
         warmup = transfer(port, origin.port, workload, args.warmup, args.concurrency)
         memory_start = runtime_snapshot(process, state, 1)
-        cpu_start, rss = process_resources(process.pid)
+        proc_cpu_start, rss = process_resources(process.pid)
         rss_samples.append(rss)
         watcher = threading.Thread(target=monitor, daemon=True)
         watcher.start()
         measurements["stage"] = "measurement"
+        cpu_start = cpu_snapshot(process, state, 1, nonce)
+        transfer_started = time.monotonic_ns()
         measurements.update(transfer(port, origin.port, workload, args.seconds, args.concurrency))
-        cpu_end, rss = process_resources(process.pid)
+        transfer_completed = time.monotonic_ns()
+        cpu_end = cpu_snapshot(process, state, 2, nonce)
+        proc_cpu_end, rss = process_resources(process.pid)
         memory_end = runtime_snapshot(process, state, 2)
         rss_samples.append(rss)
-        measurements["cpu_seconds_per_gib"] = (cpu_end-cpu_start) / (measurements["bytes"]/1073741824)
+        cpu = cpu_measurement(cpu_start, cpu_end, measurements["bytes"])
+        if not (cpu_start["monotonic_after_nanos"] <= transfer_started
+                < transfer_completed <= cpu_end["monotonic_before_nanos"]):
+            raise ValueError("process CPU window does not contain the completed transfer")
+        cpu.update(transfer_started_monotonic_nanos=transfer_started,
+                   transfer_completed_monotonic_nanos=transfer_completed)
+        measurements["cpu_measurement"] = cpu
+        measurements["cpu_method"] = CPU_METHOD
+        measurements["cpu_seconds_per_gib"] = cpu["cpu_seconds_per_gib"]
+        measurements["proc_cpu_secondary"] = {
+            "method": "proc-stat-clk-tck-v1", "clock_ticks_per_second": os.sysconf("SC_CLK_TCK"),
+            "start_seconds": proc_cpu_start, "end_seconds": proc_cpu_end,
+            "delta_seconds": proc_cpu_end-proc_cpu_start,
+            "window": "outside CPU request/acknowledgement; secondary diagnostic only"}
         measurements["rss_peak_bytes"] = max(rss_samples)
         measurements["allocated_bytes_per_business_byte"] = (memory_end["total_alloc_bytes"] - memory_start["total_alloc_bytes"]) / measurements["bytes"]
         measurements["allocations_per_business_byte"] = (memory_end["mallocs"] - memory_start["mallocs"]) / measurements["bytes"]
@@ -392,6 +465,12 @@ def compare(samples, groups):
                 entry["reason"] = "all five complete samples per side are required"
                 comparisons.append(entry)
                 continue
+            if any(s.get("cpu_method") != CPU_METHOD or s.get("cpu_measurement", {}).get("method") != CPU_METHOD
+                   for side in sides.values() for s in side):
+                entry["reason"] = "every sample must use validated process CPU nanosecond snapshots"
+                comparisons.append(entry)
+                continue
+            entry["cpu_method"] = CPU_METHOD
             if mode == "events" and any(s.get("semantic_contract") != "physical-byte-observation-v1" for side in sides.values() for s in side):
                 entry.update(reason="every sample must prove the shared durable physical byte/unknown-tail/nonbilling contract")
                 comparisons.append(entry)
@@ -430,7 +509,8 @@ def run(args):
     candidate = command(["git", "rev-parse", args.candidate + "^{commit}"])
     if len(candidate) != 40:
         raise ValueError("candidate must resolve to a commit")
-    report = {"schema": "txnode-native-performance/v1", "baseline": BASELINE, "candidate": candidate,
+    report = {"schema": "txnode-native-performance/v2", "cpu_method": CPU_METHOD,
+              "baseline": BASELINE, "candidate": candidate,
               "candidate_tree": command(["git", "rev-parse", candidate + "^{tree}"]),
               "baseline_tree": command(["git", "rev-parse", BASELINE + "^{tree}"]),
               "tool_sha256": digest(Path(__file__)), "go": command(["go", "version"]),
@@ -516,6 +596,7 @@ def run(args):
         shutil.rmtree(workspace, ignore_errors=True)
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
         lines = ["# Native / legacy performance", "", "Candidate: `%s`; baseline: `%s`." % (candidate, BASELINE), "", "Status: **%s**. Scoped A/B accepted: **%s**." % (report["status"], report["accepted"]), "", "| Mode | Workload | Status | Candidate / legacy throughput | Candidate / legacy CPU |", "|---|---|---|---:|---:|"]
+        lines[6:6] = ["CPU method: `%s`; schema: `%s`. /proc CLK_TCK is secondary only." % (CPU_METHOD, report["schema"]), ""]
         for item in report["comparisons"]:
             lines.append("| %s | %s | %s | %.4f | %.4f |" % (item["mode"], item["workload"], item["status"], item.get("throughput_candidate_over_legacy", 0), item.get("cpu_candidate_over_legacy", 0)))
         if report.get("diagnostics"):

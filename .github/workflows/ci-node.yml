@@ -176,6 +176,8 @@ jobs:
           done
       - name: Verify strict interop result policy
         run: python3 -m unittest discover -s scripts -p 'test_interop_*.py' -v
+      - name: Reject invalid process CPU measurement evidence
+        run: python3 -m unittest discover -s scripts -p 'test_native_cpu.py' -v
       - name: Check independent Node image channels
         run: bash scripts/test-image-tags.sh
       - name: Verify native credential publication and replay history
