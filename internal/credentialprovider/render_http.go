@@ -115,6 +115,9 @@ func NewBrowserRenderHandler(store *Store, trust credentialdelivery.Trust, origi
 			return
 		}
 		document, err := renderClientDocument(grant.Payload.FormatID, result.Connections)
+		if custom := grant.Payload.ClientTemplate; custom != nil {
+			document, err = renderTemplateDocument(grant.Payload.FormatID, custom.Source, result.Connections)
+		}
 		if err != nil || len(document.body) > credentialdelivery.MaxMessageBytes {
 			writeDeliveryError(w, http.StatusConflict, "RENDER_FORMAT_UNAVAILABLE")
 			return

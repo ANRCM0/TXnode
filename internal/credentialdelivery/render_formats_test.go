@@ -13,6 +13,8 @@ func TestExplicitClientVersionAndCredentialProfileBoundaries(t *testing.T) {
 		{RenderShadowrocket, "2.2.0", "3.0.0", "2.1.9"},
 		{RenderSurgeIOS, "5.20.0", "6.0.0", "5.19.9"},
 		{RenderSurgeMac, "6.7.0", "7.0.0", "6.6.9"},
+		{RenderStash, "3.4.0", "3.4.1", "3.3.9"},
+		{RenderSurfboard, "2.35.2", "2.35.3", "2.35.1"},
 	} {
 		t.Run(c.format, func(t *testing.T) {
 			if !ValidRenderFormat(c.format, c.lower) || !ValidRenderProfile(c.format, "vmess-uuid/v1") {
@@ -25,7 +27,7 @@ func TestExplicitClientVersionAndCredentialProfileBoundaries(t *testing.T) {
 			}
 		})
 	}
-	for _, format := range []string{RenderClash, RenderSurgeIOS, RenderSurgeMac} {
+	for _, format := range []string{RenderClash, RenderSurgeIOS, RenderSurgeMac, RenderSurfboard} {
 		if ValidRenderProfile(format, "vless-uuid/v1") {
 			t.Fatal("unsupported VLESS client admitted")
 		}

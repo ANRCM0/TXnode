@@ -1,6 +1,6 @@
 {
   "schema": "txnode-builtin-renderers/v1",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "execution": "static-provider",
   "input": "native-authorized-connections/v1",
   "formats": {
@@ -33,6 +33,16 @@
       "min": "6.7.0",
       "before": "7.0.0",
       "content_type": "text/plain"
+    },
+    "stash/v1": {
+      "min": "3.4.0",
+      "before": "3.4.1",
+      "content_type": "application/yaml"
+    },
+    "surfboard/v1": {
+      "min": "2.35.2",
+      "before": "2.35.3",
+      "content_type": "text/plain"
     }
   },
   "profiles": [
@@ -43,12 +53,16 @@
     "tcp"
   ],
   "source_files": {
-    "internal/credentialdelivery/render.go": "6f00f7229c407308d12eefcd7259626bf3c40ac6395f971eb70f79f206b753ec",
-    "internal/credentialdelivery/render_formats.go": "9dcb1e22db05b98b455afd46b4985dcebe04f80aa692ea569c855aa6a239bdaa",
-    "internal/credentialprovider/render_clients.go": "d5003f6c6caf705d6da6b75f751ccec8abae7ee1bceb59f00f91c9ba6b4e3d05",
+    "internal/credentialdelivery/client_template.go": "0cc61b60902fe8e5928a85e04a694fbd776e14cb3aec0b74d0d7285beb740074",
+    "internal/credentialdelivery/render.go": "2380dc040cb2b84582cf2fce874b698797ea9f995a72cd804fdbf4fc286b9127",
+    "internal/credentialdelivery/render_formats.go": "1ec3355b15560faa9aa744f5614b8fc78ae513ec167d96bd95bbac99b3d9b12e",
+    "internal/credentialprovider/render_clients.go": "e00a7e6836384cc08bdf7835d32e6904f7e8c8cffdaeef6265f8fa33e234ebc6",
     "internal/credentialprovider/render_cors.go": "451f18f1188582186639d57855c8ca36a7ba7b3659b7dfec3c4724b88157d1fa",
-    "internal/credentialprovider/render_http.go": "e982299439f9608697b411a1b0ffc021afea6732c98cda20961e5f00adc035f9",
-    "internal/credentialprovider/render_surge.go": "b93094336137748e10b3a98f7109627fc9274bf92e2ff360f1b12912f18cfe9a"
+    "internal/credentialprovider/render_http.go": "9c23822a5463dc4705177e1cbe2d413b176689b6304aa3ea139b54a3b9131946",
+    "internal/credentialprovider/render_surfboard.go": "a41718071d12aa04836f2d123e322c8f25ef51fccec52c6eb51e4926edf09a9d",
+    "internal/credentialprovider/render_surge.go": "b93094336137748e10b3a98f7109627fc9274bf92e2ff360f1b12912f18cfe9a",
+    "internal/credentialprovider/render_template.go": "a96e7ef4805c9a7415ebaff8aca8da22141edcb0b039a234c20bd7b6a4d887c0",
+    "internal/credentialprovider/template_validation.go": "15bf490f6c443d8a2f083d38c950ce3e4e436a81a8825bfd9150f4376c9024bd"
   },
   "compatibility": {
     "clash/v1": {
@@ -107,6 +121,25 @@
         "tcp"
       ],
       "explicit_alpn": true
+    },
+    "stash/v1": {
+      "credential_profiles": [
+        "vless-uuid/v1",
+        "vmess-uuid/v1"
+      ],
+      "transports": [
+        "tcp"
+      ],
+      "explicit_alpn": false
+    },
+    "surfboard/v1": {
+      "credential_profiles": [
+        "vmess-uuid/v1"
+      ],
+      "transports": [
+        "tcp"
+      ],
+      "explicit_alpn": false
     }
   }
 }

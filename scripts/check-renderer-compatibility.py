@@ -10,10 +10,14 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCES = {
     'internal/credentialdelivery/render.go',
     'internal/credentialdelivery/render_formats.go',
+    'internal/credentialdelivery/client_template.go',
     'internal/credentialprovider/render_clients.go',
     'internal/credentialprovider/render_surge.go',
     'internal/credentialprovider/render_http.go',
     'internal/credentialprovider/render_cors.go',
+    'internal/credentialprovider/render_surfboard.go',
+    'internal/credentialprovider/render_template.go',
+    'internal/credentialprovider/template_validation.go',
 }
 SURFACE = ('execution', 'input', 'formats', 'profiles', 'transports', 'compatibility')
 

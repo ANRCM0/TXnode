@@ -28,6 +28,9 @@ func renderClientDocument(format string, connections []credentialdelivery.Render
 	if format == credentialdelivery.RenderSurgeIOS || format == credentialdelivery.RenderSurgeMac {
 		return renderSurgeDocument(format, connections)
 	}
+	if format == credentialdelivery.RenderSurfboard {
+		return renderSurfboardDocument(connections)
+	}
 	names := make([]string, 0, len(connections))
 	entries := make([]map[string]any, 0, len(connections))
 	for _, connection := range connections {
@@ -38,7 +41,7 @@ func renderClientDocument(format string, connections []credentialdelivery.Render
 			return renderedDocument{}, errors.New("RENDER_PROTOCOL_UNSUPPORTED")
 		}
 		switch format {
-		case "clash/v1", "clash-meta/v1":
+		case "clash/v1", "clash-meta/v1", "stash/v1":
 			entry := map[string]any{"name": name, "type": node.Protocol, "server": node.Host,
 				"port": node.Port, "uuid": connection.UUID, "network": "tcp", "udp": true}
 			if node.Protocol == "vmess" {
@@ -76,13 +79,16 @@ func renderClientDocument(format string, connections []credentialdelivery.Render
 		}
 	}
 	switch format {
-	case "clash/v1", "clash-meta/v1":
+	case "clash/v1", "clash-meta/v1", "stash/v1":
 		config := map[string]any{"mode": "rule", "proxies": entries,
 			"proxy-groups": []any{map[string]any{"name": "TXBoard", "type": "select", "proxies": names}},
 			"rules":        []string{"MATCH,TXBoard"}}
 		body, err := yaml.Marshal(config)
 		if format == credentialdelivery.RenderClash {
 			return renderedDocument{body, "application/yaml", "txboard-clash-classic.yaml"}, err
+		}
+		if format == credentialdelivery.RenderStash {
+			return renderedDocument{body, "application/yaml", "txboard-stash.yaml"}, err
 		}
 		return renderedDocument{body, "application/yaml", "txboard-clash.yaml"}, err
 	case "sing-box/v1":
