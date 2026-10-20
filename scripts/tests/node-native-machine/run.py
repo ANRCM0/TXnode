@@ -15,6 +15,7 @@ import time
 import urllib.error
 import urllib.request
 from tls_proxy import NativeTLSProxy
+from preflight import inspect as compatibility_preflight
 
 if len(sys.argv)!=4:raise SystemExit('usage: run.py API NODE NEW_EVIDENCE')
 api,node,evidence=(Path(p).resolve() for p in sys.argv[1:]);scripts=Path(__file__).resolve().parent
@@ -51,6 +52,25 @@ def artifact(name,value):
     directory=os.open(evidence,os.O_RDONLY)
     try:os.fsync(directory)
     finally:os.close(directory)
+
+artifact('sources.json',{'schema':'txnode-core-machine-sources/v1',
+    'core_repository':baseline['repository'],'core_revision':actual,'core_tree':core_tree,
+    'node_repository':'ANRCM0/txnode','node_revision':node_revision,'node_tree':node_tree,
+    'core_installation_mode':'legacy','node_kernel':'txnode',
+    'fixture_ancestor':'TXBoard 52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645 scripts/tests/node-native-machine',
+    'native_core_installation_admission':False})
+compatibility = compatibility_preflight(api, baseline)
+artifact('compatibility-preflight.json', compatibility)
+if compatibility['gaps']:
+    result = {'schema': 'txnode-core-machine-result/v1', 'status': 'failed',
+              'failed_stage': 'compatibility_preflight', 'core_revision': actual,
+              'node_revision': node_revision, 'core_tree': core_tree, 'node_tree': node_tree,
+              'core_installation_mode': 'legacy', 'node_kernel': 'txnode',
+              'native_core_installation_admission': False,
+              'diagnostics': {'category': 'core_contract_gap', 'gaps': compatibility['gaps']}}
+    artifact('result.json', result)
+    print(json.dumps(result, sort_keys=True), flush=True)
+    raise SystemExit('NATIVE_MACHINE_CORE_COMPATIBILITY_BLOCKED')
 
 active_stage = 'setup'
 
@@ -111,12 +131,6 @@ env.update(NATIVE_MACHINE_NODE_PORT_0=str(port0),NATIVE_MACHINE_NODE_PORT_1=str(
 query="SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='txboard_native_machine_test'"
 probe=subprocess.check_output([mysql,'--protocol=tcp','-h127.0.0.1','-P'+env['DB_PORT'],'-u'+env['DB_USERNAME'],'-N','-e',query],env=env|{'MYSQL_PWD':env['DB_PASSWORD']},text=True).strip()
 if probe!='0':raise SystemExit('NATIVE_MACHINE_NONEMPTY_DATABASE_REFUSED')
-artifact('sources.json',{'schema':'txnode-core-machine-sources/v1',
-    'core_repository':baseline['repository'],'core_revision':actual,'core_tree':core_tree,
-    'node_repository':'ANRCM0/txnode','node_revision':node_revision,'node_tree':node_tree,
-    'core_installation_mode':'legacy','node_kernel':'txnode',
-    'fixture_ancestor':'TXBoard 52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645 scripts/tests/node-native-machine',
-    'native_core_installation_admission':False})
 command('migrate',[php,'artisan','migrate','--force','--no-interaction'],api)
 command('build',['go','test','-c','-race','-o',str(evidence/'native-machine-test'),'./internal/machine'],node,600)
 fixture=json.loads(command('seed',[php,str(scripts/'fixture.php'),'seed'],api));artifact('fixture.json',fixture)

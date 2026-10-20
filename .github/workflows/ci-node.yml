@@ -483,6 +483,7 @@ jobs:
           name: native-machine-${{ github.sha }}
           path: |
             ${{ runner.temp }}/native-machine-evidence/sources.json
+            ${{ runner.temp }}/native-machine-evidence/compatibility-preflight.json
             ${{ runner.temp }}/native-machine-evidence/result.json
           if-no-files-found: warn
 

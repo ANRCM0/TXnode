@@ -35,8 +35,10 @@
 
 “已恢复”表示存在对应原生测试源码，不等于当前提交已经通过验收。完整覆盖映射、
 夹具限制和后续恢复条件见 [原生验收覆盖映射](../NATIVE-ACCEPTANCE-COVERAGE.zh.md)。
-新增替代入口必须由候选 Actions 执行；固定 Core 尚无原生 installation machine 准入契约，
-该入口按现有兼容安装路径验证，不宣称原生安装准入或真实数据库结算已验证。
+新增替代入口必须由候选 Actions 执行。固定 Core 的 legacy installation 无法提供 Node
+强制要求的 Provider trust，而 native installation 尚未准入 machine WS 与管理操作；
+因此该独立入口仍被合约阻塞，不能声称已完成兼容路径验证。具体调用链和适配要求见
+[Core Machine 兼容阻塞](../CORE-MACHINE-COMPATIBILITY.zh.md)。
 `TestKernelLocalEventMeterAccountsRelay` 只证明真实 SOCKS5 流量能触发本地事件链路；
 它的通过条件是存在事件或持久化桶，不能替代 Service 生命周期、逐方向精确计数、
 observer 输出或 packet 路径的断言。`.go.txt` 文件也不属于 CI 的可执行测试集合。

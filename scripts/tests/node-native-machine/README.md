@@ -7,13 +7,18 @@ The runner and transparent TLS proxy were recovered from TXBoard commit
 `compatibility/core.v1.json`. The fixture lives in the candidate Node repository
 and does not patch Core application source.
 
-The Core runs its existing **legacy installation mode** Machine contract. The
-Node uses only the `txnode` kernel, and VLESS/VMess clients use Node's native
-outbound implementation. This gate does not add or attest Machine support in
-Core native installation mode. It complements the separate native account,
-Provider, authorization and settlement C2 gate.
+The fixture currently requests **legacy installation mode**, which cannot
+satisfy the pinned Core's mandatory native Provider trust boundary. Its positive
+whole Machine chain has not passed acceptance. The static compatibility
+preflight now fails before database probes, migrations, seed or application
+startup and publishes an explicit `compatibility_preflight` failure. See
+`docs/CORE-MACHINE-COMPATIBILITY.zh.md` for the exact pinned owner chain and
+required independent Core adaptation. A future native admission inventory pass
+alone is insufficient: the fixture also needs real native activation and
+Provider trust/material flow. The Node uses the `txnode` kernel, and VLESS/VMess
+clients use Node's native outbound implementation.
 
-## Coverage
+## Intended Coverage (Not Yet Accepted)
 
 - Two real nodes managed by the production Orchestrator and one shared
   Workerman WebSocket; real VLESS and VMess TCP traffic.
@@ -55,12 +60,15 @@ before invoking the runner. The evidence directory must not exist beforehand.
 No credentials from another application database or Redis logical database are
 needed.
 
-Upload only `sources.json` and `result.json` from the evidence directory.
+Upload only `sources.json`, `result.json` and `compatibility-preflight.json`
+from the evidence directory.
 `sources.json` records candidate Node SHA/tree, fixed Core SHA/tree, kernel and
 installation mode. `result.json` records the assertions and observations hash.
 On failure, `result.json` records `failed_stage`, the test process exit code,
 test source line numbers and predefined diagnostic labels. Raw log lines and
-exception messages are excluded from this public summary.
+exception messages are excluded from this public summary. Static preflight
+failures instead contain fixed contract gap codes and public route/command
+names; `compatibility-preflight.json` explicitly records `runtime_verified=false`.
 Keep fixture tokens, private keys, `fixture.json`, stage acknowledgement files,
 spools and process logs private; they are not public CI artifacts.
 
