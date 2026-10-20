@@ -6,6 +6,10 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # The interop matrix downloads pinned third-party clients; run it nightly
+    # so an upstream release cannot silently break the data plane.
+    - cron: "17 3 * * *"
 
 permissions:
   contents: read
@@ -440,3 +444,27 @@ jobs:
           name: node-core-compatibility-${{ github.sha }}
           path: artifacts/core-compatibility-sources.json
           if-no-files-found: error
+
+  interop:
+    name: Third-party interop matrix
+    runs-on: ubuntu-latest
+    # Pinned client binaries are fetched with their SHA-256; the clients are
+    # test tools and never enter go.mod, the image or a release artifact.
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || startsWith(github.ref, 'refs/tags/v')
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+          cache: true
+      - name: Fetch pinned clients
+        run: scripts/fetch-interop-clients.sh "$RUNNER_TEMP/interop-clients"
+      - name: Run the interop matrix
+        env:
+          TXNODE_INTEROP_XRAY: ${{ runner.temp }}/interop-clients/xray/xray
+          TXNODE_INTEROP_MIHOMO: ${{ runner.temp }}/interop-clients/mihomo/mihomo
+          TXNODE_INTEROP_SINGBOX: ${{ runner.temp }}/interop-clients/singbox/sing-box
+          TXNODE_INTEROP_MIERU: ${{ runner.temp }}/interop-clients/mieru/mieru
+        run: go test ./internal/kernel/txnode/ -run TestInterop -count=1 -v -timeout 900s

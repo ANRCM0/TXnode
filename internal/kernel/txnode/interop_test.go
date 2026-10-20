@@ -1129,6 +1129,58 @@ func TestInteropSingBoxHysteria2UDP(t *testing.T) {
 	}
 }
 
+// TestInteropSingBoxMux drives the mux inbound path with sing-box
+// multiplexing: one mux connection carries several streams, each with its own
+// SOCKS destination header.
+func TestInteropSingBoxMux(t *testing.T) {
+	for _, protocol := range []string{"smux", "yamux"} {
+		t.Run(protocol, func(t *testing.T) {
+			origin := startInteropOrigin(t)
+			port := startInteropKernel(t, &model.NodeSpec{Protocol: "vless", Transport: "tcp"}, kernel.TLSCert{})
+			outbound := map[string]any{
+				"type": "vless", "tag": "interop",
+				"server": "127.0.0.1", "server_port": port,
+				"uuid":      interopUUID,
+				"multiplex": map[string]any{"enabled": true, "protocol": protocol, "max_streams": 8},
+			}
+			if !singBoxSupports(t, outbound) {
+				t.Skipf("sing-box has no %s multiplexing", protocol)
+			}
+			socks := startSingBoxClient(t, outbound)
+			// The first request opens the mux connection, the following ones
+			// reuse it: every session must be relayed independently.
+			for round := 0; round < 3; round++ {
+				body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
+				if err != nil {
+					t.Fatalf("round %d: %v", round, err)
+				}
+				if body != "interop-ok" {
+					t.Fatalf("round %d: body = %q", round, body)
+				}
+			}
+		})
+	}
+}
+
+// TestInteropXrayMux documents that Xray Mux.Cool framing is not the
+// address-header mux: Xray sends [len 2][session 2][status][option][network]
+// with chunked payloads, so a mux-enabled Xray client must fail rather than
+// silently corrupt. The node keeps the address-header mux for sing-box and for
+// the smux/yamux transports; Mux.Cool support is tracked as a separate gap.
+func TestInteropXrayMux(t *testing.T) {
+	origin := startInteropOrigin(t)
+	port := startInteropKernel(t, &model.NodeSpec{Protocol: "vless", Transport: "tcp"}, kernel.TLSCert{})
+	outbound := vlessOutbound(port, nil)
+	outbound["mux"] = map[string]any{"enabled": true, "concurrency": 8}
+	cfg, socks := xrayClientConfig(t, outbound)
+	startXrayClient(t, cfg)
+	if _, err := fetchThroughE(t, socks, origin.Listener.Addr().String()); err == nil {
+		t.Fatal("Xray Mux.Cool unexpectedly succeeded: the address-header mux must not claim it")
+	} else {
+		t.Logf("Xray Mux.Cool rejected as expected: %v", err)
+	}
+}
+
 func TestInteropSingBoxMieru(t *testing.T) {
 	origin := startInteropOrigin(t)
 	port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "mieru", Transport: "tcp"}, kernel.TLSCert{},

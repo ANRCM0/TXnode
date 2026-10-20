@@ -15,7 +15,10 @@ Core owns identity, entitlement and settlement; Node consumes versioned protocol
 Use Go 1.26 and the checked-in module locks. `make build` is a local static build.
 Run functional, race, network, browser and container acceptance in GitHub Actions.
 `make test` covers both commands and internal packages; `make test-runtime-stability`
-repeats focused lifecycle suites. Keep local kernel replacements, licenses and
+repeats focused lifecycle suites. The third-party interop matrix is not part of the
+default gates: `scripts/fetch-interop-clients.sh` downloads the pinned clients
+(version + SHA-256) and the `interop` workflow job runs
+`go test ./internal/kernel/txnode/ -run TestInterop` nightly, on dispatch and on tags. Keep local kernel replacements, licenses and
 `TXNODE-PATCH.md` notes together with their sources under `internal/deps/`.
 
 The independent workflow owns tests, actual image checks and a real native Core

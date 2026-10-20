@@ -61,6 +61,8 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 | Mieru v2 空闲后复用 | 官方 mieru 3.38 | 跨 25s 静默（心跳窗口）后新会话仍可传输 |
 | Mieru v2 1 MiB 双向 | 官方 mieru 3.38 | 上行/下行各 1 MiB，校验字节一致；覆盖分片、序号与窗口字段 |
 | Mieru v2 拨号失败 | 官方 mieru 3.38 | 目标不可达时内层 SOCKS5 收到 `05 05`（connection refused），不会挂起 |
+| 多路复用 smux / yamux | sing-box 1.14 | 一个 mux 连接承载多条流，每条流带 SOCKS 地址头；流共享父会话的 user/限速/设备闸 |
+| Xray Mux.Cool | Xray 26.3.27 | 负向用例：Mux.Cool 帧格式与地址头 mux 不同，必须明确失败而不是串流 |
 
 未通过 / 未覆盖（跳过，带原因）：
 
@@ -94,18 +96,22 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 
 ## 尚未覆盖的互通项
 
-当前用例集覆盖 20 条链路（25 个用例），全部通过。以下能力还没有真实客户端用例，发布前建议补齐：
+当前用例集覆盖 21 条链路（29 个用例，含 2 个 mux 子用例），全部通过。以下能力还没有真实客户端用例，发布前建议补齐：
 
 1. **Mieru**：`traffic_pattern` 与低熵编码（type 10/11）未实现；官方客户端默认关闭，需显式夹具才能覆盖；
-2. **UDP 数据面**：Hysteria2 UDP 已覆盖；TUIC UDP 与 xudp、Mieru UDP（UDP 承载）待补；
-3. **传输剩余**：h2 已被上游移除，其余组合已覆盖；
-4. **多路复用**：`mux`（sp.mux.sing-box.arpa）没有独立客户端用例。
+2. **UDP 数据面**：Hysteria2 UDP 已覆盖；TUIC UDP 与 xudp、Mieru UDP（UDP 承载）、mux UDP 流待补；
+3. **Xray Mux.Cool**：`[len][sessionID][status][network][target]` + ChunkStream 分块，与地址头 mux 是两套协议；当前明确不支持（负向用例保证不会串流）；
+4. **传输剩余**：h2 已被上游移除，其余组合已覆盖。
 
-修复顺序建议：先补 TUIC UDP / xudp（同协议、低成本），再补 Mieru 低熵与 UDP 承载，最后补 mux 用例。
+修复顺序建议：先补 TUIC UDP / xudp（同协议、低成本），再补 mieru UDP 承载与 mux UDP，最后评估 Xray Mux.Cool 单独实现。
 
 ## 复现
 
+客户端由 `scripts/fetch-interop-clients.sh` 下载，按版本和 SHA-256 固定；
+`--check` 只校验已有缓存。CI 的 `interop` job（nightly / dispatch / tag）跑同一套用例：
+
 ```bash
+scripts/fetch-interop-clients.sh .clients
 TXNODE_INTEROP_XRAY=$PWD/../.clients/xray/xray \
 TXNODE_INTEROP_MIHOMO=$PWD/../.clients/mihomo/mihomo \
 TXNODE_INTEROP_SINGBOX=$PWD/../.clients/singbox/sing-box \

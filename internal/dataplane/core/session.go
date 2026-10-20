@@ -65,7 +65,9 @@ func (s *Server) ServeSession(ctx context.Context, sess *Session) error {
 // serveSession dispatches an already-accounted session.
 func (s *Server) serveSession(ctx context.Context, sess *Session, src netip.Addr) error {
 	switch strings.ToLower(sess.Dest.Host) {
-	case "sp.mux.sing-box.arpa":
+	case "sp.mux.sing-box.arpa", "v1.mux.cool":
+		// v1.mux.cool is the VLESS cmd==3 pseudo-destination; the stream framing
+		// is the address-header mux used by the smux/yamux transports.
 		return s.serveMux(ctx, sess, src)
 	case "sp.udp-over-tcp.arpa":
 		if sess.Packets == nil {
@@ -92,10 +94,11 @@ func (s *Server) serveSession(ctx context.Context, sess *Session, src netip.Addr
 
 // MuxRelay is the per-stream callback core hands to the mux implementation: the
 // mux package reports a fresh stream plus its SOCKS destination and core relays
-// it exactly like a normal TCP session (../mux owns the framing).
-type MuxRelay func(ctx context.Context, conn net.Conn, dest socks.Addr) error
+// it exactly like a normal TCP session (../mux owns the framing). packets is
+// non-nil for a UDP stream (flags bit 0) and then conn is nil.
+type MuxRelay func(ctx context.Context, conn net.Conn, packets PacketStream, dest socks.Addr) error
 
-type muxServerFunc func(ctx context.Context, conn net.Conn, relay MuxRelay) error
+type muxServerFunc func(ctx context.Context, parent *Session, src netip.Addr, conn net.Conn, relay MuxRelay) error
 
 var muxServer atomic.Pointer[muxServerFunc]
 
@@ -103,12 +106,44 @@ var muxServer atomic.Pointer[muxServerFunc]
 // sp.mux.sing-box.arpa / v1.mux.cool sessions (internal/mux.Serve @0x773b40).
 // Keeping it behind a hook avoids a core -> mux import cycle: mux needs
 // socks/core types, core only needs the callback.
-func SetMuxServer(fn func(ctx context.Context, conn net.Conn, relay MuxRelay) error) {
+func SetMuxServer(fn func(ctx context.Context, parent *Session, src netip.Addr, conn net.Conn, relay MuxRelay) error) {
 	if fn == nil {
 		return
 	}
 	f := muxServerFunc(fn)
 	muxServer.Store(&f)
+}
+
+// InstallMuxServer bridges an application-owned mux server into this Server.
+// The application keeps the framing and the Server keeps routing, accounting,
+// audit and admission.
+func (s *Server) InstallMuxServer(serve func(ctx context.Context, parent *Session, src netip.Addr, conn net.Conn, relay MuxRelay) error) {
+	SetMuxServer(serve)
+}
+
+// MuxStreamSession builds the child session for one mux stream and relays it.
+// Streams share the parent lease: the parent was already accounted by
+// ServeSession, and charging or gating each stream again would let one
+// multiplexed connection exceed the device/connection limits.
+func (s *Server) MuxStreamSession(ctx context.Context, parent *Session, src netip.Addr, conn net.Conn, packets PacketStream, dest socks.Addr) error {
+	if parent == nil {
+		if conn != nil {
+			_ = conn.Close()
+		}
+		if packets != nil {
+			_ = packets.Close()
+		}
+		return errors.New("mux: stream without a parent session")
+	}
+	child := &Session{
+		UserID:  parent.UserID,
+		Dest:    dest,
+		Conn:    conn,
+		Packets: packets,
+		Local:   parent.Local,
+		Socket:  tcpWriter(conn),
+	}
+	return s.serveSession(ctx, child, src)
 }
 
 // serveMux is (*Server).serveMux @0x7b2200. Streams share the parent session's
@@ -121,14 +156,7 @@ func (s *Server) serveMux(ctx context.Context, sess *Session, src netip.Addr) er
 	if sess.Conn == nil {
 		return errors.New("session refused: no transport")
 	}
-	return (*fn)(ctx, sess.Conn, func(ctx context.Context, conn net.Conn, dest socks.Addr) error {
-		child := &Session{
-			UserID: sess.UserID,
-			Dest:   dest,
-			Conn:   conn,
-			Local:  sess.Local,
-			Socket: tcpWriter(conn),
-		}
-		return s.serveSession(ctx, child, clientIP(conn))
+	return (*fn)(ctx, sess, src, sess.Conn, func(ctx context.Context, conn net.Conn, packets PacketStream, dest socks.Addr) error {
+		return s.MuxStreamSession(ctx, sess, src, conn, packets, dest)
 	})
 }

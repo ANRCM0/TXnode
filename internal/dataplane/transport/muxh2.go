@@ -18,7 +18,7 @@ import (
 // (*Server).serveConn (notes/rev-transport.md §4.1, 0x74d600); each stream
 // starts with the SOCKS address header like the smux/yamux streams
 // (readStreamRequest 0x774de0).
-func ServeMuxH2(ctx context.Context, conn net.Conn, relay func(context.Context, *core.Session) error) error {
+func ServeMuxH2(ctx context.Context, conn net.Conn, parent *core.Session, relay func(context.Context, *core.Session) error) error {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		stream, err := newHTTPStream(w, r)
 		if err != nil {
@@ -37,6 +37,12 @@ func ServeMuxH2(ctx context.Context, conn net.Conn, relay func(context.Context, 
 			return
 		}
 		sess := &core.Session{Conn: stream, Dest: dest}
+		if parent != nil {
+			// Streams inherit the accounted parent: user, egress address and
+			// lease stay on the mux connection.
+			sess.UserID = parent.UserID
+			sess.Local = parent.Local
+		}
 		if flags&mux.FlagUDP != 0 {
 			sess.Conn = nil
 			sess.Packets = mux.NewPackets(stream)

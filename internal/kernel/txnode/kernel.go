@@ -171,6 +171,9 @@ func (k *Kernel) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 func (k *Kernel) buildLocked(nc *model.NodeSpec, sp *spec, users []model.UserSpec, cert kernel.TLSCert) (
 	core.Handler, *core.Router, *tls.Config, *transport.Reality, *core.Server, *bindResult, error) {
 
+	// A mux-enabled client sends every stream to the mux pseudo-host, so the
+	// server side has to be installed before the first listener accepts.
+	installMuxServer()
 	cu := coreUsers(users)
 	handler, err := buildHandler(sp, cu, k.log)
 	if err != nil {
@@ -226,6 +229,7 @@ func (k *Kernel) installLocked(sp *spec, router *core.Router, srv *core.Server, 
 	k.router.Store(router)
 	k.srv = srv
 	k.bind = res
+	publishMux(k)
 	if k.meter != nil {
 		k.meter.onStop = func() {
 			if k.srv != nil {
@@ -247,6 +251,7 @@ func (k *Kernel) Stop() {
 }
 
 func (k *Kernel) stopLocked() {
+	unpublishMux(k)
 	if k.bind != nil {
 		k.bind.closeAll()
 		k.bind = nil
