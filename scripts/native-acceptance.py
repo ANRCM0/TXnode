@@ -329,7 +329,7 @@ def sample(binary, state, mode, workload, args, origin, cpu_profile=None):
 
 def diagnostics(output, report, args, origin):
     # Profiled samples are separate from all acceptance samples and ratios.
-    cases = [("ordinary", "download")]
+    cases = [("ordinary", "download"), ("events", "download")]
     if any(s["mode"] == "usage_v2" and s["workload"] == "short" and s["status"] != "measured" for s in report["samples"]):
         cases.append(("usage_v2", "short"))
     results = []
@@ -506,7 +506,9 @@ def main():
     args = parser.parse_args()
     report = run(args)
     if args.diagnostics_only:
-        complete = report["status"] == "diagnostics-only" and len(report.get("diagnostics", [])) == 2 and all(
+        expected = {(mode, "download", side) for mode in ("ordinary", "events") for side in ("legacy", "candidate")}
+        observed = {(item["mode"], item["workload"], item["side"]) for item in report.get("diagnostics", [])}
+        complete = report["status"] == "diagnostics-only" and len(report.get("diagnostics", [])) == 4 and observed == expected and all(
             item.get("profile_bytes", 0) > 0 and not item.get("diagnostic_error") and item.get("sample", {}).get("status") == "measured"
             for item in report["diagnostics"])
         return 0 if complete else 1

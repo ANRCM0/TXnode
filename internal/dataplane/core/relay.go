@@ -276,8 +276,9 @@ func (s *Server) relayTCP(ctx context.Context, sess *Session) error {
 		}()
 	}
 
-	upCount := func(n int64) { touch(); count(true)(n) }
-	downCount := func(n int64) { touch(); count(false)(n) }
+	upTraffic, downTraffic := count(true), count(false)
+	upCount := func(n int64) { touch(); upTraffic(n) }
+	downCount := func(n int64) { touch(); downTraffic(n) }
 
 	// Flush the peeked bytes to the remote, then relay the bare connections so
 	// splice(2) stays available on a plain TCP node. Buffered wrappers are

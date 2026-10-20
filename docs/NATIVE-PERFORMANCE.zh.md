@@ -75,16 +75,17 @@
 
 `report.json` / `report.md` 保留每一份原始样本、失败原因、来源、构建参数和比较范围；每份样本的目录还保留 `server.log`、`sample.json`、持久化状态与 `evidence.json`。工作流保留所有失败产物。任意模式缺样本、语义投影不完整、噪声或阈值越界均使性能 job 失败；events 没有成功豁免。
 
-正式五组结束后，两侧各另跑一份相同参数的 ordinary/download CPU profile 诊断。harness 只在设置 `TXNODE_NATIVE_AB_CPU_PROFILE` 时启用 Go CPU profiler，覆盖该独立进程的启动、预热、测量与正常关闭。`diagnostic-*` 目录保留 `cpu.pprof`、`cpu-top.txt`、二进制及 profile SHA、样本状态和 `metadata.json`；这些样本单列于 `diagnostics`，不进入正式 120 份样本、比率或 accepted 计数。正式 usage_v2/short 存在失败时，另对两侧各做一次固定诊断，保留失败阶段、错误类型和服务端退出状态；独立诊断成功不消除原失败。
+正式五组结束后，两侧各另跑相同参数的 ordinary/download 和 events/download CPU profile 诊断，共四份。harness 只在设置 `TXNODE_NATIVE_AB_CPU_PROFILE` 时启用 Go CPU profiler，覆盖该独立进程的启动、预热、测量与正常关闭。`diagnostic-*` 目录保留 `cpu.pprof`、`cpu-top.txt`、二进制及 profile SHA、样本状态和 `metadata.json`；这些样本单列于 `diagnostics`，不进入正式 120 份样本、比率或 accepted 计数。events 诊断仍执行同一物理字节投影核对，不退化为 ordinary。正式 usage_v2/short 存在失败时，另对两侧各做一次固定诊断，保留失败阶段、错误类型和服务端退出状态；独立诊断成功不消除原失败。
 
-同一工作流另有独立 `performance-diagnostics` job，使用 `--diagnostics-only` 提前构建两侧并收集相同下载 profile，输出单独 artifact，无需等待 24 分钟正式采样。该模式跳过镜像和正式矩阵，`accepted` 始终为 false，退出码只反映两份诊断是否完整，不参与 S3 验收。CPU top 同时写入 job log。
+同一工作流另有独立 `performance-diagnostics` job，使用 `--diagnostics-only` 提前构建两侧并收集上述四份下载 profile，输出单独 artifact，无需等待 24 分钟正式采样。该模式跳过镜像和正式矩阵，`accepted` 始终为 false，退出码要求 ordinary/events 与 legacy/candidate 的四种组合恰好覆盖且全部诊断完整，不参与 S3 验收。CPU top 同时写入 job log。
 
 调查记录：`f1451d5` 的五组正式样本完整，但普通下载 CPU/GiB 比率约为 1.1462。
 `6f8ae3c` 的独立下载 profile 总 CPU 为原生 6.85 秒、旧侧 5.95 秒；原生
 `spliceOne` 累计 5.15 秒，其中重复 `os.File.Fd` / `SetBlocking` 约 0.45 秒。
 Linux splice 实现将管道描述符保留到本次 relay 结束，避免在每段 I/O 中重复取描述符；
-`RawConn` 的等待、EAGAIN、取消和
-半关闭边界继续保持。profile 支持定位开销，不证明修复后的性能结果，新候选仍按
+TCP 两方向的计数闭包按会话创建一次，逐段仍调用原 Tracker/OnTraffic 计数。
+`RawConn` 的等待、EAGAIN、取消和半关闭边界继续保持。
+profile 支持定位开销，不证明修复后的性能结果，新候选仍按
 上述五组、原 5% 阈值和原资源预算执行。
 
 性能报告的 `accepted` 只描述上述 A/B 范围。最终 `acceptance` job 下载同一 SHA 的三个 job 产物，核对持续时间、四档实际承载 Node 代际恢复和精确旧流断开数、七项故障无 skip、12 组比较全部满足固定阈值、至少 120 份分配窗口及两侧实际镜像体积；所有证据和 job 都成功时，`s3-acceptance.json` 的 `full_S3_accepted` 才由计算结果变为 true。缺失、失败、噪声或阈值越界均为 false，并保留具体 checks。这一结果严格限定为本文固定的 Actions 回环验收范围；PR 合并、合并后 main、发布镜像、Core 采用、物理多机及受控试运行必须分别记账。
