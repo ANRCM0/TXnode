@@ -21,11 +21,13 @@ Node `75e1554` 的 Actions run `39463019286`，Core machine job `118770492079` �
 
 | 保留的原业务断言 | 当前原生实现及缺口 |
 | --- | --- |
-| 恢复旧使用量并取得 Core 持久化回执后才开放监听 | `OpenNativeStore` 保证原证据在本地导出；`initialSetup` 随后开放 kernel，`Run` 再启动异步上报 worker。当前不是回执先于监听的契约。需要独立的有界恢复和准入设计及真实内核验证，不能以最终上报成功替代该断言。 |
+| 恢复旧使用量并取得 Core 持久化回执后才开放监听 | 新增启动恢复源码：`OpenNativeStore` 导出旧意图后，在新 collector 和 listener 之前验证固定恢复集合的真实持久化 receipt。每页最多 16 个、最多 16 页未获回执的记录，整体 30 秒、每页 2 秒；已确认历史本地验证且不占网络预算。原 session、payload、period 和 digest 保持，matching 当前 cutoff 阻止准入。真实内核回归已编写，须取得当前提交 Actions 结果才算验收。 |
 | 兄弟节点已建流跨授权刷新继续存活 | `applyNativeAuthorization` 在接受新签名修订前停止旧 kernel、排空计量并创建新 collector；现有 `TestNativeBillingRefreshResetAndEmptyRevocationPreserveOriginalSessions` 明确要求重新启动。持续连接的原断言尚未满足。 |
-| 所有 config/users REST 请求阻断时仍由 WS 完成配置更新 | 强制签名授权下的 WS 通知触发 `requestAuthorizationPoll`，重新获取完整 REST snapshot；不能跳过签名验证来满足旧的 WS-only 断言。 |
+| 所有 config/users REST 请求阻断时仍由 WS 完成配置更新 | 新增端口变化的窄路径：当前签名用户、协议、安全参数、路由及原有限租约保持，使用既有 Kernel.Reload 复用原 meter/collector，并阻止旧在途 full REST 结果回滚新端口。失败保留旧已应用监听，过期/撤权照常关闭。其他配置变化仍获取完整签名 REST snapshot；新增真实 WS/VLESS 回归待当前 Actions 验收。 |
 
 这些是 Node 的兼容与验收缺口，不能归入 Core admission 缺失，也不证明当前原生计量已经丢失。夹具保留相应严格断言；即使后续 Core inventory 通过，也不能据此宣称完整 Machine 已通过。
+
+启动恢复的时间预算覆盖可取消的递交和阶段检查；本地 spool 枚举仍使用既有完整读取，不能把页数预算解释成磁盘 I/O 或内存的绝对上限。持久化回执只证明 Core 接收保管，`pending` 不等于财务已结算。普通授权续期的连接连续性仍未实现：server hook、不可变 collector 窗口、原 token completion 和不重叠的封口边界需要协调设计，不能以替换 meter 指针绕过。
 
 ## 固定 Core 调用链
 
