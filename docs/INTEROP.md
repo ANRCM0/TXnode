@@ -1,7 +1,36 @@
 # 第三方客户端互通测试（txnode 数据面）
 
 客户端只是**测试工具**：不进 `go.mod`、不进镜像、不进发布产物。测试在设置环境变量后才
-运行，缺失时自动 `t.Skip`，因此 CI 不受影响。
+运行。普通发现模式仅在未配置客户端时允许 `t.Skip`；设置了无效路径、已支持链路发生错误时均失败。
+
+## 严格验收门禁（S0 实现）
+
+工作流以 `scripts/interop-cases.v1.json` 声明用例、客户端版本/校验值、quick/full 范围及已知缺口，
+通过 `scripts/interop_gate.py` 执行严格模式并核对 `go test -json` 结果。quick 用于 PR/main，
+full 用于 nightly/dispatch/tag；标签发布依赖 full 成功。源码中已实现的门禁仍须由对应提交的 Actions 验收，
+下文历史通过数不自动更新为新版本验收结果。
+
+- 必需客户端缺失、校验值错误、用例缺失、父子结果不完整、支持用例失败和意外 Skip 均使门禁失败。
+- 已知缺口必须按用例及固定 `INTEROP_KNOWN_GAP:<ID>` 标记，默认在探测前声明未执行/未验收。
+- `TXNODE_INTEROP_DIAGNOSTIC_GAPS=1` 可在单独诊断运行中实际探测已知缺口，错误直接失败；严格汇总 runner 不启用此模式。
+- REALITY 夹具自行生成匹配的 X25519 密钥对；不再因缺少外部公钥跳过 Mihomo。
+- 四个下载客户端固定二进制 SHA-256。curl 使用 Ubuntu 24.04 的系统版本，检查版本及 HTTP/2 能力，记录实际二进制摘要；它不具有与下载客户端相同的二进制锁定保证。
+- 每次保留 `events.jsonl`、`stderr.log`、`summary.json`、`summary.md`，记录源码提交/树、清单摘要和客户端来源。已知缺口与不适用组合不计作通过。
+
+以下命令供 GitHub Actions 环境使用，功能和网络验收继续遵守 README 的 Actions-only 约定：
+
+```bash
+scripts/fetch-interop-clients.sh "$RUNNER_TEMP/interop-clients"
+export TXNODE_INTEROP_XRAY="$RUNNER_TEMP/interop-clients/xray/xray"
+export TXNODE_INTEROP_MIHOMO="$RUNNER_TEMP/interop-clients/mihomo/mihomo"
+export TXNODE_INTEROP_SINGBOX="$RUNNER_TEMP/interop-clients/singbox/sing-box"
+export TXNODE_INTEROP_MIERU="$RUNNER_TEMP/interop-clients/mieru/mieru"
+export TXNODE_INTEROP_CURL=/usr/bin/curl
+python3 scripts/interop_gate.py --profile quick --output artifacts/interop-quick
+python3 scripts/interop_gate.py --profile full --output artifacts/interop-full
+```
+
+以下旧版下载与运行片段只作为历史复现说明；候选版本验收使用上面的固定清单入口。
 
 ## 怎么跑
 
@@ -36,7 +65,7 @@ go test ./internal/kernel/txnode/ -run TestInterop -v -timeout 600s
 REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.microsoft.com:443`，可用
 `TXNODE_INTEROP_REALITY_DEST` 覆盖。
 
-## 结果（Xray 26.3.27 / Mihomo v1.19.32 / sing-box 1.14.3，本机回环）
+## 历史结果（Xray 26.3.27 / Mihomo v1.19.32 / sing-box 1.14.3，本机回环）
 
 通过（29 个用例，覆盖 24 条链路）：
 
@@ -70,7 +99,7 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 
 | 用例 | 客户端 | 现象 | 编号 |
 |---|---|---|---|
-| TUIC | Mihomo | QUIC 建连后不发送 v5 认证帧（客户端实现差异） | TUIC-mihomo |
+| TUIC | Mihomo | 尚未通过，需参考服务端与逐帧对照后定位责任 | TUIC-mihomo |
 | VLESS + HTTP/2 | — | Xray 26 已移除独立 h2 传输 | H2-removed |
 
 ### Mieru v2（MIERU-1 已关闭）

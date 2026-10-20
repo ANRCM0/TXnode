@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdh"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -15,6 +16,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -36,19 +38,13 @@ import (
 
 // The interop suite drives the native data plane with a real third-party client
 // (Xray). The client is a test tool only: it is never built into the node, is
-// not referenced by go.mod, and the tests skip when TXNODE_INTEROP_XRAY is unset.
+// not referenced by go.mod. Discovery may skip unconfigured clients; strict CI
+// requires every selected client's executable and treats transport errors as failures.
 const interopUUID = "00112233-4455-4677-8899-aabbccddeeff"
 
 func xrayBinary(t *testing.T) string {
 	t.Helper()
-	bin := os.Getenv("TXNODE_INTEROP_XRAY")
-	if bin == "" {
-		t.Skip("TXNODE_INTEROP_XRAY is not set")
-	}
-	if _, err := os.Stat(bin); err != nil {
-		t.Skipf("xray binary not found: %v", err)
-	}
-	return bin
+	return interopBinary(t, "TXNODE_INTEROP_XRAY")
 }
 
 func startInteropOrigin(t *testing.T) *httptest.Server {
@@ -206,12 +202,16 @@ func socksNoAuthConnectE(socksAddr, dest string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := conn.SetDeadline(time.Now().Add(8 * time.Second)); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
 	if _, err := conn.Write([]byte{0x05, 0x01, 0x00}); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
 	var method [2]byte
-	if _, err := io.ReadFull(conn, method[:]); err != nil || method[1] != 0x00 {
+	if _, err := io.ReadFull(conn, method[:]); err != nil || method[0] != 0x05 || method[1] != 0x00 {
 		_ = conn.Close()
 		return nil, fmt.Errorf("socks method reply: %v %v", method, err)
 	}
@@ -236,28 +236,56 @@ func socksNoAuthConnectE(socksAddr, dest string) (net.Conn, error) {
 		_ = conn.Close()
 		return nil, err
 	}
-	var head [4]byte
-	if _, err := io.ReadFull(conn, head[:]); err != nil || head[1] != 0x00 {
+	if err := readSocksConnectReply(conn); err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("socks connect reply: %v %v", head, err)
-	}
-	skip := map[byte]int{0x01: 6, 0x04: 18}
-	if head[3] == 0x03 {
-		var l [1]byte
-		if _, err := io.ReadFull(conn, l[:]); err != nil {
-			_ = conn.Close()
-			return nil, err
-		}
-		skip[0x03] = int(l[0]) + 2
-	}
-	var tail [20]byte
-	if n := skip[head[3]]; n > 0 {
-		if _, err := io.ReadFull(conn, tail[:n]); err != nil {
-			_ = conn.Close()
-			return nil, err
-		}
+		return nil, err
 	}
 	return conn, nil
+}
+
+type socksConnectReplyError struct {
+	reply byte
+}
+
+func (e *socksConnectReplyError) Error() string {
+	return fmt.Sprintf("SOCKS5 CONNECT rejected with REP=0x%02x", e.reply)
+}
+
+// Parse the complete frame before classifying a rejection; truncated or malformed
+// handshakes must not satisfy a target-connection-refused assertion.
+func readSocksConnectReply(r io.Reader) error {
+	var head [4]byte
+	if _, err := io.ReadFull(r, head[:]); err != nil {
+		return fmt.Errorf("read SOCKS5 CONNECT reply: %w", err)
+	}
+	if head[0] != 0x05 || head[2] != 0x00 {
+		return fmt.Errorf("invalid SOCKS5 CONNECT reply header: %v", head)
+	}
+	var tailLength int
+	switch head[3] {
+	case 0x01:
+		tailLength = 6
+	case 0x04:
+		tailLength = 18
+	case 0x03:
+		var length [1]byte
+		if _, err := io.ReadFull(r, length[:]); err != nil {
+			return fmt.Errorf("read SOCKS5 CONNECT domain length: %w", err)
+		}
+		if length[0] == 0 {
+			return fmt.Errorf("invalid empty SOCKS5 CONNECT domain")
+		}
+		tailLength = int(length[0]) + 2
+	default:
+		return fmt.Errorf("invalid SOCKS5 CONNECT reply address type: 0x%02x", head[3])
+	}
+	if _, err := io.CopyN(io.Discard, r, int64(tailLength)); err != nil {
+		return fmt.Errorf("read SOCKS5 CONNECT bound address: %w", err)
+	}
+	if head[1] != 0x00 {
+		return &socksConnectReplyError{reply: head[1]}
+	}
+	return nil
 }
 
 // selfSignedFiles returns the PEM pair plus the certificate file path Xray needs
@@ -411,7 +439,7 @@ func TestInteropXrayShadowsocks(t *testing.T) {
 // client. The borrowed site must be reachable because the server relays the
 // ClientHello to it; override with TXNODE_INTEROP_REALITY_DEST.
 func TestInteropXrayVLESSReality(t *testing.T) {
-	bin := xrayBinary(t)
+	xrayBinary(t)
 	dest := os.Getenv("TXNODE_INTEROP_REALITY_DEST")
 	if dest == "" {
 		dest = "www.cloudflare.com:443"
@@ -420,7 +448,7 @@ func TestInteropXrayVLESSReality(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	priv, pub := xrayRealityKeypair(t, bin)
+	priv, pub := interopRealityKeypair(t)
 
 	origin := startInteropOrigin(t)
 	spec := &model.NodeSpec{
@@ -458,38 +486,18 @@ func TestInteropXrayVLESSReality(t *testing.T) {
 	}
 }
 
-func xrayRealityKeypair(t *testing.T, bin string) (string, string) {
+func interopRealityKeypair(t *testing.T) (string, string) {
 	t.Helper()
-	out, err := exec.Command(bin, "x25519").CombinedOutput()
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
-		t.Fatalf("xray x25519: %v\n%s", err, out)
+		t.Fatalf("generate REALITY fixture keypair: %v", err)
 	}
-	var priv, pub string
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(line, "PrivateKey:"):
-			priv = strings.TrimSpace(strings.TrimPrefix(line, "PrivateKey:"))
-		case strings.HasPrefix(line, "Password (PublicKey):"):
-			pub = strings.TrimSpace(strings.TrimPrefix(line, "Password (PublicKey):"))
-		}
-	}
-	if priv == "" || pub == "" {
-		t.Fatalf("cannot parse xray x25519 output:\n%s", out)
-	}
-	return priv, pub
+	return base64.RawURLEncoding.EncodeToString(key.Bytes()), base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes())
 }
 
 func mihomoBinary(t *testing.T) string {
 	t.Helper()
-	bin := os.Getenv("TXNODE_INTEROP_MIHOMO")
-	if bin == "" {
-		t.Skip("TXNODE_INTEROP_MIHOMO is not set")
-	}
-	if _, err := os.Stat(bin); err != nil {
-		t.Skipf("mihomo binary not found: %v", err)
-	}
-	return bin
+	return interopBinary(t, "TXNODE_INTEROP_MIHOMO")
 }
 
 // startMihomo writes a SOCKS-only config whose single proxy is the given YAML
@@ -578,14 +586,14 @@ func TestInteropMihomoHysteria2(t *testing.T) {
 		time.Sleep(150 * time.Millisecond)
 	}
 	if err != nil {
-		t.Skipf("Hysteria2 interop gap with Mihomo %s: %v", versionOf(t, "mihomo"), err)
+		t.Fatalf("Hysteria2 interop with Mihomo %s failed: %v", versionOf(t, "mihomo"), err)
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
 	}
 }
 
-// versionOf is a small diagnostic helper for skip messages.
+// versionOf is a small diagnostic helper for failure messages.
 func versionOf(t *testing.T, name string) string {
 	t.Helper()
 	switch name {
@@ -611,7 +619,7 @@ func versionOf(t *testing.T, name string) string {
 // TestInteropMihomoVLESSReality drives the REALITY inbound with Mihomo's VLESS
 // client, which implements REALITY independently of Xray's uTLS fork.
 func TestInteropMihomoVLESSReality(t *testing.T) {
-	bin := mihomoBinary(t)
+	mihomoBinary(t)
 	dest := os.Getenv("TXNODE_INTEROP_REALITY_DEST")
 	if dest == "" {
 		dest = "www.cloudflare.com:443"
@@ -620,18 +628,14 @@ func TestInteropMihomoVLESSReality(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pub := os.Getenv("TXNODE_INTEROP_REALITY_PUB")
-	if pub == "" {
-		t.Skip("TXNODE_INTEROP_REALITY_PUB is not set")
-	}
-	_ = bin
+	priv, pub := interopRealityKeypair(t)
 	origin := startInteropOrigin(t)
 	spec := &model.NodeSpec{
 		Protocol: "vless",
 		Network:  "tcp",
 		TLS:      2,
 		TLSSettings: map[string]any{
-			"private_key": os.Getenv("TXNODE_INTEROP_REALITY_PRIV"),
+			"private_key": priv,
 			"short_id":    "0123456789abcdef",
 			"dest":        dest,
 			"server_name": []any{host},
@@ -701,7 +705,7 @@ func TestInteropXrayVLESSGRPC(t *testing.T) {
 	startXrayClient(t, cfg)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
 	if err != nil {
-		t.Skipf("gRPC transport interop incomplete (GRPC-1): %v", err)
+		t.Fatalf("gRPC transport interop failed: %v", err)
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
@@ -711,7 +715,7 @@ func TestInteropXrayVLESSGRPC(t *testing.T) {
 func TestInteropXrayVLESSH2Removed(t *testing.T) {
 	// Xray 26 removed the standalone HTTP/2 transport ("migrated to XHTTP
 	// stream-one H2 & H3"); the H2 path is covered by the XHTTP test instead.
-	t.Skip("h2 transport was removed by Xray 26; use XHTTP stream-one")
+	skipInteropKnownGap(t, "H2-REMOVED")
 }
 
 func TestInteropXrayVLESSHTTPUpgrade(t *testing.T) {
@@ -745,7 +749,7 @@ func TestInteropXrayVLESSXHTTP(t *testing.T) {
 	startXrayClient(t, cfg)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
 	if err != nil {
-		t.Skipf("XHTTP transport interop incomplete (XHTTP-1): %v", err)
+		t.Fatalf("XHTTP transport interop failed: %v", err)
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
@@ -793,10 +797,7 @@ func TestInteropXrayShadowsocks2022(t *testing.T) {
 	startXrayClient(t, cfg)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
 	if err != nil {
-		// Xray 26's SS2022 client rejects the single-PSK form used here (method
-		// creation fails before any packet is sent); needs a sing-box client or a
-		// multi-user identity fixture. Tracked as SS2022-1.
-		t.Skipf("SS2022 key/identity fixture gap (SS2022-1): %v", err)
+		t.Fatalf("SS2022 interop with Xray failed: %v", err)
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
@@ -809,6 +810,10 @@ func base64Raw16() string {
 }
 
 func TestInteropMihomoTUIC(t *testing.T) {
+	mihomoBinary(t)
+	if skipInteropKnownGap(t, "TUIC-MIHOMO") {
+		return
+	}
 	origin := startInteropOrigin(t)
 	cert := selfSignedPEM(t)
 	port := startInteropKernel(t, &model.NodeSpec{
@@ -828,7 +833,7 @@ func TestInteropMihomoTUIC(t *testing.T) {
 	socks := startMihomo(t, proxy)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
 	if err != nil {
-		t.Skipf("TUIC QUIC session not established with Mihomo (TUIC-1): %v", err)
+		t.Fatalf("TUIC QUIC session not established with Mihomo: %v", err)
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
@@ -837,14 +842,7 @@ func TestInteropMihomoTUIC(t *testing.T) {
 
 func singBoxBinary(t *testing.T) string {
 	t.Helper()
-	bin := os.Getenv("TXNODE_INTEROP_SINGBOX")
-	if bin == "" {
-		t.Skip("TXNODE_INTEROP_SINGBOX is not set")
-	}
-	if _, err := os.Stat(bin); err != nil {
-		t.Skipf("sing-box binary not found: %v", err)
-	}
-	return bin
+	return interopBinary(t, "TXNODE_INTEROP_SINGBOX")
 }
 
 // startSingBoxClient writes a socks-in/one-outbound config, starts sing-box and
@@ -911,7 +909,7 @@ func TestInteropSingBoxAnyTLS(t *testing.T) {
 	socks := startSingBoxClient(t, outbound)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
 	if err != nil {
-		t.Skipf("AnyTLS protocol revision mismatch with sing-box 1.14 (ANYTLS-1): %v", err)
+		t.Fatalf("AnyTLS interop with sing-box failed: %v", err)
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
@@ -933,7 +931,7 @@ func TestInteropSingBoxTUIC(t *testing.T) {
 	socks := startSingBoxClient(t, outbound)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
 	if err != nil {
-		t.Skipf("TUIC QUIC session not established with sing-box (TUIC-1): %v", err)
+		t.Fatalf("TUIC QUIC session not established with sing-box: %v", err)
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
@@ -974,7 +972,7 @@ func TestInteropSingBoxShadowsocks2022(t *testing.T) {
 	socks := startSingBoxClient(t, outbound)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
 	if err != nil {
-		t.Skipf("SS2022 key/identity fixture gap (SS2022-1): %v", err)
+		t.Fatalf("SS2022 interop with sing-box failed: %v", err)
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
@@ -1198,7 +1196,7 @@ func TestInteropSingBoxMux(t *testing.T) {
 				"multiplex": map[string]any{"enabled": true, "protocol": protocol, "max_streams": 8},
 			}
 			if !singBoxSupports(t, outbound) {
-				t.Skipf("sing-box has no %s multiplexing", protocol)
+				t.Fatalf("required sing-box %s multiplexing configuration rejected", protocol)
 			}
 			socks := startSingBoxClient(t, outbound)
 			// The first request opens the mux connection, the following ones
@@ -1222,7 +1220,7 @@ func TestInteropSingBoxMux(t *testing.T) {
 // against Xray 26.3.27 shows the request and no reply. UDP-on-mux therefore
 // stays unsupported instead of being guessed.
 func TestInteropSingBoxMuxUDP(t *testing.T) {
-	t.Skip("mux UDP: sing-box packet streams are not served by the Xray reference either (docs/INTEROP.md)")
+	skipInteropKnownGap(t, "MUX-UDP")
 }
 
 // TestInteropXrayMux drives Xray Mux.Cool (v1.mux.cool): the node parses the
@@ -1255,8 +1253,12 @@ func TestInteropSingBoxMieru(t *testing.T) {
 		"username": "interop", "password": "secret",
 		"transport": "tcp",
 	}
-	if !singBoxSupports(t, outbound) {
-		t.Skip("Mieru: this sing-box build has no mieru outbound")
+	checkOutput, checkErr := singBoxCheck(t, outbound)
+	if checkErr != nil {
+		if strings.Contains(strings.ToLower(checkOutput), "unknown outbound type: mieru") && skipInteropKnownGap(t, "SINGBOX-MIERU") {
+			return
+		}
+		t.Fatalf("sing-box Mieru configuration rejected: %v\n%s", checkErr, checkOutput)
 	}
 	socks := startSingBoxClient(t, outbound)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
@@ -1278,12 +1280,12 @@ func TestInteropSingBoxSnell(t *testing.T) {
 		"psk": "interop-psk", "version": 4,
 	}
 	if !singBoxSupports(t, outbound) {
-		t.Skip("Snell: sing-box 1.14 outbound requires a newer version than the replica serves (SNELL-1)")
+		t.Fatal("required sing-box Snell v4 configuration rejected")
 	}
 	socks := startSingBoxClient(t, outbound)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
 	if err != nil {
-		t.Skipf("Snell interop incomplete (SNELL-1): %v", err)
+		t.Fatalf("Snell interop failed: %v", err)
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
@@ -1291,6 +1293,10 @@ func TestInteropSingBoxSnell(t *testing.T) {
 }
 
 func TestInteropSingBoxNaive(t *testing.T) {
+	singBoxBinary(t)
+	if skipInteropKnownGap(t, "NAIVE-CERT") {
+		return
+	}
 	origin := startInteropOrigin(t)
 	cert, _ := selfSignedFiles(t)
 	spki := certPublicKeySHA256(t, cert.CertPEM)
@@ -1303,12 +1309,12 @@ func TestInteropSingBoxNaive(t *testing.T) {
 			"certificate_public_key_sha256": []any{spki}},
 	}
 	if !singBoxSupports(t, outbound) {
-		t.Skip("Naive: sing-box client configuration rejected (NAIVE-1)")
+		t.Fatal("sing-box Naive client configuration rejected")
 	}
 	socks := startSingBoxClient(t, outbound)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
 	if err != nil {
-		t.Skipf("Naive interop incomplete (NAIVE-1): %v", err)
+		t.Fatalf("Naive interop failed: %v", err)
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
@@ -1335,7 +1341,7 @@ func TestInteropXrayVLESSEncryption(t *testing.T) {
 		}
 	}
 	if decryption == "" || encryption == "" {
-		t.Skipf("could not parse xray vlessenc output")
+		t.Fatal("could not parse required xray vlessenc output")
 	}
 	origin := startInteropOrigin(t)
 	port := startInteropKernel(t, &model.NodeSpec{Protocol: "vless", Network: "tcp", Decryption: decryption}, kernel.TLSCert{})
@@ -1351,16 +1357,25 @@ func TestInteropXrayVLESSEncryption(t *testing.T) {
 	startXrayClient(t, cfg)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
 	if err != nil {
-		t.Skipf("VLESS Encryption interop incomplete (VLESSENC-1): %v", err)
+		t.Fatalf("VLESS Encryption interop failed: %v", err)
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
 	}
 }
 
-// singBoxSupports runs `sing-box check` for a socks-in/one-outbound config so a
-// client-side unsupported protocol becomes a documented skip instead of a hang.
+// singBoxSupports checks the exact client configuration before starting it.
 func singBoxSupports(t *testing.T, outbound map[string]any) bool {
+	t.Helper()
+	out, err := singBoxCheck(t, outbound)
+	if err != nil {
+		t.Logf("sing-box check: %v\n%s", err, out)
+		return false
+	}
+	return true
+}
+
+func singBoxCheck(t *testing.T, outbound map[string]any) (string, error) {
 	t.Helper()
 	bin := singBoxBinary(t)
 	dir := t.TempDir()
@@ -1378,15 +1393,11 @@ func singBoxSupports(t *testing.T, outbound map[string]any) bool {
 		t.Fatal(err)
 	}
 	out, err := exec.Command(bin, "check", "-c", path, "-D", dir).CombinedOutput()
-	if err != nil {
-		t.Logf("sing-box check: %v\n%s", err, out)
-		return false
-	}
-	return true
+	return string(out), err
 }
 
-// certPublicKeySHA256 pins a certificate by its SPKI digest, which sing-box
-// accepts without a CA.
+// certPublicKeySHA256 produces the SPKI digest used by the current Naive
+// certificate fixture. That client's trust behavior remains quarantined.
 func certPublicKeySHA256(t *testing.T, certPEM []byte) string {
 	t.Helper()
 	block, _ := pem.Decode(certPEM)
@@ -1402,13 +1413,9 @@ func certPublicKeySHA256(t *testing.T, certPEM []byte) string {
 }
 
 // TestInteropCurlNaiveH2 drives the naive inbound with curl's HTTP/2 CONNECT
-// proxy mode (sing-box's naive outbound needs the Chromium cronet library,
-// which the release binary does not ship).
+// proxy mode independently of the quarantined sing-box certificate fixture.
 func TestInteropCurlNaiveH2(t *testing.T) {
-	bin, err := exec.LookPath("curl")
-	if err != nil {
-		t.Skip("curl not installed")
-	}
+	bin := interopCurlBinary(t)
 	version, err := exec.Command(bin, "--disable", "--version").CombinedOutput()
 	if err != nil {
 		t.Fatalf("curl version: %v\n%s", err, version)
@@ -1418,7 +1425,7 @@ func TestInteropCurlNaiveH2(t *testing.T) {
 		t.Fatalf("curl options: %v\n%s", err, help)
 	}
 	if !bytes.Contains(version, []byte("HTTP2")) || !bytes.Contains(help, []byte("--proxy-http2")) {
-		t.Skip("curl has no HTTP/2 proxy support")
+		t.Fatal("required curl client has no HTTP/2 proxy support")
 	}
 	origin := startInteropOrigin(t)
 	cert, _ := selfSignedFiles(t)
@@ -1443,14 +1450,7 @@ func TestInteropCurlNaiveH2(t *testing.T) {
 
 func mieruBinary(t *testing.T) string {
 	t.Helper()
-	bin := os.Getenv("TXNODE_INTEROP_MIERU")
-	if bin == "" {
-		t.Skip("TXNODE_INTEROP_MIERU is not set")
-	}
-	if _, err := os.Stat(bin); err != nil {
-		t.Skipf("mieru binary not found: %v", err)
-	}
-	return bin
+	return interopBinary(t, "TXNODE_INTEROP_MIERU")
 }
 
 // mieruLogLevel lets a run raise the client log level without editing the test.
@@ -1593,18 +1593,27 @@ func TestInteropMieruOfficialIdle(t *testing.T) {
 // TestInteropMieruOfficialDialFailure checks that an unreachable destination
 // reaches the inner SOCKS5 client as an error instead of a stalled session.
 func TestInteropMieruOfficialDialFailure(t *testing.T) {
+	origin := startInteropOrigin(t)
 	port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "mieru", Transport: "tcp"}, kernel.TLSCert{},
 		[]model.UserSpec{{ID: 1, UUID: "interop:secret"}})
 	addr := startMieruOfficial(t, port, "TCP")
 
-	// Port 1 on loopback is normally unbound; the kernel answers the client
-	// with a SOCKS5 failure.
-	conn, err := socksNoAuthConnectE(addr, "127.0.0.1:1")
+	// Prove the complete client/kernel path works before closing our own target.
+	target := origin.Listener.Addr().String()
+	if got := fetchThrough(t, addr, target); got != "interop-ok" {
+		t.Fatalf("positive-control body = %q", got)
+	}
+	origin.Close()
+	conn, err := socksNoAuthConnectE(addr, target)
 	if err == nil {
 		_ = conn.Close()
 		t.Fatal("socks connect to a closed port succeeded")
 	}
-	t.Logf("dial failure surfaced as: %v", err)
+	var replyErr *socksConnectReplyError
+	if !errors.As(err, &replyErr) || replyErr.reply != 0x05 {
+		t.Fatalf("closed target must return SOCKS5 REP=0x05 (connection refused), got: %v", err)
+	}
+	t.Logf("closed target returned the expected SOCKS5 REP=0x%02x", replyErr.reply)
 }
 
 // TestInteropMieruOfficialBulk moves 1 MiB each way through one session so the

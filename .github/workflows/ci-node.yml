@@ -142,6 +142,8 @@ jobs:
           }
       - name: Run full Node tests
         run: make test
+      - name: Verify strict interop result policy
+        run: python3 -m unittest discover -s scripts -p 'test_interop_*.py' -v
       - name: Check independent Node image channels
         run: bash scripts/test-image-tags.sh
       - name: Verify native credential publication and replay history
@@ -219,7 +221,7 @@ jobs:
   build:
     name: Node release binaries
     runs-on: ubuntu-latest
-    needs: [test, runtime-stability, image-smoke, core-compatibility]
+    needs: [test, runtime-stability, image-smoke, core-compatibility, interop-quick, interop]
     if: startsWith(github.ref, 'refs/tags/v')
     strategy:
       matrix:
@@ -251,13 +253,16 @@ jobs:
   publish-image:
     name: Publish independent Node image
     runs-on: ubuntu-latest
-    needs: [changes, test, runtime-stability, image-smoke, core-compatibility]
+    needs: [changes, test, runtime-stability, image-smoke, core-compatibility, interop-quick, interop]
     if: >-
       ${{ !cancelled() && needs.changes.result == 'success' && needs.test.result == 'success' &&
           needs.image-smoke.result == 'success' && needs.core-compatibility.result == 'success' &&
+          needs.interop-quick.result == 'success' &&
           ((github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-            needs.changes.outputs.runtime == 'true' && needs.runtime-stability.result == 'skipped') ||
-           (startsWith(github.ref, 'refs/tags/v') && needs.runtime-stability.result == 'success')) }}
+            needs.changes.outputs.runtime == 'true' && needs.runtime-stability.result == 'skipped' &&
+            needs.interop.result == 'skipped') ||
+           (startsWith(github.ref, 'refs/tags/v') && needs.runtime-stability.result == 'success' &&
+            needs.interop.result == 'success')) }}
     permissions:
       contents: read
       packages: write
@@ -447,11 +452,43 @@ jobs:
           path: artifacts/core-compatibility-sources.json
           if-no-files-found: error
 
+  interop-quick:
+    name: Strict interop quick matrix
+    # Pin the system curl baseline as well as the four downloaded clients.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+          cache: true
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/interop-clients
+          key: interop-clients-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-interop-clients.sh') }}
+      - name: Fetch pinned clients
+        run: scripts/fetch-interop-clients.sh "$RUNNER_TEMP/interop-clients"
+      - name: Run and summarize strict quick interop
+        if: ${{ !cancelled() }}
+        env:
+          TXNODE_INTEROP_XRAY: ${{ runner.temp }}/interop-clients/xray/xray
+          TXNODE_INTEROP_SINGBOX: ${{ runner.temp }}/interop-clients/singbox/sing-box
+        run: python3 scripts/interop_gate.py --profile quick --output artifacts/interop-quick
+      - name: Retain quick interop evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-interop-quick-${{ github.sha }}
+          path: artifacts/interop-quick/
+          if-no-files-found: warn
+
   interop:
-    name: Third-party interop matrix
-    runs-on: ubuntu-latest
-    # Pinned client binaries are fetched with their SHA-256; the clients are
-    # test tools and never enter go.mod, the image or a release artifact.
+    name: Strict third-party interop full matrix
+    runs-on: ubuntu-24.04
+    # Client binaries are test tools only. A tagged publisher depends on this
+    # complete profile; dispatch and nightly runs verify without publishing.
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || startsWith(github.ref, 'refs/tags/v')
     timeout-minutes: 30
     steps:
@@ -461,12 +498,25 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
           cache: true
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/interop-clients
+          key: interop-clients-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-interop-clients.sh') }}
       - name: Fetch pinned clients
         run: scripts/fetch-interop-clients.sh "$RUNNER_TEMP/interop-clients"
-      - name: Run the interop matrix
+      - name: Run and summarize strict full interop
+        if: ${{ !cancelled() }}
         env:
           TXNODE_INTEROP_XRAY: ${{ runner.temp }}/interop-clients/xray/xray
           TXNODE_INTEROP_MIHOMO: ${{ runner.temp }}/interop-clients/mihomo/mihomo
           TXNODE_INTEROP_SINGBOX: ${{ runner.temp }}/interop-clients/singbox/sing-box
           TXNODE_INTEROP_MIERU: ${{ runner.temp }}/interop-clients/mieru/mieru
-        run: go test ./internal/kernel/txnode/ -run TestInterop -count=1 -v -timeout 900s
+          TXNODE_INTEROP_CURL: /usr/bin/curl
+        run: python3 scripts/interop_gate.py --profile full --output artifacts/interop-full
+      - name: Retain full interop evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-interop-full-${{ github.sha }}
+          path: artifacts/interop-full/
+          if-no-files-found: warn
