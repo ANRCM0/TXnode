@@ -1129,6 +1129,53 @@ func TestInteropSingBoxHysteria2UDP(t *testing.T) {
 	}
 }
 
+// TestInteropSingBoxTUICUDP drives a UDP association through a TUIC session.
+func TestInteropSingBoxTUICUDP(t *testing.T) {
+	echo := udpEcho(t)
+	cert := selfSignedPEM(t)
+	port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "tuic", TLS: 1, ServerName: "localhost"}, cert,
+		[]model.UserSpec{{ID: 1, UUID: interopUUID + ":" + interopUUID}})
+	outbound := map[string]any{
+		"type": "tuic", "tag": "interop",
+		"server": "127.0.0.1", "server_port": port,
+		"uuid": interopUUID, "password": interopUUID,
+		"congestion_control": "bbr",
+		"tls":                map[string]any{"enabled": true, "server_name": "localhost", "insecure": true, "alpn": []any{"h3"}},
+	}
+	socks := startSingBoxClient(t, outbound)
+	body, err := udpThroughSocksE(t, socks, echo, []byte("tuic-udp"))
+	if err != nil {
+		t.Fatalf("TUIC UDP failed: %v", err)
+	}
+	if string(body) != "tuic-udp" {
+		t.Fatalf("udp echo = %q", body)
+	}
+}
+
+// TestInteropSingBoxXUDP documents the one remaining UDP gap: sing-box sends
+// Xray's XUDP framing: a per-packet destination header with an optional UUID
+// hint and global ID, on the VLESS UDP stream. The node serves the plain
+// length-prefixed VLESS UDP framing, so a client that negotiates xudp fails;
+// the skip records the gap instead of pretending it works. Hysteria2, TUIC and
+// Shadowsocks2022 UDP are covered by their own cases.
+func TestInteropSingBoxXUDP(t *testing.T) {
+	echo := udpEcho(t)
+	port := startInteropKernel(t, &model.NodeSpec{Protocol: "vless", Transport: "tcp"}, kernel.TLSCert{})
+	outbound := map[string]any{
+		"type": "vless", "tag": "interop",
+		"server": "127.0.0.1", "server_port": port,
+		"uuid": interopUUID,
+	}
+	socks := startSingBoxClient(t, outbound)
+	body, err := udpThroughSocksE(t, socks, echo, []byte("xudp-interop"))
+	if err != nil {
+		t.Skipf("XUDP framing not implemented (VLESS-UDP-1): %v", err)
+	}
+	if string(body) != "xudp-interop" {
+		t.Fatalf("udp echo = %q", body)
+	}
+}
+
 // TestInteropSingBoxMux drives the mux inbound path with sing-box
 // multiplexing: one mux connection carries several streams, each with its own
 // SOCKS destination header.
@@ -1162,22 +1209,23 @@ func TestInteropSingBoxMux(t *testing.T) {
 	}
 }
 
-// TestInteropXrayMux documents that Xray Mux.Cool framing is not the
-// address-header mux: Xray sends [len 2][session 2][status][option][network]
-// with chunked payloads, so a mux-enabled Xray client must fail rather than
-// silently corrupt. The node keeps the address-header mux for sing-box and for
-// the smux/yamux transports; Mux.Cool support is tracked as a separate gap.
+// TestInteropXrayMux drives Xray Mux.Cool (v1.mux.cool): the node parses the
+// [len][session][status][network][target] frames and relays each session.
 func TestInteropXrayMux(t *testing.T) {
 	origin := startInteropOrigin(t)
 	port := startInteropKernel(t, &model.NodeSpec{Protocol: "vless", Transport: "tcp"}, kernel.TLSCert{})
 	outbound := vlessOutbound(port, nil)
 	outbound["mux"] = map[string]any{"enabled": true, "concurrency": 8}
-	cfg, socks := xrayClientConfig(t, outbound)
+	cfg, socks := xrayClientConfigDebug(t, outbound)
 	startXrayClient(t, cfg)
-	if _, err := fetchThroughE(t, socks, origin.Listener.Addr().String()); err == nil {
-		t.Fatal("Xray Mux.Cool unexpectedly succeeded: the address-header mux must not claim it")
-	} else {
-		t.Logf("Xray Mux.Cool rejected as expected: %v", err)
+	for round := 0; round < 3; round++ {
+		body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
+		if err != nil {
+			t.Fatalf("round %d: %v", round, err)
+		}
+		if body != "interop-ok" {
+			t.Fatalf("round %d: body = %q", round, body)
+		}
 	}
 }
 
@@ -1386,7 +1434,10 @@ func mieruLogLevel() string {
 
 // startMieruOfficial launches the official mieru client against a mieru inbound
 // on port and returns its SOCKS5 address once the listener is up.
-func startMieruOfficial(t *testing.T, port int) string {
+func startMieruOfficial(t *testing.T, port int, transport string) string {
+	if transport == "" {
+		transport = "TCP"
+	}
 	t.Helper()
 	bin := mieruBinary(t)
 	socksPort := freePortTB(t)
@@ -1395,13 +1446,13 @@ func startMieruOfficial(t *testing.T, port int) string {
   "profiles": [{
     "profileName": "interop",
     "user": {"name": "interop", "password": "secret"},
-    "servers": [{"ipAddress": "127.0.0.1", "portBindings": [{"port": %d, "protocol": "TCP"}]}],
+    "servers": [{"ipAddress": "127.0.0.1", "portBindings": [{"port": %d, "protocol": "%s"}]}],
     "mtu": 1400
   }],
   "activeProfile": "interop",
   "socks5Port": %d,
   "loggingLevel": "%s"
-}`, port, socksPort, mieruLogLevel())
+}`, port, transport, socksPort, mieruLogLevel())
 	cfgPath := filepath.Join(dir, "client.json")
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
@@ -1454,7 +1505,7 @@ func TestInteropMieruOfficialClient(t *testing.T) {
 	origin := startInteropOrigin(t)
 	port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "mieru", Transport: "tcp"}, kernel.TLSCert{},
 		[]model.UserSpec{{ID: 1, UUID: "interop:secret"}})
-	addr := startMieruOfficial(t, port)
+	addr := startMieruOfficial(t, port, "TCP")
 	body, err := fetchThroughE(t, addr, origin.Listener.Addr().String())
 	if err != nil {
 		t.Fatalf("mieru v2 data phase failed (MIERU-1): %v", err)
@@ -1472,7 +1523,7 @@ func TestInteropMieruOfficialIdle(t *testing.T) {
 	origin := startInteropOrigin(t)
 	port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "mieru", Transport: "tcp"}, kernel.TLSCert{},
 		[]model.UserSpec{{ID: 1, UUID: "interop:secret"}})
-	addr := startMieruOfficial(t, port)
+	addr := startMieruOfficial(t, port, "TCP")
 
 	gap := 25 * time.Second
 	if v := os.Getenv("TXNODE_INTEROP_IDLE"); v != "" {
@@ -1515,7 +1566,7 @@ func TestInteropMieruOfficialIdle(t *testing.T) {
 func TestInteropMieruOfficialDialFailure(t *testing.T) {
 	port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "mieru", Transport: "tcp"}, kernel.TLSCert{},
 		[]model.UserSpec{{ID: 1, UUID: "interop:secret"}})
-	addr := startMieruOfficial(t, port)
+	addr := startMieruOfficial(t, port, "TCP")
 
 	// Port 1 on loopback is normally unbound; the kernel answers the client
 	// with a SOCKS5 failure.
@@ -1553,7 +1604,7 @@ func TestInteropMieruOfficialBulk(t *testing.T) {
 
 	port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "mieru", Transport: "tcp"}, kernel.TLSCert{},
 		[]model.UserSpec{{ID: 1, UUID: "interop:secret"}})
-	addr := startMieruOfficial(t, port)
+	addr := startMieruOfficial(t, port, "TCP")
 
 	conn, err := socksNoAuthConnectE(addr, origin.Listener.Addr().String())
 	if err != nil {

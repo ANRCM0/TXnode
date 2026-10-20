@@ -1,6 +1,7 @@
 package tuic
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -352,9 +353,36 @@ func (s *Server) serveConn(conn *quic.Conn) {
 	}
 	go c.acceptUniStreams()
 	go c.acceptStreams()
+	go c.acceptDatagrams()
 	go c.sweepLoop()
 	<-ctx.Done()
 	c.closeAll()
+}
+
+// acceptDatagrams serves the QUIC DATAGRAM half of the packet transport. The
+// frame layout is identical to the unidirectional-stream frames
+// (docs: sing-quic/tuic packet.go pack()); a client picks datagrams when the
+// server advertised them, which quicConfig always does.
+func (c *client) acceptDatagrams() {
+	for {
+		raw, err := c.conn.ReceiveDatagram(c.ctx)
+		if err != nil {
+			return
+		}
+		if len(raw) < frameHeaderLen {
+			continue
+		}
+		// The datagram body is the frame without the 2-byte (version, command)
+		// stream prefix: the same fields as readFrameFromStream.
+		f, err := readFrameFromStream(bytes.NewReader(raw[2:]))
+		if err != nil {
+			continue
+		}
+		if !c.tryAuthed() {
+			continue
+		}
+		c.deliverPacket(f)
+	}
 }
 
 // waitAuth blocks until authentication succeeded or the connection ended. The
@@ -411,6 +439,7 @@ func (c *client) uniStream(str *quic.ReceiveStream) {
 	case cmdDissociate:
 		c.dissociate(str)
 	default:
+		c.srv.log.Debug("tuic: unknown uni command", "cmd", hdr[1])
 		// cmd == 1 does not exist on a uni stream.
 		str.CancelRead(quic.StreamErrorCode(0))
 	}

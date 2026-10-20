@@ -38,7 +38,7 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 
 ## 结果（Xray 26.3.27 / Mihomo v1.19.32 / sing-box 1.14.3，本机回环）
 
-通过（25 个用例，覆盖 20 条链路）：
+通过（28 个用例，覆盖 23 条链路）：
 
 | 用例 | 客户端 | 备注 |
 |---|---|---|
@@ -62,7 +62,8 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 | Mieru v2 1 MiB 双向 | 官方 mieru 3.38 | 上行/下行各 1 MiB，校验字节一致；覆盖分片、序号与窗口字段 |
 | Mieru v2 拨号失败 | 官方 mieru 3.38 | 目标不可达时内层 SOCKS5 收到 `05 05`（connection refused），不会挂起 |
 | 多路复用 smux / yamux | sing-box 1.14 | 一个 mux 连接承载多条流，每条流带 SOCKS 地址头；流共享父会话的 user/限速/设备闸 |
-| Xray Mux.Cool | Xray 26.3.27 | 负向用例：Mux.Cool 帧格式与地址头 mux 不同，必须明确失败而不是串流 |
+| Xray Mux.Cool | Xray 26.3.27 | `[len][session][status][network][port][addr]` 帧 + 分块 body，服务端按会话解复用，多轮复用同一 mux 连接 |
+| TUIC UDP | sing-box 1.14 | QUIC DATAGRAM 帧（与单向流同构），返回帧携带源地址；未开 DATAGRAM 时回落单向流 |
 
 未通过 / 未覆盖（跳过，带原因）：
 
@@ -96,14 +97,15 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 
 ## 尚未覆盖的互通项
 
-当前用例集覆盖 21 条链路（29 个用例，含 2 个 mux 子用例），全部通过。以下能力还没有真实客户端用例，发布前建议补齐：
+当前用例集覆盖 23 条链路（31 个用例，含 2 个 mux 子用例），全部通过。以下能力还没有真实客户端用例，发布前建议补齐：
 
 1. **Mieru**：`traffic_pattern` 与低熵编码（type 10/11）未实现；官方客户端默认关闭，需显式夹具才能覆盖；
-2. **UDP 数据面**：Hysteria2 UDP 已覆盖；TUIC UDP 与 xudp、Mieru UDP（UDP 承载）、mux UDP 流待补；
-3. **Xray Mux.Cool**：`[len][sessionID][status][network][target]` + ChunkStream 分块，与地址头 mux 是两套协议；当前明确不支持（负向用例保证不会串流）；
-4. **传输剩余**：h2 已被上游移除，其余组合已覆盖。
+2. **XUDP**：sing-box 走 VLESS 的 UDP 关联使用 Xray XUDP 帧（每包目标头 + 可选 UUID 提示/global ID），节点只实现明文长度前缀 VLESS UDP；用例以 skip 记录（VLESS-UDP-1）；
+3. **mux UDP**：`FlagUDP` 流与 Mux.Cool 的 UDP 会话暂未承载（明确关闭，不串流）；
+4. **Mieru v2 UDP 承载**：官方 v3.38 客户端的 `Transport=udp`（每包自带 nonce、metadata 与 payload 共用同一 nonce）尚未实现；TCP 承载已互通；
+5. **传输剩余**：h2 已被上游移除，其余组合已覆盖。
 
-修复顺序建议：先补 TUIC UDP / xudp（同协议、低成本），再补 mieru UDP 承载与 mux UDP，最后评估 Xray Mux.Cool 单独实现。
+修复顺序建议：先补 mieru v2 UDP 承载，再补 XUDP 帧，最后补 mux UDP。
 
 ## 复现
 

@@ -23,6 +23,8 @@ import (
 
 	"github.com/ANRCM0/TX-Node/internal/dataplane/core"
 	"github.com/ANRCM0/TX-Node/internal/dataplane/mux"
+	"github.com/ANRCM0/TX-Node/internal/dataplane/muxcool"
+	"github.com/ANRCM0/TX-Node/internal/dataplane/socks"
 	"github.com/ANRCM0/TX-Node/internal/dataplane/transport"
 )
 
@@ -58,6 +60,16 @@ func installMuxServer() {
 			return rt.srv.MuxStreamSession(ctx, parent, netip.Addr{}, child, sess.Packets, sess.Dest)
 		})
 	}
+	core.SetMuxCoolServer(func(ctx context.Context, parent *core.Session, src netip.Addr, conn net.Conn, relay core.MuxCoolRelay) error {
+		rt := activeMux.Load()
+		if rt == nil || rt.srv == nil {
+			return errors.New("mux: the node is not running")
+		}
+		err := muxcool.Serve(conn, func(_ uint16, dest socks.Addr, stream *muxcool.Stream) error {
+			return relay(ctx, stream, dest)
+		})
+		return err
+	})
 	core.SetMuxServer(func(ctx context.Context, parent *core.Session, src netip.Addr, conn net.Conn, relay core.MuxRelay) error {
 		rt := activeMux.Load()
 		if rt == nil || rt.srv == nil {

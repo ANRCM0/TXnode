@@ -579,7 +579,7 @@ tcp / tls / reality / ws / grpc / h2 / httpupgrade / xhttp / shadowtls / obfs-ht
 
 | # | 风险 | 证据 | 对策 |
 |---|---|---|---|
-| R1 | **互通实测结果**：29 个用例通过（含 VLESS Encryption、Naive h2、Snell v4、Mieru v2 含 1 MiB 双向/空闲复用/拨号失败、sing-box smux/yamux 多路复用）；Mihomo TUIC 客户端差异仍跳过（`docs/INTEROP.md`） | Xray 26.3.27 / Mihomo v1.19.32 / sing-box 1.14.3 / curl 8.5 / mieru 3.38 实测 | Mihomo TUIC 视客户端版本；Mieru `traffic_pattern`/低熵编码与 Xray Mux.Cool 仍未实现 |
+| R1 | **互通实测结果**：28 个用例通过（含 VLESS Encryption、Naive h2、Snell v4、Mieru v2、sing-box smux/yamux、Xray Mux.Cool、TUIC UDP）；Mihomo TUIC 客户端差异仍跳过（`docs/INTEROP.md`） | Xray 26.3.27 / Mihomo v1.19.32 / sing-box 1.14.3 / curl 8.5 / mieru 3.38 实测 | Mihomo TUIC 视客户端版本；Mieru `traffic_pattern`/低熵编码、XUDP、mux UDP 与 mieru v2 UDP 承载仍未实现 |
 | R2 | **REALITY 已互通**：鉴权与证书按 `xtls/reality` 对齐并改用参考 TLS 栈，Xray/Mihomo 均通过；限制是借用站点握手记录需 ≤8 KiB，首次握手等待 post-handshake 学习（≤8 s） | `docs/INTEROP.md` | 保留参考栈依赖；mirror 字节回放仍待补 |
 | R3 | **usage_v2 语义**：区间计量要求 per-IO 准入，数据面需关 splice | 本仓 `native_usage_adapter.go:24`；`core/pipe.go` splice 路径 | P3 单独立项；原生模式与普通模式分开压测 |
 | R4 | **依赖版本**：TX-Node 已对齐 quic-go 0.63/utls 1.8.3；后续升级需双向验证 | `go.mod` | 锁版本 + CI 双跑 |

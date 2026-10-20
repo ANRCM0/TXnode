@@ -125,10 +125,11 @@ func (s *udpSession) writePacket(payload []byte) {
 	base := &frame{
 		assocID: s.id,
 		pktID:   uint16(s.pktID.Add(1)),
-		// The server -> client frames of a session established by the client
-		// need no address; the report's frame() writes 0xff in that case
-		// (0xb44b8f).
-		hasAddr: false,
+		// The peer needs the origin address back: a SOCKS5 UDP relay writes it
+		// into the reply header, and dropping it would leave the association
+		// without a source for the echoed datagram.
+		addr:    s.dest,
+		hasAddr: true,
 		payload: payload,
 	}
 	first := base.marshal()

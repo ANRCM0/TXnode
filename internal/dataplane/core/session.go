@@ -102,6 +102,23 @@ type muxServerFunc func(ctx context.Context, parent *Session, src netip.Addr, co
 
 var muxServer atomic.Pointer[muxServerFunc]
 
+// MuxCoolRelay is the per-stream callback for the Xray Mux.Cool framing. A
+// Mux.Cool stream is already a framed net.Conn, so the callback only carries it
+// and its destination; packets is nil for TCP sessions.
+type MuxCoolRelay func(ctx context.Context, conn net.Conn, dest socks.Addr) error
+
+// SetMuxCoolServer installs the Mux.Cool (v1.mux.cool) server. It is separate
+// from SetMuxServer because the two mux protocols use different framing on the
+// same pseudo-destination names.
+func SetMuxCoolServer(fn func(ctx context.Context, parent *Session, src netip.Addr, conn net.Conn, relay MuxCoolRelay) error) {
+	if fn == nil {
+		return
+	}
+	muxCoolServer.Store(&fn)
+}
+
+var muxCoolServer atomic.Pointer[func(ctx context.Context, parent *Session, src netip.Addr, conn net.Conn, relay MuxCoolRelay) error]
+
 // SetMuxServer installs the mux implementation used for
 // sp.mux.sing-box.arpa / v1.mux.cool sessions (internal/mux.Serve @0x773b40).
 // Keeping it behind a hook avoids a core -> mux import cycle: mux needs
@@ -149,6 +166,18 @@ func (s *Server) MuxStreamSession(ctx context.Context, parent *Session, src neti
 // serveMux is (*Server).serveMux @0x7b2200. Streams share the parent session's
 // user and local address; each stream gets its own route/dial.
 func (s *Server) serveMux(ctx context.Context, sess *Session, src netip.Addr) error {
+	// The Mux.Cool framework is detected by the first metadata frame, but both
+	// mux servers share the pseudo-destination. Try the Mux.Cool server when it
+	// is installed and the peer opened v1.mux.cool; otherwise use the
+	// address-header mux.
+	if fd := muxCoolServer.Load(); fd != nil && strings.EqualFold(sess.Dest.Host, "v1.mux.cool") {
+		if sess.Conn == nil {
+			return errors.New("session refused: no transport")
+		}
+		return (*fd)(ctx, sess, src, sess.Conn, func(ctx context.Context, conn net.Conn, dest socks.Addr) error {
+			return s.MuxStreamSession(ctx, sess, src, conn, nil, dest)
+		})
+	}
 	fn := muxServer.Load()
 	if fn == nil {
 		return errors.New("mux: no mux server installed")
