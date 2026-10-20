@@ -132,6 +132,27 @@ func TestNativeLoadedAuthorizationExpiryDuringBlockedReport(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	// Freeze issuance before blocking the event loop. A counted refresh may
+	// still be queued, so observe its accepted revision and published deadline.
+	plane.authMu.Lock()
+	plane.offline = true
+	finalRevision := fmt.Sprint(plane.revision)
+	plane.authMu.Unlock()
+	deadline = time.Now().Add(2 * time.Second)
+	for {
+		accepted := svc.authorization.Current()
+		svc.authorizationAdmissionMu.Lock()
+		published := svc.authorizationDeadline
+		svc.authorizationAdmissionMu.Unlock()
+		if accepted != nil && accepted.Payload.Revision == finalRevision &&
+			published.Equal(time.Unix(accepted.Payload.ExpiresAt, 0)) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("final signed renewal revision %s was not applied before report fault", finalRevision)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	entered, release, prepared := make(chan struct{}), make(chan struct{}), make(chan bool, 1)
 	var releaseOnce sync.Once
 	unblock := func() { releaseOnce.Do(func() { close(release) }) }
@@ -144,9 +165,6 @@ func TestNativeLoadedAuthorizationExpiryDuringBlockedReport(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("report prepare did not hold the real pending mutex")
 	}
-	plane.authMu.Lock()
-	plane.offline = true
-	plane.authMu.Unlock()
 	svc.authorizationAdmissionMu.Lock()
 	expiry := svc.authorizationDeadline
 	svc.authorizationAdmissionMu.Unlock()
@@ -166,7 +184,7 @@ func TestNativeLoadedAuthorizationExpiryDuringBlockedReport(t *testing.T) {
 	}
 	if c, err := net.DialTimeout("tcp4", fmt.Sprintf("127.0.0.1:%d", port), 100*time.Millisecond); err == nil {
 		_ = c.Close()
-		t.Fatal("expired loaded listener stayed open behind reporting mutex")
+		t.Fatalf("expired loaded listener stayed open behind reporting mutex: revision=%s expiry=%s", finalRevision, expiry)
 	}
 	loadEnded := make(chan struct{})
 	go func() { wg.Wait(); close(loadEnded) }()
