@@ -79,7 +79,8 @@ import (
 //
 // Body chunks (both directions, vmess.newCodecLen @0xb45320):
 //
-//	length  : BE16(payload + tag + clear padding); authenticated lengths use
+//	length  : BE16(payload + tag + clear padding); authenticated lengths subtract
+//	          their AEAD tag size before sealing and add it after opening, using
 //	          the request key/IV in both directions and a separate nonce counter
 //	payload : sealed with the direction's bodyKey, followed by clear padding
 //	nonce   : the 12-byte body IV with bytes [0:2] replaced by BE16(counter);
@@ -300,6 +301,7 @@ type vmessKeys struct {
 	bodyIV  [16]byte
 	bodyKey [16]byte
 	respV   byte
+	option  byte
 }
 
 // fnv1a32 is the request-header checksum (0x811c9dc5 / 0x1000193, stored big
@@ -360,7 +362,7 @@ func (p *Proxy) vmessRequest(w io.Writer, dest socks.Addr) (vmessKeys, error) {
 		// global padding without masking is rejected by the server.
 		option |= vmessOptionChunkMasking
 	}
-	p.vmessOption = option
+	keys.option = option
 
 	header := make([]byte, 0, 42+len(dest.Host)+padLen+4)
 	header = append(header, 0x01) // version
@@ -418,7 +420,7 @@ func (p *Proxy) vmessStream(c net.Conn, dest socks.Addr) (net.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("vmess outbound: %w", err)
 	}
-	return newVMessConn(c, keys, p.security, p.vmessOption)
+	return newVMessConn(c, keys, p.security, keys.option)
 }
 
 // ---------------------------------------------------------------------------
@@ -546,6 +548,13 @@ func (c *vmessCodec) overhead() int {
 }
 
 func (c *vmessCodec) sealLen(n int) ([]byte, error) {
+	if c.lenAEAD != nil {
+		// Xray authenticates the wire size minus the length AEAD tag.
+		if n < c.lenAEAD.Overhead() {
+			return nil, errors.New("vmess: corrupt chunk length")
+		}
+		n -= c.lenAEAD.Overhead()
+	}
 	var lp [2]byte
 	binary.BigEndian.PutUint16(lp[:], uint16(n))
 	if c.lenAEAD == nil {
@@ -581,7 +590,7 @@ func (c *vmessCodec) openLen(b []byte) (int, error) {
 	if err != nil || len(plain) != 2 {
 		return 0, errors.New("vmess: corrupt chunk length")
 	}
-	return int(binary.BigEndian.Uint16(plain)), nil
+	return int(binary.BigEndian.Uint16(plain)) + c.lenAEAD.Overhead(), nil
 }
 
 func (c *vmessCodec) openChunk(b []byte) ([]byte, error) {

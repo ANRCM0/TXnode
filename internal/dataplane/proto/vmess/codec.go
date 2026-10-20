@@ -25,7 +25,8 @@
 //
 // Body chunk (both directions):
 //
-//	length  : BE16(payload length), sealed when option bit 0x10 is set
+//	length  : BE16(payload + body tag + clear padding); authenticated lengths
+//	          subtract their AEAD tag size before sealing and add it after opening
 //	          (key = KDF16(bodyKey,"auth_len"), label 0x6e656c5f68747561)
 //	payload : sealed with the body AEAD, AD=nil
 //	nonce   : the 12-byte IV with bytes [0:2] replaced by BE16(counter); the
@@ -158,9 +159,16 @@ func (c *codec) maskSize(wire int) (int, error) {
 	return wire ^ int(binary.BigEndian.Uint16(b[:])), nil
 }
 
-// sealLen seals the two-byte payload length when the authenticated length
+// sealLen seals the two-byte adjusted wire length when the authenticated length
 // option is active.
 func (c *codec) sealLen(wire int) ([]byte, error) {
+	if c.lenAEAD != nil {
+		// Xray authenticates the wire size minus the length AEAD tag.
+		if wire < c.lenAEAD.Overhead() {
+			return nil, ErrCorruptChunk
+		}
+		wire -= c.lenAEAD.Overhead()
+	}
 	var lp [2]byte
 	binary.BigEndian.PutUint16(lp[:], uint16(wire))
 	if c.lenAEAD == nil {
@@ -198,7 +206,7 @@ func (c *codec) openLen(b []byte) (int, error) {
 	if err != nil || len(plain) != 2 {
 		return 0, ErrCorruptChunk
 	}
-	return int(binary.BigEndian.Uint16(plain)), nil
+	return int(binary.BigEndian.Uint16(plain)) + c.lenAEAD.Overhead(), nil
 }
 
 // openChunk opens the payload.
