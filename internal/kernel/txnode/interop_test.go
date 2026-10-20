@@ -1405,8 +1405,20 @@ func certPublicKeySHA256(t *testing.T, certPEM []byte) string {
 // proxy mode (sing-box's naive outbound needs the Chromium cronet library,
 // which the release binary does not ship).
 func TestInteropCurlNaiveH2(t *testing.T) {
-	if _, err := exec.LookPath("curl"); err != nil {
+	bin, err := exec.LookPath("curl")
+	if err != nil {
 		t.Skip("curl not installed")
+	}
+	version, err := exec.Command(bin, "--disable", "--version").CombinedOutput()
+	if err != nil {
+		t.Fatalf("curl version: %v\n%s", err, version)
+	}
+	help, err := exec.Command(bin, "--disable", "--help", "all").CombinedOutput()
+	if err != nil {
+		t.Fatalf("curl options: %v\n%s", err, help)
+	}
+	if !bytes.Contains(version, []byte("HTTP2")) || !bytes.Contains(help, []byte("--proxy-http2")) {
+		t.Skip("curl has no HTTP/2 proxy support")
 	}
 	origin := startInteropOrigin(t)
 	cert, _ := selfSignedFiles(t)
@@ -1414,14 +1426,15 @@ func TestInteropCurlNaiveH2(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "curl", "-sS", "--max-time", "8",
-		"--proxy-insecure", "--proxy-http2",
+	// HTTP targets need CONNECT explicitly; ignore local proxy bypass settings.
+	cmd := exec.CommandContext(ctx, bin, "--disable", "-sS", "--max-time", "8",
+		"--proxy-insecure", "--proxy-http2", "--proxytunnel", "--noproxy", "",
 		"-x", "https://127.0.0.1:"+strconv.Itoa(port),
 		"-U", "interop:"+interopUUID,
 		"http://"+origin.Listener.Addr().String()+"/")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Skipf("curl HTTP/2 proxy unavailable or failed (NAIVE-1): %v\n%s", err, out)
+		t.Fatalf("curl HTTP/2 CONNECT failed: %v\n%s", err, out)
 	}
 	if string(out) != "interop-ok" {
 		t.Fatalf("body = %q", out)
