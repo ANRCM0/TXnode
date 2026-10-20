@@ -13,6 +13,11 @@ curl -sSLO https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux
 sha256sum -c <(grep SHA2-256 Xray-linux-64.zip.dgst | sed 's/SHA2-256= //;s/^/ /;s/$/  Xray-linux-64.zip/')
 unzip -q Xray-linux-64.zip
 
+# sing-box（官方 release，覆盖 AnyTLS/TUIC/SS2022 等服务端协议）
+mkdir -p .clients/singbox && cd .clients/singbox
+curl -sSLO https://github.com/SagerNet/sing-box/releases/download/v1.14.3/sing-box-1.14.3-linux-amd64.tar.gz
+tar xzf sing-box-1.14.3-linux-amd64.tar.gz && cp sing-box-1.14.3-linux-amd64/sing-box .
+
 # Mihomo（官方 release）
 mkdir -p .clients/mihomo && cd .clients/mihomo
 curl -sSLO https://github.com/MetaCubeX/mihomo/releases/download/v1.19.32/mihomo-linux-amd64-compatible-v1.19.32.gz
@@ -23,23 +28,36 @@ gunzip -f mihomo-linux-amd64-compatible-v1.19.32.gz && mv mihomo-linux-amd64-com
 cd TXnode
 TXNODE_INTEROP_XRAY=$PWD/../.clients/xray/xray \
 TXNODE_INTEROP_MIHOMO=$PWD/../.clients/mihomo/mihomo \
+TXNODE_INTEROP_SINGBOX=$PWD/../.clients/singbox/sing-box \
 go test ./internal/kernel/txnode/ -run TestInterop -v -timeout 300s
 ```
 
 REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.microsoft.com:443`，可用
 `TXNODE_INTEROP_REALITY_DEST` 覆盖。
 
-## 结果（Xray 26.3.27 / Mihomo v1.19.32，本机回环）
+## 结果（Xray 26.3.27 / Mihomo v1.19.32 / sing-box 1.14.3，本机回环）
 
-| 用例 | 客户端 | 结果 | 说明 |
+通过（12）：
+
+| 用例 | 客户端 | 备注 |
+|---|---|---|
+| VLESS over TCP / TLS / WebSocket / HTTPUpgrade | Xray | TCP 明文、TLS（证书 pinning）、WS、HTTPUpgrade 全部通过 |
+| VMess over TCP / WebSocket | Xray | AEAD、分块掩码、padding、authlen 均已对齐 |
+| Trojan + TLS | Xray | 证书 pinning |
+| Shadowsocks（aes-128-gcm） | Xray | 经典 AEAD |
+| VLESS + REALITY | Xray / Mihomo | 参考 TLS 栈；借用站点握手记录 ≤8 KiB |
+| Hysteria2 | Mihomo / sing-box | TCP 请求帧与上游一致 |
+
+未通过 / 未覆盖（跳过，带原因）：
+
+| 用例 | 客户端 | 现象 | 编号 |
 |---|---|---|---|
-| VLESS over TCP | Xray | ✅ 通过 | `TestInteropXrayVLESS` |
-| VLESS + WS（path `/ray`） | Xray | ✅ 通过 | `TestInteropXrayVLESSWebSocket` |
-| Trojan + TLS（自签，证书 pinning） | Xray | ✅ 通过 | `TestInteropXrayTrojanTLS`；Xray 26 已移除 `allowInsecure` |
-| Shadowsocks（aes-128-gcm） | Xray | ✅ 通过 | `TestInteropXrayShadowsocks` |
-| VMess（AEAD） | Xray | ✅ 通过 | 修复了三处：cmdKey = MD5(uuid‖`c48619fe-…`)、SHAKE128 掩码以 body IV 为种子、length 块计入 AEAD tag 且 padding 明文置于密文后 |
-| VLESS + REALITY | Xray / Mihomo | ✅ 通过 | 鉴权线格式已按参考实现对齐（HKDF salt=random[:20]、GCM nonce=random[20:]、AAD=零化 sessionID 的 ClientHello、version/time/shortId 布局、优先纯 X25519），TLS 终止改用 `xtls/reality` 参考栈。注意：借用站点的握手记录需 ≤8 KiB（参考实现的 8 KiB 捕获窗口），默认用例改用 `www.cloudflare.com`；首次握手会等后台 post-handshake 记录学习完成（最长 8 s，之后为 0） |
-| Hysteria2 | Mihomo | ✅ 通过 | TCP 请求帧对齐上游：`varint 0x401` + 地址字符串 + padding，响应补 padding 长度字段 |
+| VLESS + gRPC | Xray | 客户端能拨号，服务端未完成数据流（连接被关闭） | GRPC-1 |
+| VLESS + HTTP/2 | — | Xray 26 已移除独立 h2 传输（迁移到 XHTTP stream-one） | H2-removed |
+| VLESS + XHTTP | Xray | 中继已建立、上游响应未回传（模式/流复用待查） | XHTTP-1 |
+| AnyTLS | sing-box | 服务端 `anytls: not an AnyTLS client`（协议版本差异） | ANYTLS-1 |
+| TUIC | Mihomo / sing-box | QUIC 会话未建立（服务端无 accept 日志） | TUIC-1 |
+| Shadowsocks 2022 | Xray / sing-box | 客户端 method 创建失败或 identity/PSK 夹具不匹配 | SS2022-1 |
 
 ## 尚未覆盖的互通项
 
@@ -57,6 +75,7 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 ```bash
 TXNODE_INTEROP_XRAY=$PWD/../.clients/xray/xray \
 TXNODE_INTEROP_MIHOMO=$PWD/../.clients/mihomo/mihomo \
+TXNODE_INTEROP_SINGBOX=$PWD/../.clients/singbox/sing-box \
 TXNODE_INTEROP_REALITY_PRIV=... TXNODE_INTEROP_REALITY_PUB=... \
 go test ./internal/kernel/txnode/ -run TestInterop -v
 ```
