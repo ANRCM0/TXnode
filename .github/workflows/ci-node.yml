@@ -436,6 +436,8 @@ jobs:
       - name: Check Core and candidate renderer compatibility
         run: python3 scripts/check-renderer-compatibility.py
       - name: Actual Core activation, authorization, Provider, Node and settlement
+        env:
+          KERNEL_TYPE: txnode
         run: python3 .compat/core/scripts/verify-native-c2.py
       - name: Retain non-secret compatibility sources
         if: always()

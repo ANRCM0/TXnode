@@ -21,6 +21,9 @@ def main():
     if CORE.resolve() != ROOT / '.compat/core':
         raise ValueError('Core fixture escaped the task-owned compatibility directory')
     node_head = git(ROOT, 'rev-parse', 'HEAD')
+    native_test = ROOT / 'internal/service/native_c2_interop_test.go'
+    if not native_test.is_file() or 'func TestNativeC2RuntimeEndToEnd(' not in native_test.read_text(encoding='utf-8'):
+        raise ValueError('The required native C2 runtime test is missing')
     # The baseline may still contain the historical bundled module. Keep it for
     # diagnostics and point only its integration path at this candidate checkout.
     reference = CORE / 'node'
@@ -35,6 +38,8 @@ def main():
         'node_repository': 'ANRCM0/txnode',
         'node_revision': node_head,
         'node_tree': git(ROOT, 'rev-parse', 'HEAD^{tree}'),
+        'node_kernel': 'txnode',
+        'native_c2_test': 'TestNativeC2RuntimeEndToEnd',
         'fixture': 'Pinned Core application source with candidate Node integration path',
     }
     target = ROOT / 'artifacts/core-compatibility-sources.json'
