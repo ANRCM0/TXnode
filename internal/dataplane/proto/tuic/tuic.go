@@ -433,12 +433,23 @@ func (c *client) authenticate(str *quic.ReceiveStream) {
 		c.failAuth()
 		return
 	}
-	expect, err := c.srv.expectedToken(uuid, u)
-	if err != nil || len(expect) != tokenLen {
-		c.failAuth()
-		return
+	// TUIC 5.x derives the token from the TLS exporter:
+	// ExportKeyingMaterial(label=uuid bytes, context=password, 32). Older
+	// clients (and the sampled build) use sha256(uuid string || password).
+	authed := false
+	if state := c.conn.ConnectionState(); state.TLS.Version != 0 {
+		if exp, err := state.TLS.ExportKeyingMaterial(string(uuid[:]), u.Password, tokenLen); err == nil &&
+			subtle.ConstantTimeCompare(exp, token) == 1 {
+			authed = true
+		}
 	}
-	if subtle.ConstantTimeCompare(expect, token) != 1 {
+	if !authed {
+		expect, err := c.srv.expectedToken(uuid, u)
+		if err == nil && len(expect) == tokenLen && subtle.ConstantTimeCompare(expect, token) == 1 {
+			authed = true
+		}
+	}
+	if !authed {
 		// Constant-time compare, as in the binary's 0xb4246b loop.
 		c.failAuth()
 		return
@@ -614,7 +625,7 @@ func readFrameFromStream(r io.Reader) (*frame, error) {
 	if _, err := io.ReadFull(r, typeBuf[:]); err != nil {
 		return nil, err
 	}
-	if typeBuf[0] != addrNone && typeBuf[0] != 0 {
+	if typeBuf[0] != addrNone {
 		rest, err := readAddrRest(r, typeBuf[0])
 		if err != nil {
 			return nil, err

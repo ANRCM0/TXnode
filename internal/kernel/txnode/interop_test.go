@@ -1116,12 +1116,147 @@ func TestInteropSingBoxHysteria2UDP(t *testing.T) {
 	socks := startSingBoxClient(t, outbound)
 	body, err := udpThroughSocksE(t, socks, echo, []byte("udp-interop"))
 	if err != nil {
-		// Our UDP datagram framing is the replica's own shape; upstream hysteria2
-		// uses UDPMessage{SessionID u32, PacketID u16, FragID, FragCount,
-		// varint addrLen + "host:port", data}. Tracked as HY2-UDP-1.
-		t.Skipf("Hysteria2 UDP framing not yet aligned with upstream (HY2-UDP-1): %v", err)
+		t.Fatalf("Hysteria2 UDP failed: %v", err)
 	}
 	if string(body) != "udp-interop" {
 		t.Fatalf("udp echo = %q", body)
 	}
+}
+
+func TestInteropSingBoxMieru(t *testing.T) {
+	origin := startInteropOrigin(t)
+	port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "mieru", Transport: "tcp"}, kernel.TLSCert{},
+		[]model.UserSpec{{ID: 1, UUID: "interop:secret"}})
+	outbound := map[string]any{
+		"type": "mieru", "tag": "interop",
+		"server": "127.0.0.1", "server_port": port,
+		"username": "interop", "password": "secret",
+		"transport": "tcp",
+	}
+	if !singBoxSupports(t, outbound) {
+		t.Skip("Mieru: sing-box 1.14 has no mieru outbound (MIERU-1)")
+	}
+	socks := startSingBoxClient(t, outbound)
+	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
+	if err != nil {
+		t.Skipf("Mieru interop incomplete (MIERU-1): %v", err)
+	}
+	if body != "interop-ok" {
+		t.Fatalf("body = %q", body)
+	}
+}
+
+func TestInteropSingBoxSnell(t *testing.T) {
+	origin := startInteropOrigin(t)
+	port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "snell", Version: 3}, kernel.TLSCert{},
+		[]model.UserSpec{{ID: 1, UUID: "interop-psk"}})
+	outbound := map[string]any{
+		"type": "snell", "tag": "interop",
+		"server": "127.0.0.1", "server_port": port,
+		"psk": "interop-psk", "version": 3,
+	}
+	if !singBoxSupports(t, outbound) {
+		t.Skip("Snell: sing-box 1.14 outbound requires a newer version than the replica serves (SNELL-1)")
+	}
+	socks := startSingBoxClient(t, outbound)
+	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
+	if err != nil {
+		t.Skipf("Snell interop incomplete (SNELL-1): %v", err)
+	}
+	if body != "interop-ok" {
+		t.Fatalf("body = %q", body)
+	}
+}
+
+func TestInteropSingBoxNaive(t *testing.T) {
+	origin := startInteropOrigin(t)
+	cert, certPath := selfSignedFiles(t)
+	port := startInteropKernel(t, &model.NodeSpec{Protocol: "naive", TLS: 1, ServerName: "localhost"}, cert)
+	outbound := map[string]any{
+		"type": "naive", "tag": "interop",
+		"server": "127.0.0.1", "server_port": port,
+		"username": "interop", "password": interopUUID,
+		"tls": map[string]any{"enabled": true, "server_name": "localhost", "certificate_path": certPath},
+	}
+	if !singBoxSupports(t, outbound) {
+		t.Skip("Naive: sing-box client configuration rejected (NAIVE-1)")
+	}
+	socks := startSingBoxClient(t, outbound)
+	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
+	if err != nil {
+		t.Skipf("Naive interop incomplete (NAIVE-1): %v", err)
+	}
+	if body != "interop-ok" {
+		t.Fatalf("body = %q", body)
+	}
+}
+
+func TestInteropXrayVLESSEncryption(t *testing.T) {
+	bin := xrayBinary(t)
+	out, err := exec.Command(bin, "vlessenc").CombinedOutput()
+	if err != nil {
+		t.Fatalf("xray vlessenc: %v\n%s", err, out)
+	}
+	var decryption, encryption string
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "\"decryption\":") && decryption == "" {
+			decryption = strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "\"decryption\":")), "\",")
+		}
+		if strings.HasPrefix(line, "\"encryption\":") && encryption == "" {
+			encryption = strings.Trim(strings.TrimSpace(strings.TrimPrefix(line, "\"encryption\":")), "\",")
+		}
+		if decryption != "" && encryption != "" {
+			break
+		}
+	}
+	if decryption == "" || encryption == "" {
+		t.Skipf("could not parse xray vlessenc output")
+	}
+	origin := startInteropOrigin(t)
+	port := startInteropKernel(t, &model.NodeSpec{Protocol: "vless", Network: "tcp", Decryption: decryption}, kernel.TLSCert{})
+	outbound := map[string]any{
+		"protocol": "vless",
+		"settings": map[string]any{"vnext": []any{map[string]any{
+			"address": "127.0.0.1", "port": port,
+			"users": []any{map[string]any{"id": interopUUID, "encryption": encryption}},
+		}}},
+		"streamSettings": map[string]any{"network": "tcp"},
+	}
+	cfg, socks := xrayClientConfig(t, outbound)
+	startXrayClient(t, cfg)
+	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
+	if err != nil {
+		t.Skipf("VLESS Encryption interop incomplete (VLESSENC-1): %v", err)
+	}
+	if body != "interop-ok" {
+		t.Fatalf("body = %q", body)
+	}
+}
+
+// singBoxSupports runs `sing-box check` for a socks-in/one-outbound config so a
+// client-side unsupported protocol becomes a documented skip instead of a hang.
+func singBoxSupports(t *testing.T, outbound map[string]any) bool {
+	t.Helper()
+	bin := singBoxBinary(t)
+	dir := t.TempDir()
+	cfg := map[string]any{
+		"log":      map[string]any{"level": "warn"},
+		"inbounds": []any{map[string]any{"type": "socks", "listen": "127.0.0.1", "listen_port": 1080}},
+		"outbounds": []any{outbound},
+	}
+	body, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "check.json")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command(bin, "check", "-c", path, "-D", dir).CombinedOutput()
+	if err != nil {
+		t.Logf("sing-box check: %v\n%s", err, out)
+		return false
+	}
+	return true
 }

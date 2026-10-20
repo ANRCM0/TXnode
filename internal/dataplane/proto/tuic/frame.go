@@ -54,9 +54,11 @@ const (
 // TUIC address types differ from SOCKS5: 1 is a domain, 3 is IPv4 and 4 is IPv6
 // (readAddr @0xb42580 / appendAddr @0xb42900, notes §2.3).
 const (
-	addrDomain = 1
-	addrIPv4   = 3
-	addrIPv6   = 4
+	// TUIC v5 uses sing's address serializer: FQDN 0x00, IPv4 0x01, IPv6 0x02,
+	// empty 0xff (sing-quic/tuic AddressSerializer).
+	addrDomain = 0
+	addrIPv4   = 1
+	addrIPv6   = 2
 )
 
 // Header is the 2-byte stream prefix: version and command. The sample writes it
@@ -140,7 +142,7 @@ func parsePacketBody(b []byte) (*frame, error) {
 	payloadLen := int(binary.BigEndian.Uint16(b[6:8]))
 	rest := b[8:]
 	// The address sits between the header and the payload. 0xff means none.
-	if len(rest) > 0 && rest[0] != addrNone && rest[0] != 0 {
+	if len(rest) > 0 && rest[0] != addrNone {
 		addr, n, err := readAddr(rest)
 		if err != nil {
 			return nil, err
@@ -213,7 +215,7 @@ func readAddr(b []byte) (socks.Addr, int, error) {
 			return socks.Addr{}, 0, errors.New("tuic: short IPv6 address")
 		}
 		return socks.Addr{Host: net.IP(b[1:17]).String(), Port: binary.BigEndian.Uint16(b[17:19])}, 19, nil
-	case 0, addrNone:
+	case addrNone:
 		return socks.Addr{}, 1, nil
 	}
 	return socks.Addr{}, 0, fmt.Errorf("tuic: unknown address type %d", b[0])

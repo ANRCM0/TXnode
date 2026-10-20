@@ -579,7 +579,7 @@ tcp / tls / reality / ws / grpc / h2 / httpupgrade / xhttp / shadowtls / obfs-ht
 
 | # | 风险 | 证据 | 对策 |
 |---|---|---|---|
-| R1 | **互通实测结果**：14 条链路通过（VLESS tcp/tls/ws/httpupgrade/grpc/xhttp、VMess tcp/ws、Trojan+TLS、SS、REALITY×2、Hysteria2×2）；HY2-UDP-1、ANYTLS-1、TUIC-1、SS2022-1 仍跳过（`docs/INTEROP.md`） | Xray 26.3.27 / Mihomo v1.19.32 / sing-box 1.14.3 实测 | 先对齐 hysteria2 UDP datagram 帧，再修 AnyTLS/TUIC/SS2022，最后补 Mieru/Snell |
+| R1 | **互通实测结果**：19 条链路通过（VLESS tcp/tls/ws/httpupgrade/grpc/xhttp、VMess tcp/ws、Trojan+TLS、SS/SS2022、REALITY×2、Hysteria2×2、Hysteria2 UDP、TUIC、AnyTLS）；Mihomo TUIC、Mieru、Snell、Naive、VLESS Encryption 仍跳过（编号见 `docs/INTEROP.md`） | Xray 26.3.27 / Mihomo v1.19.32 / sing-box 1.14.3 实测 | 按 VLESSENC-1 → NAIVE-1 → SNELL-1 → MIERU-1 顺序修；Mihomo TUIC 为客户端差异 |
 | R2 | **REALITY 已互通**：鉴权与证书按 `xtls/reality` 对齐并改用参考 TLS 栈，Xray/Mihomo 均通过；限制是借用站点握手记录需 ≤8 KiB，首次握手等待 post-handshake 学习（≤8 s） | `docs/INTEROP.md` | 保留参考栈依赖；mirror 字节回放仍待补 |
 | R3 | **usage_v2 语义**：区间计量要求 per-IO 准入，数据面需关 splice | 本仓 `native_usage_adapter.go:24`；`core/pipe.go` splice 路径 | P3 单独立项；原生模式与普通模式分开压测 |
 | R4 | **依赖版本**：TX-Node 已对齐 quic-go 0.63/utls 1.8.3；后续升级需双向验证 | `go.mod` | 锁版本 + CI 双跑 |

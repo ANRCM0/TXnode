@@ -35,7 +35,10 @@ type chunkWriter struct {
 	salt       []byte
 	is2022     bool
 	streamType byte
-	started    bool
+	// requestSalt is embedded in the 2022 server response fixed header
+	// (type | epoch | request salt | length), unlike the 11-byte client header.
+	requestSalt []byte
+	started     bool
 	first      bool
 	buf        []byte
 	err        error
@@ -119,11 +122,18 @@ func (w *chunkWriter) start(first []byte) error {
 	if !w.is2022 {
 		return nil
 	}
-	var hdr [fixedHeaderLen]byte
+	hdrLen := fixedHeaderLen
+	if len(w.requestSalt) > 0 {
+		hdrLen += len(w.requestSalt)
+	}
+	hdr := make([]byte, hdrLen)
 	hdr[0] = w.streamType
 	binary.BigEndian.PutUint64(hdr[1:9], uint64(nowUnix()))
-	binary.BigEndian.PutUint16(hdr[9:11], uint16(len(first)))
-	sealed := w.aead.Seal(nil, w.nonce.get(), hdr[:], nil)
+	off := 9
+	copy(hdr[off:], w.requestSalt)
+	off += len(w.requestSalt)
+	binary.BigEndian.PutUint16(hdr[off:off+2], uint16(len(first)))
+	sealed := w.aead.Seal(nil, w.nonce.get(), hdr, nil)
 	w.nonce.inc()
 	_, err := w.w.Write(sealed)
 	return err

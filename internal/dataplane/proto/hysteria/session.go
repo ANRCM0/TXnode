@@ -3,11 +3,15 @@ package hysteria
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/apernet/quic-go/quicvarint"
 
 	"github.com/ANRCM0/TX-Node/internal/dataplane/core"
 	"github.com/ANRCM0/TX-Node/internal/dataplane/socks"
@@ -15,72 +19,102 @@ import (
 
 // UDP over QUIC datagrams.
 //
-// The sample carries UDP in QUIC datagrams (EnableDatagrams = 1 and the
-// Hysteria-UDP: true header) and keeps a per-destination session table
-// (udpSession @0xed9920: +0x00 UserID, +0x08 Dest, +0x20 Conn, +0x30 Packets,
-// +0x40 Local, +0x58 Socket) with dispatcher functions dispatch @0xaa34e0,
-// parseUDP @0xaa3f40, appendUDP @0xaa4220, readDatagrams @0xaa4400,
-// makeRoom @0xaa4a20 and udpSession.{receive,enqueue,ReadPacket,WritePacket}
-// (notes/rev-proto-udp.md §1.6).
+// The wire format is upstream hysteria2's UDPMessage
+// (core/internal/protocol/proxy.go):
 //
-// The report explicitly marks the datagram payload layout as unresolved
-// (§7 item 12). The framing below is therefore kaze-replication defined and
-// shared by both ends:
+//	u32 SessionID | u16 PacketID | u8 FragID | u8 FragCount |
+//	varint addrLen | "host:port" | data
 //
-//	client -> server
-//	  varint sessionID
-//	  u8     flags: bit0 = fragmented, bit1 = carries a destination address
-//	  [varint addrLen][addr]              when bit1 is set (first datagram)
-//	  [u8 fragID][u8 fragTotal]           when bit0 is set
-//	  payload
-//
-//	server -> client
-//	  varint sessionID
-//	  u8     flags: bit0 = fragmented
-//	  [u8 fragID][u8 fragTotal]           when bit0 is set
-//	  payload
-//
-// A session is created by the first datagram that carries an address and is
-// dropped after udpIdleTimeout of silence.
+// The server answers with the same shape; the address is the UDP source of the
+// reply and FragCount is 1 unless the payload was split.
 const (
-	// maxDatagramPayload is the payload budget per QUIC datagram. QUIC's floor
-	// MTU is 1200 bytes; the framing overhead below is subtracted from it so a
-	// datagram never exceeds the path MTU even before DPLPMTUD raises it.
+	// maxDatagramPayload is the QUIC datagram budget (floor MTU 1200).
 	maxDatagramPayload = 1200
-	// datagramOverhead reserves room for the varint id, flags, address and
-	// fragmentation fields.
-	datagramOverhead = 48
-	// udpIdleTimeout is how long an idle session is kept. UNVERIFIED: the report
-	// does not extract the sample's value; 60 s is upstream hysteria2's default.
+	// datagramOverhead reserves the fixed fields plus address and varint.
+	datagramOverhead = 64
+	// udpIdleTimeout is how long an idle session is kept (upstream default).
 	udpIdleTimeout = 60 * time.Second
 	// maxUDPSessions bounds the per-connection session table (makeRoom evicts).
 	maxUDPSessions = 1024
-	// maxFragments bounds reassembly state per session.
+	// maxFragments bounds one fragmented message.
 	maxFragments = 0xff
 )
 
-const (
-	flagFrag = 1 << 0
-	flagNew  = 1 << 1
-)
+// udpMessage is protocol.UDPMessage.
+type udpMessage struct {
+	SessionID uint32
+	PacketID  uint16
+	FragID    uint8
+	FragCount uint8
+	Addr      string
+	Data      []byte
+}
 
-// udpSession is one destination association. Field names and order follow the
-// recovered struct so the comments can cite offsets.
+func parseUDPMessage(p []byte) (*udpMessage, error) {
+	if len(p) < 8 {
+		return nil, errors.New("hysteria: short udp message")
+	}
+	m := &udpMessage{
+		SessionID: binary.BigEndian.Uint32(p[0:4]),
+		PacketID:  binary.BigEndian.Uint16(p[4:6]),
+		FragID:    p[6],
+		FragCount: p[7],
+	}
+	rest := p[8:]
+	l, n, err := quicvarint.Parse(rest)
+	if err != nil || n <= 0 || l == 0 || l > 2048 || int(l) > len(rest)-n {
+		return nil, errors.New("hysteria: invalid udp address")
+	}
+	m.Addr = string(rest[n : n+int(l)])
+	m.Data = rest[n+int(l):]
+	return m, nil
+}
+
+func (m *udpMessage) marshal() []byte {
+	buf := make([]byte, 8, 8+quicvarint.Len(uint64(len(m.Addr)))+len(m.Addr)+len(m.Data))
+	binary.BigEndian.PutUint32(buf[0:4], m.SessionID)
+	binary.BigEndian.PutUint16(buf[4:6], m.PacketID)
+	buf[6] = m.FragID
+	buf[7] = m.FragCount
+	buf = quicvarint.Append(buf, uint64(len(m.Addr)))
+	buf = append(buf, m.Addr...)
+	buf = append(buf, m.Data...)
+	return buf
+}
+
+func parseUDPAddr(s string) (socks.Addr, error) {
+	host, portStr, err := net.SplitHostPort(s)
+	if err != nil {
+		return socks.Addr{}, fmt.Errorf("hysteria: udp address %q: %w", s, err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port <= 0 || port > 65535 {
+		return socks.Addr{}, fmt.Errorf("hysteria: udp port %q", portStr)
+	}
+	return socks.Addr{Host: host, Port: uint16(port)}, nil
+}
+
+type udpPacket struct {
+	addr socks.Addr
+	data []byte
+}
+
+// udpSession is one hysteria UDP session (SessionID key).
 type udpSession struct {
-	UserID  int64       // +0x00
-	Dest    socks.Addr  // +0x08
-	Conn    net.Conn    // +0x20
-	Packets chan []byte // +0x30
-	Local   netip.Addr  // +0x40
+	UserID  int64
+	Dest    socks.Addr
+	Conn    net.Conn // destination socket; nil in relay mode (core dials)
+	Packets chan udpPacket
+	Local   netip.Addr
 	Socket  *net.UDPConn
 
-	id    uint64
+	id    uint32
 	st    *connState
-	seen  atomic.Int64 // unix nanoseconds of the last datagram
+	seen  atomic.Int64
 	once  sync.Once
 	done  chan struct{}
 	fragM sync.Mutex
-	frags map[uint8]*fragSet
+	frags map[uint16]*fragSet
 }
 
 type fragSet struct {
@@ -88,17 +122,17 @@ type fragSet struct {
 	parts map[uint8][]byte
 }
 
-// enqueue hands a decoded payload to the relay (relay mode) without blocking the
-// datagram loop.
-func (s *udpSession) enqueue(p []byte) {
+func (s *udpSession) enqueue(addr socks.Addr, p []byte) {
+	cp := make([]byte, len(p))
+	copy(cp, p)
 	select {
-	case s.Packets <- p:
+	case s.Packets <- udpPacket{addr: addr, data: cp}:
 	default:
 		// The relay is slower than the network; dropping is correct for UDP.
 	}
 }
 
-// receive is the dest -> QUIC pump used when no relay is wired.
+// receive is the destination -> QUIC pump used when no relay is wired.
 func (s *udpSession) receive() {
 	buf := make([]byte, 64<<10)
 	for {
@@ -106,7 +140,7 @@ func (s *udpSession) receive() {
 		if err != nil {
 			return
 		}
-		s.st.writeDatagram(s, buf[:n], false)
+		s.st.sendUDPMessage(s.id, s.Dest.String(), buf[:n])
 	}
 }
 
@@ -115,25 +149,24 @@ func (s *udpSession) ReadPacket(p []byte) (int, socks.Addr, error) {
 	select {
 	case <-s.done:
 		return 0, socks.Addr{}, net.ErrClosed
-	case b, ok := <-s.Packets:
+	case pkt, ok := <-s.Packets:
 		if !ok {
 			return 0, socks.Addr{}, net.ErrClosed
 		}
-		n := copy(p, b)
-		return n, s.Dest, nil
+		n := copy(p, pkt.data)
+		return n, pkt.addr, nil
 	}
 }
 
-// WritePacket implements core.PacketStream for relay mode.
+// WritePacket sends one response datagram back to the client.
 func (s *udpSession) WritePacket(p []byte, addr socks.Addr) error {
-	if addr != s.Dest {
-		return errors.New("hysteria: packet for a different destination")
+	if addr.IsZero() {
+		addr = s.Dest
 	}
-	s.st.writeDatagram(s, p, false)
+	s.st.sendUDPMessage(s.id, addr.String(), p)
 	return nil
 }
 
-// Close tears the session down.
 func (s *udpSession) Close() error {
 	s.once.Do(func() {
 		close(s.done)
@@ -144,12 +177,10 @@ func (s *udpSession) Close() error {
 	return nil
 }
 
-// startDatagramLoop starts the connection's datagram reader once auth succeeded
-// (the sample's "go forward_loop()").
+// startDatagramLoop starts the QUIC datagram reader once per connection.
 func (st *connState) startDatagramLoop() {
 	st.datagrams.Do(func() {
 		if st.conn == nil {
-			// Unit tests drive the handler without a QUIC connection.
 			return
 		}
 		ctx := st.conn.Context()
@@ -171,95 +202,76 @@ func (st *connState) dispatch(p []byte) {
 		st.sweepAt = now.Add(time.Second)
 		st.sweep(now)
 	}
-	sid, n := binary.Uvarint(p)
-	if n <= 0 || len(p) < n+1 {
+	m, err := parseUDPMessage(p)
+	if err != nil {
 		return
 	}
-	p = p[n:]
-	flags := p[0]
-	p = p[1:]
-
-	var dest socks.Addr
-	if flags&flagNew != 0 {
-		addrLen, m := binary.Uvarint(p)
-		if m <= 0 || int(addrLen) > len(p)-m || addrLen == 0 {
-			return
-		}
-		var err error
-		dest, err = decodeAddr(p[m : m+int(addrLen)])
-		if err != nil {
-			return
-		}
-		p = p[m+int(addrLen):]
+	dest, err := parseUDPAddr(m.Addr)
+	if err != nil {
+		return
 	}
-	var fragID, fragTotal uint8
-	if flags&flagFrag != 0 {
-		if len(p) < 2 {
-			return
-		}
-		fragID, fragTotal = p[0], p[1]
-		p = p[2:]
-	}
-
-	sess, err := st.session(sid, dest, flags&flagNew != 0)
+	sess, err := st.session(m.SessionID, dest)
 	if err != nil || sess == nil {
 		return
 	}
 	sess.seen.Store(time.Now().UnixNano())
-
-	payload := p
-	if flags&flagFrag != 0 {
-		payload = sess.reassemble(fragID, fragTotal, p)
+	payload := m.Data
+	if m.FragCount > 1 {
+		payload = sess.reassemble(m.PacketID, m.FragID, m.FragCount, m.Data)
 		if payload == nil {
 			return
 		}
 	}
 	if st.srv.opts.Relay != nil {
-		cp := make([]byte, len(payload))
-		copy(cp, payload)
-		sess.enqueue(cp)
+		sess.enqueue(dest, payload)
 		return
 	}
-	_, _ = sess.Conn.Write(payload)
+	if sess.Conn != nil {
+		_, _ = sess.Conn.Write(payload)
+	}
 }
 
-// session returns (or creates) the session for sid. Creation needs an address;
-// a datagram for an unknown session without one is dropped.
-func (st *connState) session(sid uint64, dest socks.Addr, isNew bool) (*udpSession, error) {
+func (st *connState) session(sid uint32, dest socks.Addr) (*udpSession, error) {
 	st.sessMu.Lock()
 	defer st.sessMu.Unlock()
 	if st.sessions == nil {
-		st.sessions = make(map[uint64]*udpSession)
+		st.sessions = make(map[uint32]*udpSession)
 	}
 	if s, ok := st.sessions[sid]; ok {
 		return s, nil
 	}
-	if !isNew || dest.IsZero() {
+	if dest.IsZero() {
 		return nil, nil
 	}
 	if len(st.sessions) >= maxUDPSessions {
 		st.makeRoom()
 	}
-	conn, err := dialUDP(dest)
-	if err != nil {
-		st.srv.log.Debug("hysteria: udp dial failed", "dest", dest.String(), "error", err)
-		return nil, err
+	var conn net.Conn
+	var err error
+	if st.srv.opts.Relay == nil {
+		conn, err = dialUDP(dest)
+		if err != nil {
+			st.srv.log.Debug("hysteria: udp dial failed", "dest", dest.String(), "error", err)
+			return nil, err
+		}
 	}
 	s := &udpSession{
 		UserID:  int64(st.userIDValue()),
 		Dest:    dest,
 		Conn:    conn,
-		Packets: make(chan []byte, 64),
+		Packets: make(chan udpPacket, 64),
 		done:    make(chan struct{}),
-		frags:   make(map[uint8]*fragSet),
+		frags:   make(map[uint16]*fragSet),
 		id:      sid,
 		st:      st,
 	}
-	if ap := dest.AddrPort(); ap.IsValid() {
-		s.Local = ap.Addr()
-	}
-	if udp, ok := conn.(*net.UDPConn); ok {
-		s.Socket = udp
+	if conn != nil {
+		if ap := dest.AddrPort(); ap.IsValid() {
+			s.Local = ap.Addr()
+		}
+		if udp, ok := conn.(*net.UDPConn); ok {
+			s.Socket = udp
+		}
 	}
 	s.seen.Store(time.Now().UnixNano())
 	st.sessions[sid] = s
@@ -278,17 +290,15 @@ func (st *connState) session(sid uint64, dest socks.Addr, isNew bool) (*udpSessi
 	return s, nil
 }
 
-// dropSession removes a session from the table.
-func (st *connState) dropSession(sid uint64) {
+func (st *connState) dropSession(sid uint32) {
 	st.sessMu.Lock()
 	if s, ok := st.sessions[sid]; ok {
 		delete(st.sessions, sid)
-		_ = s.Conn.Close()
+		_ = s.Close()
 	}
 	st.sessMu.Unlock()
 }
 
-// makeRoom evicts the least recently used session. Evidence: makeRoom @0xaa4a20.
 func (st *connState) makeRoom() {
 	var oldest *udpSession
 	for _, s := range st.sessions {
@@ -302,7 +312,6 @@ func (st *connState) makeRoom() {
 	}
 }
 
-// sweep closes sessions idle for longer than udpIdleTimeout.
 func (st *connState) sweep(now time.Time) {
 	cutoff := now.Add(-udpIdleTimeout).UnixNano()
 	st.sessMu.Lock()
@@ -315,7 +324,6 @@ func (st *connState) sweep(now time.Time) {
 	st.sessMu.Unlock()
 }
 
-// closeSessions tears down every session of a finished connection.
 func (st *connState) closeSessions() {
 	st.sessMu.Lock()
 	sessions := st.sessions
@@ -326,17 +334,22 @@ func (st *connState) closeSessions() {
 	}
 }
 
-// reassemble stores a fragment and returns the payload once all of them arrived.
-func (s *udpSession) reassemble(id, total uint8, part []byte) []byte {
+// reassemble stores a fragment and returns the payload once all arrived. The
+// PacketID keys the fragment set (upstream frag.Defragger).
+func (s *udpSession) reassemble(packetID uint16, id, total uint8, part []byte) []byte {
 	if total == 0 || total > maxFragments || id >= total {
 		return nil
 	}
 	s.fragM.Lock()
 	defer s.fragM.Unlock()
-	set := s.frags[total]
+	set := s.frags[packetID]
 	if set == nil {
 		set = &fragSet{total: total, parts: make(map[uint8][]byte)}
-		s.frags[total] = set
+		s.frags[packetID] = set
+	}
+	if set.total != total {
+		delete(s.frags, packetID)
+		return nil
 	}
 	cp := make([]byte, len(part))
 	copy(cp, part)
@@ -348,29 +361,23 @@ func (s *udpSession) reassemble(id, total uint8, part []byte) []byte {
 	for i := uint8(0); i < total; i++ {
 		out = append(out, set.parts[i]...)
 	}
-	delete(s.frags, total)
+	delete(s.frags, packetID)
 	return out
 }
 
-// writeDatagram sends payload, fragmenting it when the framing exceeds the
+// sendUDPMessage serialises one response, fragmenting when it exceeds the
 // datagram budget.
-func (st *connState) writeDatagram(sess *udpSession, payload []byte, withAddr bool) {
-	var addr []byte
-	if withAddr {
-		addr = encodeAddr(sess.Dest)
-	}
-	max := maxDatagramPayload - datagramOverhead - len(addr)
-	if max <= 0 {
+func (st *connState) sendUDPMessage(sid uint32, addr string, payload []byte) {
+	max := maxDatagramPayload - datagramOverhead - len(addr) - quicvarint.Len(uint64(len(addr)))
+	if max < 64 {
 		max = 64
 	}
 	if len(payload) <= max {
-		st.sendDatagram(buildDatagram(sess.id, withAddr, addr, 0, 0, false, payload))
+		st.sendDatagram((&udpMessage{SessionID: sid, FragCount: 1, Addr: addr, Data: payload}).marshal())
 		return
 	}
 	total := (len(payload) + max - 1) / max
 	if total > maxFragments {
-		// Cannot fragment further: send what the protocol allows and let the
-		// destination see a truncated datagram rather than silently dropping it.
 		total = maxFragments
 	}
 	for i := 0; i < total; i++ {
@@ -378,31 +385,10 @@ func (st *connState) writeDatagram(sess *udpSession, payload []byte, withAddr bo
 		if len(chunk) > max {
 			chunk = chunk[:max]
 		}
-		st.sendDatagram(buildDatagram(sess.id, withAddr && i == 0, addr, uint8(i), uint8(total), true, chunk))
+		st.sendDatagram((&udpMessage{
+			SessionID: sid, FragID: uint8(i), FragCount: uint8(total), Addr: addr, Data: chunk,
+		}).marshal())
 	}
-}
-
-// buildDatagram serialises the framing described in the file comment.
-func buildDatagram(sid uint64, withAddr bool, addr []byte, fragID, fragTotal uint8, frag bool, payload []byte) []byte {
-	buf := make([]byte, 0, binary.MaxVarintLen64+1+binary.MaxVarintLen64+len(addr)+2+len(payload))
-	buf = binary.AppendUvarint(buf, sid)
-	var flags byte
-	if frag {
-		flags |= flagFrag
-	}
-	if withAddr {
-		flags |= flagNew
-	}
-	buf = append(buf, flags)
-	if withAddr {
-		buf = binary.AppendUvarint(buf, uint64(len(addr)))
-		buf = append(buf, addr...)
-	}
-	if frag {
-		buf = append(buf, fragID, fragTotal)
-	}
-	buf = append(buf, payload...)
-	return buf
 }
 
 func (st *connState) sendDatagram(p []byte) {
@@ -411,7 +397,6 @@ func (st *connState) sendDatagram(p []byte) {
 	}
 }
 
-// dialUDP opens the per-destination UDP socket.
 func dialUDP(dest socks.Addr) (net.Conn, error) {
 	raddr, err := net.ResolveUDPAddr("udp", dest.String())
 	if err != nil {

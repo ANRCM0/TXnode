@@ -335,7 +335,17 @@ func (h *Handler) handshake2022(conn net.Conn, br *bufio.Reader) (*core.Session,
 	if err != nil {
 		return nil, err
 	}
-	writer, err := h.responseWriter2022(conn, key)
+	// The 2022 request payload is address || u16 paddingLen || padding || data.
+	var padBuf [2]byte
+	if _, err := io.ReadFull(reader, padBuf[:]); err != nil {
+		return nil, err
+	}
+	if padLen := int(binary.BigEndian.Uint16(padBuf[:])); padLen > 0 {
+		if _, err := io.CopyN(io.Discard, reader, int64(padLen)); err != nil {
+			return nil, err
+		}
+	}
+	writer, err := h.responseWriter2022(conn, key, salt)
 	if err != nil {
 		return nil, err
 	}
@@ -375,29 +385,37 @@ func (h *Handler) identify2022(br *bufio.Reader, salt []byte) ([]byte, *core.Use
 		}
 		return h.serverKey, nil, nil
 	}
-	if len(h.serverKey) == 0 {
-		// Users but no identity key: the first user key doubles as the PSK, which
-		// is what a single-key 2022 deployment looks like.
-		return h.users[0].key, h.users[0].user, nil
-	}
-	block := make([]byte, 16)
-	if _, err := io.ReadFull(br, block); err != nil {
-		return nil, nil, err
-	}
-	idKey := identityKey(h.serverKey, h.spec.keySize)
-	dec, err := ecbDecryptBlock(idKey, block)
-	if err != nil {
-		return nil, nil, err
-	}
-	for i := range h.users {
-		uk := &h.users[i]
-		sub := sessionSubkey(uk.key, salt, h.spec.keySize)
-		want := blake3Hash(sub)
-		if equalBytes(want[:16], dec) {
-			return uk.key, uk.user, nil
+
+	// Multi-user with an identity PSK: the client prepends one AES-ECB block
+	// holding blake3(session subkey)[:16] under the identity key. A single-PSK
+	// client sends no such block, so peek first and only consume it on a match.
+	if len(h.serverKey) > 0 {
+		if block, err := br.Peek(16); err == nil {
+			idKey := identityKey(h.serverKey, h.spec.keySize)
+			if dec, err := ecbDecryptBlock(idKey, block); err == nil {
+				for i := range h.users {
+					uk := &h.users[i]
+					sub := sessionSubkey(uk.key, salt, h.spec.keySize)
+					want := blake3Hash(sub)
+					if equalBytes(want[:16], dec) {
+						_, _ = br.Discard(16)
+						return uk.key, uk.user, nil
+					}
+				}
+			}
 		}
+		// No identity header: a single-PSK deployment where the user key is the
+		// PSK (or the server key is the PSK and users are not involved).
+		for i := range h.users {
+			if equalBytes(h.users[i].key, h.serverKey) {
+				return h.users[i].key, h.users[i].user, nil
+			}
+		}
+		return h.serverKey, nil, nil
 	}
-	return nil, nil, errAuth
+
+	// Users but no identity key: the first user key doubles as the PSK.
+	return h.users[0].key, h.users[0].user, nil
 }
 
 // responseWriterClassic builds the response direction of the classic format: a
@@ -414,7 +432,7 @@ func (h *Handler) responseWriterClassic(conn net.Conn, master []byte) (*chunkWri
 	return newChunkWriter(conn, aead, salt, false, 0), nil
 }
 
-func (h *Handler) responseWriter2022(conn net.Conn, psk []byte) (*chunkWriter, error) {
+func (h *Handler) responseWriter2022(conn net.Conn, psk, requestSalt []byte) (*chunkWriter, error) {
 	salt := make([]byte, h.spec.saltSize)
 	if _, err := rand.Read(salt); err != nil {
 		return nil, err
@@ -424,7 +442,9 @@ func (h *Handler) responseWriter2022(conn net.Conn, psk []byte) (*chunkWriter, e
 	if err != nil {
 		return nil, err
 	}
-	return newChunkWriter(conn, aead, salt, true, headerServerStream), nil
+	w := newChunkWriter(conn, aead, salt, true, headerServerStream)
+	w.requestSalt = append([]byte(nil), requestSalt...)
+	return w, nil
 }
 
 // classicAEAD derives the per-salt subkey of the classic format

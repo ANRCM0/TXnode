@@ -37,7 +37,7 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 
 ## 结果（Xray 26.3.27 / Mihomo v1.19.32 / sing-box 1.14.3，本机回环）
 
-通过（14）：
+通过（19）：
 
 | 用例 | 客户端 | 备注 |
 |---|---|---|
@@ -49,13 +49,21 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 | VLESS + XHTTP（auto/stream-one） | Xray | auto = stream-up 双流配对（`x_session`） |
 | VLESS + REALITY | Xray / Mihomo | 参考 TLS 栈；借用站点握手记录 ≤8 KiB |
 | Hysteria2 | Mihomo / sing-box | TCP 请求帧与上游一致 |
+| Hysteria2 UDP | sing-box | 上游 UDPMessage 帧（sessionID/packetID/frag/地址字符串） |
+| TUIC | sing-box | TLS exporter token；address family 0/1/2 |
+| Shadowsocks 2022 | Xray / sing-box | 单 PSK、响应头带 request salt、请求 padding |
+| AnyTLS | sing-box | v2 prologue padding + 流内地址 |
 
 未通过 / 未覆盖（跳过，带原因）：
 
 | 用例 | 客户端 | 现象 | 编号 |
 |---|---|---|---|
-| Hysteria2 UDP | sing-box | SOCKS5 UDP ASSOCIATE 请求超时；datagram 仍是复刻自有帧格式 | HY2-UDP-1 |
-| Shadowsocks 2022 | Xray / sing-box | 客户端 method 创建失败或 identity/PSK 夹具不匹配 | SS2022-1 |
+| TUIC | Mihomo | QUIC 建连后不发送 v5 认证帧（客户端实现差异） | TUIC-mihomo |
+| Mieru | sing-box | 1.14 无 mieru outbound（上车需官方客户端） | MIERU-1 |
+| Snell | sing-box | outbound 要求 v4+，复刻只到 v3 | SNELL-1 |
+| Naive | sing-box | 需要 HTTP/2 CONNECT 与受信证书；当前仅 HTTP/1 实现 | NAIVE-1 |
+| VLESS Encryption | Xray | 服务端报 `vless encryption: malformed record`（hello 原语待对齐） | VLESSENC-1 |
+| VLESS + HTTP/2 | — | Xray 26 已移除独立 h2 传输 | H2-removed |
 
 ## 尚未覆盖的互通项
 

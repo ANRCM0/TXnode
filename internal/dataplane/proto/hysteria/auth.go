@@ -48,7 +48,7 @@ type connState struct {
 	user   core.User
 
 	sessMu    sync.Mutex
-	sessions  map[uint64]*udpSession
+	sessions  map[uint32]*udpSession
 	datagrams sync.Once
 	sweepAt   time.Time
 }

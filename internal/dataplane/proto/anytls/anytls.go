@@ -37,7 +37,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"strconv"
@@ -57,7 +56,9 @@ const (
 	cmdSYN      = 1
 	cmdPSH      = 2
 	cmdFIN      = 3
-	cmdSettings = 4
+	cmdSettings            = 4
+	cmdUpdatePaddingScheme = 6
+	cmdServerSettings      = 10
 	cmdAlert    = 5
 	cmdUpdate   = 6
 	cmdSYNACK   = 7
@@ -152,9 +153,15 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) (*core.Session, err
 	for {
 		select {
 		case st := <-sess.incoming:
+			dest, err := readDestFromStream(st)
+			if err != nil {
+				st.Close()
+				continue
+			}
+			st.dest = dest
 			return &core.Session{
 				UserID: st.userID,
-				Dest:   st.dest,
+				Dest:   dest,
 				Conn:   st,
 				Socket: tcpConn(conn),
 			}, nil
@@ -211,6 +218,17 @@ func (h *Handler) handshake(ctx context.Context, conn net.Conn) (*session, error
 	if !ok {
 		return nil, ErrAuthFailed
 	}
+	// AnyTLS v2 prologue: u16 padding length + zero padding, then the frame
+	// stream (sing-anytls createOutboundConnection).
+	var padLenBuf [2]byte
+	if _, err := io.ReadFull(br, padLenBuf[:]); err != nil {
+		return nil, err
+	}
+	if padLen := int(binary.BigEndian.Uint16(padLenBuf[:])); padLen > 0 {
+		if _, err := io.CopyN(io.Discard, br, int64(padLen)); err != nil {
+			return nil, err
+		}
+	}
 	sess := &session{
 		conn:     conn,
 		r:        br,
@@ -218,16 +236,11 @@ func (h *Handler) handshake(ctx context.Context, conn net.Conn) (*session, error
 		incoming: make(chan *stream, 8),
 		strm:     make(map[uint32]*stream),
 		done:     make(chan struct{}),
-		scheme:   parseScheme(h.scheme),
+		scheme:    parseScheme(h.scheme),
+		rawScheme: h.scheme,
 	}
-	// Server settings: "v=2" plus the padding scheme digest; the binary compares
-	// the client's padding-md5 with strings.EqualFold and answers "v=2"
-	// ((*session).settings @0x964220).
-	sum := md5.Sum([]byte(h.scheme))
-	settings := fmt.Sprintf("%s\npadding-md5=%s\n", settingsVersion, hex.EncodeToString(sum[:]))
-	if err := sess.writeFrame(cmdSettings, 0, []byte(settings)); err != nil {
-		return nil, err
-	}
+	// The client sends its settings frame first; the server answers from the
+	// frame loop (cmdServerSettings) after comparing padding-md5.
 	return sess, nil
 }
 
@@ -236,7 +249,8 @@ type session struct {
 	conn     net.Conn
 	r        *bufio.Reader
 	user     *core.User
-	scheme   paddingScheme
+	scheme    paddingScheme
+	rawScheme string
 	incoming chan *stream
 	done     chan struct{}
 
@@ -259,17 +273,38 @@ func (s *session) run() {
 		case cmdWaste:
 			// Padding frame: discard (the length only mattered on the wire).
 		case cmdSettings:
-			// The client's scheme digest is compared with our own; a mismatch only
-			// costs the padding agreement, the connection stays up.
-			_ = payload
+			// Client settings: compare padding-md5 and answer. A mismatch asks the
+			// client to adopt our scheme; v>=2 gets the server settings frame.
+			md5Match := false
+			version2 := false
+			for _, line := range strings.Split(string(payload), "\n") {
+				k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
+				if !ok {
+					continue
+				}
+				switch strings.ToLower(strings.TrimSpace(k)) {
+				case "padding-md5":
+					sum := md5.Sum([]byte(s.rawScheme))
+					md5Match = strings.EqualFold(strings.TrimSpace(v), hex.EncodeToString(sum[:]))
+				case "v":
+					version2 = strings.TrimSpace(v) >= "2"
+				}
+			}
+			if !md5Match {
+				_ = s.writeFrame(cmdUpdatePaddingScheme, 0, []byte(s.rawScheme))
+			}
+			if version2 {
+				_ = s.writeFrame(cmdServerSettings, 0, []byte("v=2"))
+			}
 		case cmdSYN:
 			st := newStream(s, sid)
-			dest, err := ParseDestination(string(payload))
-			if err != nil {
-				st.Close()
-				continue
+			// v2 sends no destination in the SYN frame: the stream's first bytes
+			// are the SocksaddrSerializer address (see Handle).
+			if len(payload) > 0 {
+				if dest, err := parseAnyTLSDestination(payload); err == nil {
+					st.dest = dest
+				}
 			}
-			st.dest = dest
 			if s.user != nil {
 				st.userID = s.user.ID
 			}
@@ -485,6 +520,70 @@ func (s *stream) SetWriteDeadline(t time.Time) error {
 }
 
 // ParseDestination decodes the SYN payload: "host:port".
+// readDestFromStream reads the v2 destination that prefixes a stream's data.
+func readDestFromStream(r io.Reader) (socks.Addr, error) {
+	var atyp [1]byte
+	if _, err := io.ReadFull(r, atyp[:]); err != nil {
+		return socks.Addr{}, err
+	}
+	switch atyp[0] {
+	case 1:
+		var b [6]byte
+		if _, err := io.ReadFull(r, b[:]); err != nil {
+			return socks.Addr{}, err
+		}
+		return socks.Addr{Host: net.IP(b[:4]).String(), Port: binary.BigEndian.Uint16(b[4:])}, nil
+	case 4:
+		var b [18]byte
+		if _, err := io.ReadFull(r, b[:]); err != nil {
+			return socks.Addr{}, err
+		}
+		return socks.Addr{Host: net.IP(b[:16]).String(), Port: binary.BigEndian.Uint16(b[16:])}, nil
+	case 3:
+		var l [1]byte
+		if _, err := io.ReadFull(r, l[:]); err != nil {
+			return socks.Addr{}, err
+		}
+		buf := make([]byte, int(l[0])+2)
+		if _, err := io.ReadFull(r, buf); err != nil {
+			return socks.Addr{}, err
+		}
+		return socks.Addr{Host: string(buf[:l[0]]), Port: binary.BigEndian.Uint16(buf[l[0]:])}, nil
+	}
+	return socks.Addr{}, ErrNotClient
+}
+
+// parseAnyTLSDestination reads the SYN payload. AnyTLS v2 carries sing's
+// SocksaddrSerializer form (ATYP 1=IPv4, 3=domain, 4=IPv6) followed by a
+// big-endian port.
+func parseAnyTLSDestination(b []byte) (socks.Addr, error) {
+	if len(b) < 1 {
+		return socks.Addr{}, ErrNotClient
+	}
+	switch b[0] {
+	case 1:
+		if len(b) < 7 {
+			return socks.Addr{}, ErrNotClient
+		}
+		return socks.Addr{Host: net.IP(b[1:5]).String(), Port: binary.BigEndian.Uint16(b[5:7])}, nil
+	case 4:
+		if len(b) < 19 {
+			return socks.Addr{}, ErrNotClient
+		}
+		return socks.Addr{Host: net.IP(b[1:17]).String(), Port: binary.BigEndian.Uint16(b[17:19])}, nil
+	case 3:
+		if len(b) < 2 {
+			return socks.Addr{}, ErrNotClient
+		}
+		l := int(b[1])
+		if len(b) < 2+l+2 {
+			return socks.Addr{}, ErrNotClient
+		}
+		return socks.Addr{Host: string(b[2 : 2+l]), Port: binary.BigEndian.Uint16(b[2+l : 2+l+2])}, nil
+	}
+	return ParseDestination(string(b))
+}
+
 func ParseDestination(s string) (socks.Addr, error) {
 	host, port, err := net.SplitHostPort(strings.TrimSpace(s))
 	if err != nil {
