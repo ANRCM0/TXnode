@@ -104,12 +104,21 @@ func (s *Server) relayTCP(ctx context.Context, sess *Session) error {
 	from := clientIP(sess.Conn)
 
 	ec := newEarlyConn(sess.Conn)
-	head, err := ec.peek(o.HandshakeTimeout)
-	if err != nil && len(head) == 0 {
-		if errors.Is(err, io.EOF) {
-			return nil
+	// A protocol that carries an inner SOCKS5 handshake (mieru) must answer the
+	// peer before the relay can read application bytes: the peer legitimately
+	// sends nothing until it sees the SOCKS5 reply. For those sessions the peek
+	// moves after the dial and the reply, and sniffing sees no head bytes.
+	reply, _ := sess.Conn.(HandshakeReply)
+	var head []byte
+	var err error
+	if reply == nil {
+		head, err = ec.peek(o.HandshakeTimeout)
+		if err != nil && len(head) == 0 {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
 		}
-		return err
 	}
 	proto, sni := SniffTCP(head)
 	domain := RequestedName(dest.Host, sni)
@@ -126,7 +135,9 @@ func (s *Server) relayTCP(ctx context.Context, sess *Session) error {
 		if errors.As(err, &eb) {
 			log.Info("blocked", "user", user, "from", from.String(),
 				"dest", dest.String(), "domain", domain, "reason", blockReason(err))
-			return err
+		}
+		if reply != nil {
+			_ = reply.HandshakeFailed(err)
 		}
 		return err
 	}
@@ -141,9 +152,21 @@ func (s *Server) relayTCP(ctx context.Context, sess *Session) error {
 		}
 		remote, err = s.getDialer(o.HandshakeTimeout).DialTCPFrom(ctx, sess.Local, dest, res, router)
 	}
+	// Answer the inner SOCKS5 client only after the destination dial resolved,
+	// so a failure is visible to the client instead of a silent reset.
 	if err != nil {
 		log.Debug("dial failed", "dest", dest.String(), "err", err)
+		if reply != nil {
+			_ = reply.HandshakeFailed(err)
+		}
 		return err
+	}
+	if reply != nil {
+		if rerr := reply.HandshakeSucceeded(remote.LocalAddr()); rerr != nil {
+			log.Debug("handshake reply failed", "dest", dest.String(), "err", rerr)
+			_ = remote.Close()
+			return rerr
+		}
 	}
 	defer remote.Close()
 	defer sess.Conn.Close()

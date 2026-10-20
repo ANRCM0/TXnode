@@ -38,6 +38,11 @@ type Handler struct {
 	udpMu sync.Mutex
 	peers map[string]*udpPeer
 
+	// v2Mtu is the v2 fragment payload bound (Options.MTU, default 1400).
+	v2Mtu int
+	// v2Heartbeat is the v2 idle heartbeat (Options.Heartbeat, default 20s).
+	v2Heartbeat time.Duration
+
 	next uint32
 }
 
@@ -68,6 +73,12 @@ type Options struct {
 	ScanRate, ScanBurst float64
 	// Window overrides the accepted timestamp skew.
 	Window time.Duration
+	// MTU bounds the per-fragment payload of the v2 (official client) session.
+	// Zero uses the client default (1400).
+	MTU int
+	// Heartbeat overrides the idle heartbeat sent on a v2 session. Zero uses
+	// the protocol default (20s); negative disables it.
+	Heartbeat time.Duration
 }
 
 // ErrNotMieru is returned for connections that carry no identifiable segment.
@@ -95,13 +106,15 @@ func NewHandler(o Options) (*Handler, error) {
 		log = slog.New(slog.DiscardHandler)
 	}
 	h := &Handler{
-		Idle:    o.IdleTimeout,
-		opts:    o,
-		log:     log,
-		users:   make(map[string]core.User, len(o.Users)),
-		keysFor: make(map[string]*keyEntry, len(o.Users)),
-		seen:    make(map[uint64]time.Time),
-		scans:   newScanGate(o.ScanRate, o.ScanBurst),
+		Idle:        o.IdleTimeout,
+		opts:        o,
+		log:         log,
+		users:       make(map[string]core.User, len(o.Users)),
+		keysFor:     make(map[string]*keyEntry, len(o.Users)),
+		seen:        make(map[uint64]time.Time),
+		scans:       newScanGate(o.ScanRate, o.ScanBurst),
+		v2Mtu:       o.MTU,
+		v2Heartbeat: o.Heartbeat,
 	}
 	if h.Idle <= 0 {
 		h.Idle = defaultIdle
@@ -247,8 +260,8 @@ func (h *Handler) checkReplay(ts, seq uint32) bool {
 // Handle parses the opening segment and returns the session.
 func (h *Handler) Handle(ctx context.Context, conn net.Conn) (*core.Session, error) {
 	br := bufio.NewReaderSize(conn, 4096)
-	if u, aead, plain, nonce, ok := h.v2Try(br); ok {
-		return h.v2Handshake(conn, br, u, aead, plain, nonce)
+	if kk, plain, nonce, ok := h.v2Try(br); ok {
+		return h.v2Handshake(conn, br, kk, plain, nonce)
 	}
 	conn = &bufConn{Conn: conn, r: br}
 	if dl, ok := ctx.Deadline(); ok {

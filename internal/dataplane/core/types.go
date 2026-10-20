@@ -153,6 +153,18 @@ type PacketHandler interface {
 	ServePackets(ctx context.Context, pc net.PacketConn) error
 }
 
+// HandshakeReply is implemented by a session connection whose protocol wraps a
+// SOCKS5 CONNECT handshake inside its own stream (mieru). The relay reports the
+// dial outcome so the protocol can answer the inner SOCKS5 client; without that
+// reply the peer never starts sending application data.
+type HandshakeReply interface {
+	// HandshakeSucceeded is called after the destination was dialed and before
+	// the first byte is relayed.
+	HandshakeSucceeded(local net.Addr) error
+	// HandshakeFailed reports a dial or route error to the inner client.
+	HandshakeFailed(err error) error
+}
+
 // HandlerFunc adapts a function to Handler.
 type HandlerFunc func(ctx context.Context, conn net.Conn) (*Session, error)
 

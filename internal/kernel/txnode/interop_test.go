@@ -53,7 +53,11 @@ func xrayBinary(t *testing.T) string {
 
 func startInteropOrigin(t *testing.T) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if os.Getenv("TXNODE_ORIGIN_DEBUG") != "" {
+			t.Logf("origin request from %s method=%s url=%s host=%s close=%v proto=%s",
+				r.RemoteAddr, r.Method, r.URL, r.Host, r.Close, r.Proto)
+		}
 		_, _ = io.WriteString(w, "interop-ok")
 	}))
 	t.Cleanup(srv.Close)
@@ -895,7 +899,7 @@ func TestInteropSingBoxAnyTLS(t *testing.T) {
 		"type": "anytls", "tag": "interop",
 		"server": "127.0.0.1", "server_port": port,
 		"password": interopUUID,
-		"tls": map[string]any{"enabled": true, "server_name": "localhost", "insecure": true},
+		"tls":      map[string]any{"enabled": true, "server_name": "localhost", "insecure": true},
 	}
 	socks := startSingBoxClient(t, outbound)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
@@ -917,7 +921,7 @@ func TestInteropSingBoxTUIC(t *testing.T) {
 		"server": "127.0.0.1", "server_port": port,
 		"uuid": interopUUID, "password": interopUUID,
 		"congestion_control": "bbr",
-		"tls": map[string]any{"enabled": true, "server_name": "localhost", "insecure": true, "alpn": []any{"h3"}},
+		"tls":                map[string]any{"enabled": true, "server_name": "localhost", "insecure": true, "alpn": []any{"h3"}},
 	}
 	socks := startSingBoxClient(t, outbound)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
@@ -937,7 +941,7 @@ func TestInteropSingBoxHysteria2(t *testing.T) {
 		"type": "hysteria2", "tag": "interop",
 		"server": "127.0.0.1", "server_port": port,
 		"password": interopUUID,
-		"tls": map[string]any{"enabled": true, "server_name": "localhost", "insecure": true},
+		"tls":      map[string]any{"enabled": true, "server_name": "localhost", "insecure": true},
 	}
 	socks := startSingBoxClient(t, outbound)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
@@ -1113,7 +1117,7 @@ func TestInteropSingBoxHysteria2UDP(t *testing.T) {
 		"type": "hysteria2", "tag": "interop",
 		"server": "127.0.0.1", "server_port": port,
 		"password": interopUUID,
-		"tls": map[string]any{"enabled": true, "server_name": "localhost", "insecure": true},
+		"tls":      map[string]any{"enabled": true, "server_name": "localhost", "insecure": true},
 	}
 	socks := startSingBoxClient(t, outbound)
 	body, err := udpThroughSocksE(t, socks, echo, []byte("udp-interop"))
@@ -1136,12 +1140,12 @@ func TestInteropSingBoxMieru(t *testing.T) {
 		"transport": "tcp",
 	}
 	if !singBoxSupports(t, outbound) {
-		t.Skip("Mieru: sing-box 1.14 has no mieru outbound (MIERU-1)")
+		t.Skip("Mieru: this sing-box build has no mieru outbound")
 	}
 	socks := startSingBoxClient(t, outbound)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
 	if err != nil {
-		t.Skipf("Mieru interop incomplete (MIERU-1): %v", err)
+		t.Fatalf("mieru interop with sing-box failed: %v", err)
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
@@ -1245,8 +1249,8 @@ func singBoxSupports(t *testing.T, outbound map[string]any) bool {
 	bin := singBoxBinary(t)
 	dir := t.TempDir()
 	cfg := map[string]any{
-		"log":      map[string]any{"level": "warn"},
-		"inbounds": []any{map[string]any{"type": "socks", "listen": "127.0.0.1", "listen_port": 1080}},
+		"log":       map[string]any{"level": "warn"},
+		"inbounds":  []any{map[string]any{"type": "socks", "listen": "127.0.0.1", "listen_port": 1080}},
 		"outbounds": []any{outbound},
 	}
 	body, err := json.Marshal(cfg)
@@ -1320,13 +1324,19 @@ func mieruBinary(t *testing.T) string {
 	return bin
 }
 
-// TestInteropMieruOfficialClient drives the mieru inbound with the official
-// mieru client (the sing-box 1.14 release has no mieru outbound).
-func TestInteropMieruOfficialClient(t *testing.T) {
+// mieruLogLevel lets a run raise the client log level without editing the test.
+func mieruLogLevel() string {
+	if v := os.Getenv("TXNODE_INTEROP_MIERU_LOG"); v != "" {
+		return v
+	}
+	return "INFO"
+}
+
+// startMieruOfficial launches the official mieru client against a mieru inbound
+// on port and returns its SOCKS5 address once the listener is up.
+func startMieruOfficial(t *testing.T, port int) string {
+	t.Helper()
 	bin := mieruBinary(t)
-	origin := startInteropOrigin(t)
-	port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "mieru", Transport: "tcp"}, kernel.TLSCert{},
-		[]model.UserSpec{{ID: 1, UUID: "interop:secret"}})
 	socksPort := freePortTB(t)
 	dir := t.TempDir()
 	cfg := fmt.Sprintf(`{
@@ -1338,8 +1348,8 @@ func TestInteropMieruOfficialClient(t *testing.T) {
   }],
   "activeProfile": "interop",
   "socks5Port": %d,
-  "loggingLevel": "INFO"
-}`, port, socksPort)
+  "loggingLevel": "%s"
+}`, port, socksPort, mieruLogLevel())
 	cfgPath := filepath.Join(dir, "client.json")
 	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
@@ -1350,7 +1360,7 @@ func TestInteropMieruOfficialClient(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer logFile.Close()
+	t.Cleanup(func() { _ = logFile.Close() })
 	t.Cleanup(func() {
 		if b, err := os.ReadFile(logPath); err == nil && len(b) > 0 {
 			t.Logf("mieru client log:\n%s", b)
@@ -1363,7 +1373,7 @@ func TestInteropMieruOfficialClient(t *testing.T) {
 	start.Stdout = logFile
 	start.Stderr = logFile
 	if err := start.Start(); err != nil {
-		logs, _ := os.ReadFile(filepath.Join(dir, "mieru.log"))
+		logs, _ := os.ReadFile(logPath)
 		t.Fatalf("mieru start: %v\n%s", err, logs)
 	}
 	t.Cleanup(func() {
@@ -1377,21 +1387,151 @@ func TestInteropMieruOfficialClient(t *testing.T) {
 		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
-			break
+			return addr
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("mieru socks listener did not open")
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
+}
+
+// TestInteropMieruOfficialClient drives the mieru inbound with the official
+// mieru client (the sing-box 1.14 release has no mieru outbound).
+func TestInteropMieruOfficialClient(t *testing.T) {
+	origin := startInteropOrigin(t)
+	port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "mieru", Transport: "tcp"}, kernel.TLSCert{},
+		[]model.UserSpec{{ID: 1, UUID: "interop:secret"}})
+	addr := startMieruOfficial(t, port)
 	body, err := fetchThroughE(t, addr, origin.Listener.Addr().String())
 	if err != nil {
-		// v2 authentication and session open are implemented (see v2.go and the
-		// probe test), but the official client stops after openSessionResponse:
-		// the data/ack phase is not yet interoperable.
-		t.Skipf("Mieru v2 data phase pending (MIERU-1): %v", err)
+		t.Fatalf("mieru v2 data phase failed (MIERU-1): %v", err)
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
+	}
+}
+
+// TestInteropMieruOfficialIdle keeps the client and server silent across the
+// server heartbeat interval and then transfers again. Each round owns a fresh
+// SOCKS connection and a fresh HTTP exchange (Connection: close), so a stale
+// origin keep-alive cannot be mistaken for a mieru data-path failure.
+func TestInteropMieruOfficialIdle(t *testing.T) {
+	origin := startInteropOrigin(t)
+	port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "mieru", Transport: "tcp"}, kernel.TLSCert{},
+		[]model.UserSpec{{ID: 1, UUID: "interop:secret"}})
+	addr := startMieruOfficial(t, port)
+
+	gap := 25 * time.Second
+	if v := os.Getenv("TXNODE_INTEROP_IDLE"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			gap = d
+		}
+	}
+	for round := 0; round < 2; round++ {
+		if round > 0 {
+			time.Sleep(gap)
+		}
+		conn, err := socksNoAuthConnectE(addr, origin.Listener.Addr().String())
+		if err != nil {
+			t.Fatalf("round %d: socks connect: %v", round, err)
+		}
+		_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
+		if _, err := io.WriteString(conn, "GET / HTTP/1.1\r\nHost: origin\r\nConnection: close\r\n\r\n"); err != nil {
+			_ = conn.Close()
+			t.Fatalf("round %d: write: %v", round, err)
+		}
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			_ = conn.Close()
+			t.Fatalf("round %d: read response: %v", round, err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		_ = conn.Close()
+		if err != nil {
+			t.Fatalf("round %d: read body: %v", round, err)
+		}
+		if resp.StatusCode != http.StatusOK || string(body) != "interop-ok" {
+			t.Fatalf("round %d: status %d body = %q", round, resp.StatusCode, body)
+		}
+	}
+}
+
+// TestInteropMieruOfficialDialFailure checks that an unreachable destination
+// reaches the inner SOCKS5 client as an error instead of a stalled session.
+func TestInteropMieruOfficialDialFailure(t *testing.T) {
+	port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "mieru", Transport: "tcp"}, kernel.TLSCert{},
+		[]model.UserSpec{{ID: 1, UUID: "interop:secret"}})
+	addr := startMieruOfficial(t, port)
+
+	// Port 1 on loopback is normally unbound; the kernel answers the client
+	// with a SOCKS5 failure.
+	conn, err := socksNoAuthConnectE(addr, "127.0.0.1:1")
+	if err == nil {
+		_ = conn.Close()
+		t.Fatal("socks connect to a closed port succeeded")
+	}
+	t.Logf("dial failure surfaced as: %v", err)
+}
+
+// TestInteropMieruOfficialBulk moves 1 MiB each way through one session so the
+// data/ack metadata fields, MTU fragmentation and sequence numbers are all
+// exercised (a single small request never crosses a fragment boundary).
+func TestInteropMieruOfficialBulk(t *testing.T) {
+	const size = 1 << 20
+	payload := make([]byte, size)
+	for i := range payload {
+		payload[i] = byte(i % 251)
+	}
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if !bytes.Equal(got, payload) {
+			http.Error(w, fmt.Sprintf("body mismatch: %d bytes", len(got)), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write(payload)
+	}))
+	t.Cleanup(origin.Close)
+
+	port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "mieru", Transport: "tcp"}, kernel.TLSCert{},
+		[]model.UserSpec{{ID: 1, UUID: "interop:secret"}})
+	addr := startMieruOfficial(t, port)
+
+	conn, err := socksNoAuthConnectE(addr, origin.Listener.Addr().String())
+	if err != nil {
+		t.Fatalf("socks connect: %v", err)
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPost, "http://origin/upload", bytes.NewReader(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.ContentLength = int64(len(payload))
+	if err := req.Write(conn); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d body = %q", resp.StatusCode, body)
+	}
+	if !bytes.Equal(body, payload) {
+		t.Fatalf("echo mismatch: got %d bytes", len(body))
 	}
 }
