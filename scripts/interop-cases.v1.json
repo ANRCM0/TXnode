@@ -411,6 +411,15 @@
       ]
     },
     {
+      "test": "TestInteropMieruOfficialPacketFaults",
+      "client": "mieru",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native Mieru packet loss recovery and exact business accounting"
+    },
+    {
       "test": "TestInteropMieruOfficialTrafficPatterns",
       "client": "mieru",
       "profiles": [

@@ -20,6 +20,7 @@
 | 存储失败隔离与进程归属 | 同文件的 `TestNativeObservationStorageFailureKeepsActualTrafficAndStopsRetrying`、`TestNativeObservationDirectoriesAndProcessOwnerRemainScoped` | observer 容量/不可写、event store 容量和关闭时 v1 仍精确；禁用无 I/O、失败不重试、目录隔离、进程单一 owner | 新增源码仍须在候选 Actions 执行 |
 | 原生 packet 周期 | 同文件的 `TestNativePacketPeriodKeepsUnsampledOldTailAndFreshBytesSeparate` | 真实 UDP 原周期 13 已采样 + 7 未采样尾部，切换后 57 字节；旧控制连接关闭，旧20/新57分段 | 不是任意 packet 承载协议的互通证明 |
 | 原生 I/O 错误边界 | `internal/dataplane/core/download_accounting_test.go`、`udp_accounting_test.go`、`chunk_hook_test.go` | 实际 relay copy 对短写、正字节伴错误、零成功写、取消限速及 packet 关闭完成 I/O 的计数 | 不恢复已移除内核的内部 wrapper；功能结果以候选 CI 为准 |
+| Mieru 官方 UDP 网络损伤 | `internal/kernel/txnode/mieru_packet_fault_linux_test.go` 的 `TestInteropMieruOfficialPacketFaults` | 有界代理在双向真实注入丢包、乱序和重复；core 与 NativeMeter 物理计数精确；撤权重放不复活、Reload/监听回滚恢复 | 本地物理观察不是 usage_v2 结算或持久化恢复；真实 UDP socket 绑定失败不承诺原 underlay 无中断 |
 | 固定 Core machine 契约 | `internal/machine/native_core_machine_live_test.go`、`scripts/tests/node-native-machine/`，CI `core-machine` | 生产 Orchestrator、双 Node、共享 WS/503/后继心跳、设备事实、异域隔离、节点禁用/恢复、token 轮换与原 terminal 重放 | 固定 Core 使用既有兼容 installation 路径；不宣称原生 installation machine 准入或真实数据库计费已验证。需单独取得候选 job 结果 |
 
 ## SIGKILL 夹具约束

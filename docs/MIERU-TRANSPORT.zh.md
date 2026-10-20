@@ -1,7 +1,8 @@
 # Mieru v2 承载、显式 traffic_pattern 与验收入口
 
-状态：已编写候选源码与测试；本地只执行格式、静态诊断和交叉编译，尚无本切片的
-GitHub Actions 功能、race、官方客户端或负载验收结论。不能据此宣告已经互通或可发布。
+状态：已编写候选源码与测试；本地只执行格式、静态诊断和交叉编译。中间候选已有
+官方 UDP、TCP 复用与显式整形执行记录，最终源码仍须完整 Actions 验收；具体候选
+状态见 `OUTSTANDING-WORK.zh.md`，不能据此宣告可发布。
 
 ## 固定参考与兼容入口
 
@@ -125,11 +126,16 @@ traffic_pattern: >-
 | `internal/dataplane/proto/mieru/v2_tcp_test.go` | 同一 TCP underlay 的失败拨号后复用、empty-open、并发 CONNECT/UDP ASSOCIATE、独立 session 关闭与共享 nonce 连续性 |
 | `internal/dataplane/proto/mieru/v2_failure_test.go` | TCP 部分 record 写入后不可继续、UDP abort 等待发送边界 |
 | `TestInteropMieruOfficialUDPTransport` | 官方 v3.38.1 的 TCP-over-UDP 大流量、应用 UDP-over-UDP 跨 MTU、idle/reuse |
+| `TestInteropMieruOfficialPacketFaults` | 官方 UDP 客户端经双向丢包/乱序/重复后 bulk 与应用 UDP 精确字节；撤权/轮换/重加后密文重放不增加 core 与 NativeMeter 物理计数；同端口 Reload、配置失败保流及真实绑定失败后的监听回滚与新客户端恢复 |
 | `TestInteropMieruOfficialTrafficPatterns` | TCP/UDP × 四种低熵模式；显式 nonce/padding/TCP 分段；双向 bulk 和应用 UDP |
 
 现有 `TestInteropMieruOfficialClient`、`Idle`、`DialFailure`、`Bulk` 保持独立回归入口。
 新增官方测试必须纳入严格完整 manifest，并由 Actions 检查 PASS/FAIL/意外 Skip；普通
 缺少二进制的本地发现模式仍沿用既有策略，但不是验收。
+
+网络故障测试中的 NativeMeter 使用本地物理观察，不承担 usage_v2 结算权威或持久化
+恢复验收。配置准备失败保留原流；实际 UDP socket 替换失败会恢复旧地址的监听，
+由新客户端恢复业务，不承诺原 underlay 无中断。
 
 尚需精确候选提交的完整 Go/race、上述官方客户端测试、路由/限速/计量组合、网络故障
 注入、撤权、同端口 Reload/回滚及真实固定 Core C2 证据。源码和静态检查不能关闭这些
