@@ -22,9 +22,15 @@ import (
 // (nil when the protocol has none) and the closers that are not covered by
 // Server.Close.
 type bindResult struct {
-	ln      net.Listener
-	pc      net.PacketConn
-	closers []io.Closer
+	ln              net.Listener
+	pc              net.PacketConn
+	closers         []io.Closer
+	startDatagrams  func() error
+	cancelDatagrams context.CancelFunc
+	datagramsDone   <-chan struct{}
+	auth            *liveHandler
+	userSetters     []interface{ SetUsers([]core.User) }
+	datagramUsers   []core.User
 }
 
 // closeDatagrams releases only the datagram side, keeping the TCP listener and
@@ -33,6 +39,10 @@ func (b *bindResult) closeDatagrams() {
 	if b == nil {
 		return
 	}
+	if b.cancelDatagrams != nil {
+		b.cancelDatagrams()
+		b.cancelDatagrams = nil
+	}
 	if b.pc != nil {
 		_ = b.pc.Close()
 		b.pc = nil
@@ -40,7 +50,12 @@ func (b *bindResult) closeDatagrams() {
 	for _, c := range b.closers {
 		_ = c.Close()
 	}
+	if b.datagramsDone != nil {
+		<-b.datagramsDone
+		b.datagramsDone = nil
+	}
 	b.closers = nil
+	b.userSetters = nil
 }
 
 func (b *bindResult) closeAll() {
@@ -50,12 +65,33 @@ func (b *bindResult) closeAll() {
 	if b.ln != nil {
 		_ = b.ln.Close()
 	}
-	if b.pc != nil {
-		_ = b.pc.Close()
+	b.closeDatagrams()
+}
+
+// activateDatagrams binds a prepared generation only after its predecessor releases UDP.
+func (b *bindResult) activateDatagrams() error {
+	if b == nil || b.startDatagrams == nil || b.pc != nil {
+		return nil
 	}
-	for _, c := range b.closers {
-		_ = c.Close()
+	if err := b.startDatagrams(); err != nil {
+		b.closeDatagrams()
+		return err
 	}
+	return nil
+}
+
+// switchDatagrams restores the previous generation when the replacement cannot bind.
+func switchDatagrams(old, next *bindResult) error {
+	if old != nil {
+		old.closeDatagrams()
+	}
+	if err := next.activateDatagrams(); err != nil {
+		if restoreErr := old.activateDatagrams(); restoreErr != nil {
+			return errors.Join(err, fmt.Errorf("restore previous UDP listener: %w", restoreErr))
+		}
+		return err
+	}
+	return nil
 }
 
 // bind opens the node's sockets and wraps them with the node's transport.
@@ -65,7 +101,26 @@ func (b *bindResult) closeAll() {
 func bindNode(sp *spec, h core.Handler, users []core.User, tlsCfg *tls.Config,
 	re *transport.Reality, srv *core.Server, rt RuntimeConfig, log *slog.Logger) (*bindResult, error) {
 
-	res := &bindResult{}
+	res := &bindResult{datagramUsers: append([]core.User(nil), users...)}
+	prepared := false
+	defer func() {
+		if !prepared {
+			res.closeAll()
+		}
+	}()
+	configure := func(handler core.Handler) {
+		if setter, ok := handler.(interface {
+			SetRelay(func(context.Context, *core.Session) error)
+		}); ok {
+			setter.SetRelay(srv.ServeSession)
+		}
+	}
+	if live, ok := h.(interface{ Configure(func(core.Handler)) }); ok {
+		live.Configure(configure)
+	} else {
+		configure(h)
+	}
+
 	addr := sp.Addr()
 	var err error
 	if !quicOnly(sp.Protocol) {
@@ -155,75 +210,95 @@ func bindNode(sp *spec, h core.Handler, users []core.User, tlsCfg *tls.Config,
 	srv.SetHandler(effective)
 
 	if !needsUDP(sp.Protocol) {
+		prepared = true
 		return res, nil
 	}
-
-	pc, err := net.ListenPacket("udp", addr)
-	if err != nil {
-		res.closeAll()
-		return nil, fmt.Errorf("listen udp %s: %w", addr, err)
+	if !quicOnly(sp.Protocol) {
+		if _, ok := h.(core.PacketHandler); !ok {
+			prepared = true
+			return res, nil
+		}
+		if capable, ok := h.(interface{ PacketCapable() bool }); ok && !capable.PacketCapable() {
+			prepared = true
+			return res, nil
+		}
 	}
-	switch sp.Protocol {
-	case "hysteria":
-		hs, err := hysteria.NewServer(hysteria.Options{
-			Users:        users,
-			TLSConfig:    tlsCfg,
-			Congestion:   sp.Congestion,
-			UpMbps:       sp.UpMbps,
-			DownMbps:     sp.DownMbps,
-			Brutal:       sp.BrutalSend > 0 && sp.BrutalReceive > 0,
-			ObfsPassword: sp.ObfsPassword,
-			Logger:       log,
-			Relay:        srv.ServeSession,
-		})
+
+	res.startDatagrams = func() error {
+		pc, err := net.ListenPacket("udp", addr)
 		if err != nil {
-			_ = pc.Close()
-			res.closeAll()
-			return nil, err
+			return fmt.Errorf("listen udp %s: %w", addr, err)
 		}
-		res.closers = append(res.closers, hs)
-		go func() {
-			if err := hs.Serve(pc); err != nil && !errors.Is(err, net.ErrClosed) {
-				log.Warn("hysteria listener stopped", "err", err)
+		res.pc = pc
+		ctx, cancel := context.WithCancel(context.Background())
+		res.cancelDatagrams = cancel
+		switch sp.Protocol {
+		case "hysteria":
+			hs, err := hysteria.NewServer(hysteria.Options{
+				AllowEmptyUsers: true,
+				Users:           res.datagramUsers,
+				TLSConfig:       tlsCfg,
+				Congestion:      sp.Congestion,
+				UpMbps:          sp.UpMbps,
+				DownMbps:        sp.DownMbps,
+				Brutal:          sp.BrutalSend > 0 && sp.BrutalReceive > 0,
+				ObfsPassword:    sp.ObfsPassword,
+				Logger:          log,
+				Relay:           srv.ServeSession,
+			})
+			if err != nil {
+				_ = pc.Close()
+				return err
 			}
-		}()
-	case "tuic":
-		ts, err := tuic.NewServer(tuic.Options{
-			Users:      users,
-			TLSConfig:  tlsCfg,
-			Congestion: sp.Congestion,
-			UpMbps:     sp.UpMbps,
-			DownMbps:   sp.DownMbps,
-			Brutal:     sp.BrutalSend > 0 && sp.BrutalReceive > 0,
-			Logger:     log,
-			Relay:      srv.ServeSession,
-		})
-		if err != nil {
-			_ = pc.Close()
-			res.closeAll()
-			return nil, err
-		}
-		res.closers = append(res.closers, ts)
-		go func() {
-			if err := ts.Serve(pc); err != nil && !errors.Is(err, net.ErrClosed) {
-				log.Warn("tuic listener stopped", "err", err)
-			}
-		}()
-	default:
-		// The protocol owns the datagram socket (PacketHandler).
-		if ph, ok := effective.(core.PacketHandler); ok {
-			res.pc = pc
+			res.closers = append(res.closers, hs)
+			res.userSetters = append(res.userSetters, hs)
 			go func() {
-				ctx, cancel := context.WithCancel(context.Background())
-				defer cancel()
-				if err := ph.ServePackets(ctx, pc); err != nil && !errors.Is(err, net.ErrClosed) {
-					log.Warn("udp listener stopped", "err", err)
+				if err := hs.Serve(pc); err != nil && !errors.Is(err, net.ErrClosed) {
+					log.Warn("hysteria listener stopped", "err", err)
 				}
 			}()
-		} else {
-			_ = pc.Close()
+		case "tuic":
+			ts, err := tuic.NewServer(tuic.Options{
+				AllowEmptyUsers: true,
+				Users:           res.datagramUsers,
+				TLSConfig:       tlsCfg,
+				Congestion:      sp.Congestion,
+				UpMbps:          sp.UpMbps,
+				DownMbps:        sp.DownMbps,
+				Brutal:          sp.BrutalSend > 0 && sp.BrutalReceive > 0,
+				Logger:          log,
+				Relay:           srv.ServeSession,
+			})
+			if err != nil {
+				_ = pc.Close()
+				return err
+			}
+			res.closers = append(res.closers, ts)
+			res.userSetters = append(res.userSetters, ts)
+			go func() {
+				if err := ts.Serve(pc); err != nil && !errors.Is(err, net.ErrClosed) {
+					log.Warn("tuic listener stopped", "err", err)
+				}
+			}()
+		default:
+			// The protocol owns the datagram socket (PacketHandler).
+			if ph, ok := h.(core.PacketHandler); ok {
+				res.pc = pc
+				done := make(chan struct{})
+				res.datagramsDone = done
+				go func() {
+					defer close(done)
+					if err := ph.ServePackets(ctx, pc); err != nil && !errors.Is(err, net.ErrClosed) {
+						log.Warn("udp listener stopped", "err", err)
+					}
+				}()
+			} else {
+				_ = pc.Close()
+			}
 		}
+		return nil
 	}
+	prepared = true
 	return res, nil
 }
 
@@ -273,5 +348,10 @@ func drainServer(srv *core.Server, timeout time.Duration) {
 		return
 	}
 	_ = srv.Close()
-	_ = timeout
+	if timeout <= 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	_ = srv.WaitSessions(ctx)
 }

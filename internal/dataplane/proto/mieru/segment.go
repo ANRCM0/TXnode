@@ -88,12 +88,16 @@ func segmentNonce(code byte, ts, seq, length uint32) [nonceSize]byte {
 
 // seal builds one segment.
 func (c *segmentCipher) seal(code byte, ts, seq uint32, plaintext []byte) []byte {
+	return c.sealWithFlags(code, 0, ts, seq, plaintext)
+}
+
+func (c *segmentCipher) sealWithFlags(code, flags byte, ts, seq uint32, plaintext []byte) []byte {
 	total := hintLen + segmentHeaderLen + len(plaintext) + tagSize
 	seg := make([]byte, hintLen+segmentHeaderLen, total)
 	copy(seg, c.hint)
 	h := seg[hintLen:]
 	h[0] = code
-	h[1] = 0
+	h[1] = flags
 	binary.BigEndian.PutUint32(h[2:6], ts)
 	binary.BigEndian.PutUint32(h[6:10], uint32(len(plaintext)))
 	binary.BigEndian.PutUint32(h[10:14], seq)

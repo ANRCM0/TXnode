@@ -39,6 +39,7 @@ type ipState struct {
 type Tracker struct {
 	mu                sync.RWMutex
 	users             map[int]*userState
+	retired           map[int]*userState
 	globalSpeedLimit  int
 	globalDeviceLimit int
 	ipv6Prefix        int
@@ -66,6 +67,7 @@ type DynamicLimit struct {
 func NewTracker() *Tracker {
 	return &Tracker{
 		users:       make(map[int]*userState),
+		retired:     make(map[int]*userState),
 		ipv6Prefix:  64,
 		activeSince: make(map[int]time.Time),
 	}
@@ -75,12 +77,25 @@ func NewTracker() *Tracker {
 // remain, exactly as applyUsers/Tracker.SetUsers does.
 func (t *Tracker) SetUsers(users []User) {
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	next := make(map[int]*userState, len(users))
+	var closeAfter []io.Closer
 	for _, u := range users {
 		if old, ok := t.users[u.ID]; ok {
+			if old.UUID != u.UUID {
+				old.mu.Lock()
+				for c := range old.conns {
+					closeAfter = append(closeAfter, c)
+				}
+				old.mu.Unlock()
+			}
 			old.User = u
 			next[u.ID] = old
+			continue
+		}
+		if old := t.retired[u.ID]; old != nil {
+			old.User = u
+			next[u.ID] = old
+			delete(t.retired, u.ID)
 			continue
 		}
 		next[u.ID] = &userState{
@@ -89,8 +104,24 @@ func (t *Tracker) SetUsers(users []User) {
 			conns: make(map[io.Closer]struct{}),
 		}
 	}
+	for id, old := range t.users {
+		if next[id] != nil {
+			continue
+		}
+		t.retired[id] = old
+		old.mu.Lock()
+		for c := range old.conns {
+			closeAfter = append(closeAfter, c)
+		}
+		old.mu.Unlock()
+	}
 	t.users = next
 	t.applySpeedLocked()
+	t.mu.Unlock()
+	// Close outside the tracker lock: session teardown may record final traffic.
+	for _, c := range closeAfter {
+		_ = c.Close()
+	}
 }
 
 // SetGlobalSpeedLimit sets user_speed_limit (Mbps).
@@ -302,6 +333,9 @@ func (t *Tracker) SetDeviceGate(g DeviceGate) {
 func (t *Tracker) CloseUserConns(userID int) int {
 	t.mu.RLock()
 	u := t.users[userID]
+	if u == nil {
+		u = t.retired[userID]
+	}
 	t.mu.RUnlock()
 	if u == nil {
 		return 0
@@ -332,8 +366,18 @@ type Lease struct {
 // device limit and the online-user cap. A nil lease with ok=false means the
 // session is refused.
 func (t *Tracker) Acquire(userID int, src netip.Addr, closer io.Closer) (*Lease, bool) {
+	return t.AcquireAuthenticated(userID, src, closer, nil)
+}
+
+// AcquireAuthenticated checks the credential generation while holding the same
+// lock that replaces users, so an in-flight obsolete handshake cannot reopen
+// a revoked user's slot.
+func (t *Tracker) AcquireAuthenticated(userID int, src netip.Addr, closer io.Closer, valid func() bool) (*Lease, bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	if valid != nil && !valid() {
+		return nil, false
+	}
 	u := t.users[userID]
 	if u == nil {
 		return nil, false
@@ -346,10 +390,6 @@ func (t *Tracker) Acquire(userID int, src netip.Addr, closer io.Closer) (*Lease,
 		return nil, false
 	}
 	st := u.ips[key]
-	if st == nil {
-		st = &ipState{addr: src.String(), last: now}
-		u.ips[key] = st
-	}
 	limit := t.globalDeviceLimit
 	if u.DeviceLimit > 0 && (limit == 0 || u.DeviceLimit < limit) {
 		limit = u.DeviceLimit
@@ -363,9 +403,13 @@ func (t *Tracker) Acquire(userID int, src netip.Addr, closer io.Closer) (*Lease,
 			t.deviceRefusals.Add(1)
 			return nil, false
 		}
-	} else if limit > 0 && st.conns == 0 && len(u.ips) >= limit {
+	} else if limit > 0 && (st == nil || st.conns == 0) && len(u.ips) >= limit {
 		t.deviceRefusals.Add(1)
 		return nil, false
+	}
+	if st == nil {
+		st = &ipState{addr: src.String(), last: now}
+		u.ips[key] = st
 	}
 	st.conns++
 	st.last = now
@@ -380,6 +424,7 @@ func (t *Tracker) deviceKey(src netip.Addr) string {
 	if !src.IsValid() {
 		return ""
 	}
+	src = src.Unmap()
 	if src.Is6() {
 		bits := t.ipv6Prefix
 		if bits <= 0 || bits > 128 {
@@ -418,6 +463,9 @@ func (l *Lease) Release() {
 func (t *Tracker) Traffic(userID int, up, down int64) {
 	t.mu.RLock()
 	u := t.users[userID]
+	if u == nil {
+		u = t.retired[userID]
+	}
 	t.mu.RUnlock()
 	if u == nil {
 		return
@@ -434,6 +482,9 @@ func (t *Tracker) Traffic(userID int, up, down int64) {
 func (t *Tracker) TrafficOf(userID int) (up, down int64) {
 	t.mu.RLock()
 	u := t.users[userID]
+	if u == nil {
+		u = t.retired[userID]
+	}
 	t.mu.RUnlock()
 	if u == nil {
 		return 0, 0
@@ -446,6 +497,9 @@ func (t *Tracker) Snapshot() map[int][2]int64 {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	out := make(map[int][2]int64, len(t.users))
+	for id, u := range t.retired {
+		out[id] = [2]int64{u.up.Load(), u.down.Load()}
+	}
 	for id, u := range t.users {
 		out[id] = [2]int64{u.up.Load(), u.down.Load()}
 	}

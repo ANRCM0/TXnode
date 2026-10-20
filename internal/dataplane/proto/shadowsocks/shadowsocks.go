@@ -108,13 +108,35 @@ type Handler struct {
 	window    time.Duration
 	udp       bool
 
-	pkt atomic.Pointer[udpServer]
+	current atomic.Pointer[func() *Handler]
+	relay   func(context.Context, *core.Session) error
+	pkt     atomic.Pointer[udpServer]
 }
 
 var (
 	_ core.Handler       = (*Handler)(nil)
 	_ core.PacketHandler = (*Handler)(nil)
 )
+
+// ClosePackets revokes active native UDP streams after a credential update.
+func (h *Handler) ClosePackets() {
+	if srv := h.pkt.Load(); srv != nil {
+		srv.closeSessions()
+	}
+}
+
+// SetCurrent provides the current credential snapshot to the packet read loop.
+func (h *Handler) SetCurrent(current func() *Handler) { h.current.Store(&current) }
+
+func (h *Handler) currentHandler() *Handler {
+	if current := h.current.Load(); current != nil && *current != nil {
+		return (*current)()
+	}
+	return h
+}
+
+// SetRelay installs the policy and accounting owner before serving packets.
+func (h *Handler) SetRelay(relay func(context.Context, *core.Session) error) { h.relay = relay }
 
 // New validates Options and builds the handler. The sample names this constructor
 // ss.New (@0xb17180), not NewHandler.

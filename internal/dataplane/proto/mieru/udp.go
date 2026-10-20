@@ -2,60 +2,50 @@ package mieru
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/ANRCM0/TX-Node/internal/dataplane/core"
 	"github.com/ANRCM0/TX-Node/internal/dataplane/socks"
 )
 
-// UDP transport. Evidence: ListenUDP @0x7e6ae0 plus
-// UDPServer.{read,handle,identify,scanner,opened,dispatch@0x7e82c0,open,
-// write,sweep} and NewPacketSession @0x7e0700 (notes/rev-proto-udp.md §3.4).
-// Each peer address owns one virtual connection (a PacketSession) and one
-// destination socket; (UDPServer).sweep reclaims idle peers.
-//
-// UNVERIFIED: the datagram body's address/data split is our own framing (the
-// sample's was not decoded). It is: payload = address || datagram, where address
-// is the SOCKS5-style encoding from segment.go.
-
-// udpPeerTTL is how long an idle UDP peer is kept.
+// The native packet framing remains address || payload inside a segment.
+// The common core relay owns all destination sockets, routing and accounting.
 const udpPeerTTL = 2 * time.Minute
 
-type udpPeer struct {
-	ps       *PacketSession
-	cipher   *segmentCipher
-	entry    *keyEntry
-	dest     socks.Addr
-	conn     net.Conn
-	lastSeen atomic.Int64
-}
-
-// ListenUDP serves the packet transport on an already bound socket.
-func (h *Handler) ListenUDP(pc net.PacketConn) error {
-	h.udpMu.Lock()
-	if h.peers == nil {
-		h.peers = make(map[string]*udpPeer)
+func (h *Handler) SetRelay(relay func(context.Context, *core.Session) error) { h.packetRelay = relay }
+func (h *Handler) SetCurrent(current func() *Handler)                        { h.packetCurrent.Store(&current) }
+func (h *Handler) currentPacketHandler() *Handler {
+	if fn := h.packetCurrent.Load(); fn != nil && *fn != nil {
+		return (*fn)()
 	}
-	h.udpMu.Unlock()
-
-	go h.sweepLoop()
-	buf := make([]byte, 64<<10)
-	for {
-		n, addr, err := pc.ReadFrom(buf)
-		if err != nil {
-			return err
-		}
-		seg := make([]byte, n)
-		copy(seg, buf[:n])
-		h.handleDatagram(pc, addr, seg)
+	return h
+}
+func (h *Handler) ClosePackets() {
+	if srv := h.packetServer.Load(); srv != nil {
+		srv.closePeers()
 	}
 }
 
-// ServePackets satisfies core.PacketHandler; the node passes the socket.
+func (h *Handler) ListenUDP(pc net.PacketConn) error { return h.ServePackets(context.Background(), pc) }
+
 func (h *Handler) ServePackets(ctx context.Context, pc net.PacketConn) error {
+	if h.packetRelay == nil {
+		return errors.New("mieru: UDP relay is not configured")
+	}
+	srv := &udpServer{owner: h, pc: pc, ctx: ctx, peers: make(map[string]*udpPeer)}
+	h.packetServer.Store(srv)
+	defer h.packetServer.CompareAndSwap(srv, nil)
+	defer srv.closePeers()
 	done := make(chan struct{})
+	defer close(done)
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -63,39 +53,56 @@ func (h *Handler) ServePackets(ctx context.Context, pc net.PacketConn) error {
 		case <-done:
 		}
 	}()
-	err := h.ListenUDP(pc)
-	close(done)
-	return err
+	go srv.sweep(done)
+	buf := make([]byte, 64<<10)
+	for {
+		n, addr, err := pc.ReadFrom(buf)
+		if err != nil {
+			return err
+		}
+		srv.handle(addr, buf[:n])
+	}
 }
 
-// handleDatagram identifies one inbound segment and routes it.
-func (h *Handler) handleDatagram(pc net.PacketConn, addr net.Addr, seg []byte) {
-	cipher, parsed, entry, err := h.identify(seg)
-	if err != nil {
+type udpServer struct {
+	owner  *Handler
+	active *Handler
+	ctx    context.Context
+	pc     net.PacketConn
+	mu     sync.Mutex
+	peers  map[string]*udpPeer
+}
+
+func (s *udpServer) handle(addr net.Addr, seg []byte) {
+	handler := s.owner.currentPacketHandler()
+	if handler != s.active {
+		s.closePeers()
+		s.active = handler
+	}
+	if handler == nil {
 		return
 	}
-	if !withinWindow(parsed.ts) {
+	cipher, parsed, entry, err := handler.identify(seg)
+	if err != nil || !withinWindow(parsed.ts) || entry.user.ID <= 0 {
 		return
 	}
-	key := addr.String()
-	h.udpMu.Lock()
-	peer := h.peers[key]
-	h.udpMu.Unlock()
-
-	if peer == nil {
-		if parsed.code != segPacket || len(parsed.payload) == 0 {
+	key := fmt.Sprintf("%s/%d/%x", addr.String(), entry.user.ID, entry.key)
+	s.mu.Lock()
+	peer := s.peers[key]
+	s.mu.Unlock()
+	fingerprint := packetReplayID(seg)
+	fresh := handler.checkPacketReplay(seg)
+	if !fresh {
+		if peer == nil {
 			return
 		}
-		peer, err = h.openPeer(pc, addr, cipher, entry, parsed)
-		if err != nil {
-			h.log.Debug("mieru: udp dial failed", "error", err)
+		if _, samePeer := peer.received[fingerprint]; !samePeer {
 			return
 		}
 	}
-	peer.lastSeen.Store(time.Now().UnixNano())
-
 	if parsed.flags&flagAck != 0 {
-		if len(parsed.payload) >= 4 {
+		if peer != nil && len(parsed.payload) >= 4 {
+			peer.received[fingerprint] = struct{}{}
 			peer.ps.acked(binary.BigEndian.Uint32(parsed.payload[:4]))
 		}
 		return
@@ -107,111 +114,171 @@ func (h *Handler) handleDatagram(pc net.PacketConn, addr net.Addr, seg []byte) {
 	if err != nil {
 		return
 	}
-	if dest != peer.dest {
-		// A peer that switches destination is a new association.
-		h.dropPeer(addr.String())
-		return
+	if peer != nil && peer.dest != dest {
+		if !fresh {
+			return
+		}
+		_ = peer.Close()
+		peer = nil
 	}
-	peer.ps.Input(parsed.seq, parsed.payload[n:])
-}
-
-// openPeer dials a destination and starts the two pumps.
-func (h *Handler) openPeer(pc net.PacketConn, addr net.Addr, cipher *segmentCipher, entry *keyEntry, first *parsedSegment) (*udpPeer, error) {
-	dest, n, err := decodeAddr(first.payload)
-	if err != nil {
-		return nil, err
-	}
-	raddr, err := net.ResolveUDPAddr("udp", dest.String())
-	if err != nil {
-		return nil, err
-	}
-	conn, err := net.DialUDP("udp", nil, raddr)
-	if err != nil {
-		return nil, err
-	}
-	peer := &udpPeer{
-		cipher: cipher,
-		entry:  entry,
-		dest:   dest,
-		conn:   conn,
+	if peer == nil {
+		ctx, cancel := context.WithCancel(s.ctx)
+		peer = &udpPeer{srv: s, key: key, client: addr, cipher: cipher, dest: dest, ctx: ctx, cancel: cancel, done: make(chan struct{}), received: make(map[uint64]struct{})}
+		peer.ps = NewPacketSession(peer.send)
+		peer.ps.setNext(parsed.seq)
+		s.mu.Lock()
+		s.peers[key] = peer
+		s.mu.Unlock()
+		go func() {
+			defer peer.Close()
+			_ = handler.packetRelay(ctx, &core.Session{UserID: entry.user.ID, Packets: peer, SourceIP: socks.FromNetAddr(addr).IP(), AuthValid: func() bool { return s.owner.currentPacketHandler() == handler }})
+		}()
 	}
 	peer.lastSeen.Store(time.Now().UnixNano())
-	addrPrefix := encodeAddr(dest)
-	peer.ps = NewPacketSession(func(seg []byte) error {
-		_, err := pc.WriteTo(seg, addr)
-		return err
+	peer.received[fingerprint] = struct{}{}
+	peer.ps.mu.Lock()
+	inWindow := parsed.seq <= peer.ps.nextSeq+reorderWindow
+	peer.ps.mu.Unlock()
+	peer.ps.Input(parsed.seq, parsed.payload[n:])
+	if inWindow {
+		var ack [4]byte
+		binary.BigEndian.PutUint32(ack[:], parsed.seq)
+		_ = peer.send(peer.cipher.sealWithFlags(segPacket, flagAck, uint32(time.Now().Unix()), parsed.seq, ack[:]))
+	}
+}
+
+// Packet fingerprints retain replay protection when credential snapshots replace
+// the ordered per-peer PacketSession. The cache is shared with the prior handler.
+func packetReplayID(seg []byte) uint64 {
+	sum := sha256.Sum256(seg)
+	return binary.BigEndian.Uint64(sum[:8])
+}
+
+func (h *Handler) checkPacketReplay(seg []byte) bool {
+	key := packetReplayID(seg)
+	now := time.Now()
+	h.rmu.Lock()
+	defer h.rmu.Unlock()
+	if _, seen := h.seen[key]; seen {
+		return false
+	}
+	h.seen[key] = now
+	for k, ts := range h.seen {
+		if now.Sub(ts) > replayWindow {
+			delete(h.seen, k)
+		}
+	}
+	return true
+}
+
+type udpPeer struct {
+	srv      *udpServer
+	key      string
+	client   net.Addr
+	cipher   *segmentCipher
+	dest     socks.Addr
+	ps       *PacketSession
+	ctx      context.Context
+	cancel   context.CancelFunc
+	once     sync.Once
+	writeMu  sync.Mutex
+	done     chan struct{}
+	lastSeen atomic.Int64
+	received map[uint64]struct{}
+}
+
+func (p *udpPeer) send(seg []byte) error {
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
+	select {
+	case <-p.done:
+		return net.ErrClosed
+	default:
+	}
+	n, err := p.srv.pc.WriteTo(seg, p.client)
+	if err == nil && n != len(seg) {
+		err = io.ErrShortWrite
+	}
+	return err
+}
+
+func (p *udpPeer) RemoteAddr() net.Addr { return p.client }
+func (p *udpPeer) ReadPacket(buf []byte) (int, socks.Addr, error) {
+	select {
+	case <-p.done:
+		return 0, socks.Addr{}, net.ErrClosed
+	default:
+	}
+	n, err := p.ps.Read(buf)
+	select {
+	case <-p.done:
+		return 0, socks.Addr{}, net.ErrClosed
+	default:
+	}
+	return n, p.dest, err
+}
+func (p *udpPeer) WritePacket(buf []byte, dest socks.Addr) error {
+	select {
+	case <-p.done:
+		return net.ErrClosed
+	default:
+	}
+	payload := append(encodeAddr(dest), buf...)
+	err := p.ps.Write(func(seq uint32) []byte { return p.cipher.seal(segPacket, uint32(time.Now().Unix()), seq, payload) })
+	if err == nil {
+		p.lastSeen.Store(time.Now().UnixNano())
+	}
+	return err
+}
+func (p *udpPeer) Close() error {
+	p.once.Do(func() {
+		p.cancel()
+		p.writeMu.Lock()
+		close(p.done)
+		p.writeMu.Unlock()
+		_ = p.ps.Close()
+		p.srv.mu.Lock()
+		if p.srv.peers[p.key] == p {
+			delete(p.srv.peers, p.key)
+		}
+		p.srv.mu.Unlock()
 	})
-	// Inbound: session -> destination socket.
-	go func() {
-		buf := make([]byte, 64<<10)
-		for {
-			n, err := peer.ps.Read(buf)
-			if err != nil {
-				return
-			}
-			if _, err := conn.Write(buf[:n]); err != nil {
-				return
-			}
-		}
-	}()
-	// Outbound: destination socket -> session (address-prefixed payload).
-	go func() {
-		buf := make([]byte, 64<<10)
-		var seq uint32
-		for {
-			n, err := conn.Read(buf)
-			if err != nil {
-				return
-			}
-			payload := make([]byte, 0, len(addrPrefix)+n)
-			payload = append(payload, addrPrefix...)
-			payload = append(payload, buf[:n]...)
-			s := seq
-			seq++
-			if err := peer.ps.Write(func(seq uint32) []byte {
-				return cipher.seal(segPacket, uint32(time.Now().Unix()), s, payload)
-			}); err != nil {
-				return
-			}
-		}
-	}()
-	// Drop the first payload's address prefix before delivering it.
-	h.udpMu.Lock()
-	h.peers[addr.String()] = peer
-	h.udpMu.Unlock()
-	peer.ps.setNext(first.seq)
-	peer.ps.Input(first.seq, first.payload[n:])
-	return peer, nil
+	return nil
 }
-
-// dropPeer removes and closes one peer.
-func (h *Handler) dropPeer(key string) {
-	h.udpMu.Lock()
-	peer := h.peers[key]
-	delete(h.peers, key)
-	h.udpMu.Unlock()
-	if peer != nil {
-		_ = peer.ps.Close()
-		_ = peer.conn.Close()
+func (s *udpServer) closePeers() {
+	s.mu.Lock()
+	list := make([]*udpPeer, 0, len(s.peers))
+	for _, p := range s.peers {
+		list = append(list, p)
+	}
+	s.mu.Unlock()
+	for _, p := range list {
+		_ = p.Close()
+	}
+}
+func (s *udpServer) sweep(done <-chan struct{}) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-s.ctx.Done():
+			return
+		case <-ticker.C:
+			s.mu.Lock()
+			list := make([]*udpPeer, 0, len(s.peers))
+			for _, p := range s.peers {
+				if time.Since(time.Unix(0, p.lastSeen.Load())) > udpPeerTTL {
+					list = append(list, p)
+				}
+			}
+			s.mu.Unlock()
+			for _, p := range list {
+				_ = p.Close()
+			}
+		}
 	}
 }
 
-// sweepLoop removes idle peers (UDPServer.sweep).
-func (h *Handler) sweepLoop() {
-	t := time.NewTicker(30 * time.Second)
-	defer t.Stop()
-	for range t.C {
-		cutoff := time.Now().Add(-udpPeerTTL).UnixNano()
-		h.udpMu.Lock()
-		var stale []string
-		for k, p := range h.peers {
-			if p.lastSeen.Load() < cutoff {
-				stale = append(stale, k)
-			}
-		}
-		h.udpMu.Unlock()
-		for _, k := range stale {
-			h.dropPeer(k)
-		}
-	}
-}
+var _ core.PacketStream = (*udpPeer)(nil)

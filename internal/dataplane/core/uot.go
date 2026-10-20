@@ -97,15 +97,20 @@ func (u *uotStream) WritePacket(p []byte, addr socks.Addr) error {
 	frame := make([]byte, 2+len(body))
 	binary.BigEndian.PutUint16(frame, uint16(len(body)))
 	copy(frame[2:], body)
-	_, err := u.conn.Write(frame)
+	n, err := u.conn.Write(frame)
+	if err == nil && n != len(frame) {
+		return io.ErrShortWrite
+	}
 	return err
 }
 
 func (u *uotStream) Close() error {
+	// A writer holds mu while sending. Close the transport first to unblock it.
+	err := u.conn.Close()
 	u.mu.Lock()
 	u.closed = true
 	u.mu.Unlock()
-	return u.conn.Close()
+	return err
 }
 
 // uotReadAddr decodes one SOCKS-style address and returns the bytes consumed.
@@ -115,14 +120,14 @@ func uotReadAddr(b []byte) (socks.Addr, int, error) {
 	}
 	switch b[0] {
 	case uotAtypIPv4:
-		if len(b) < 4+2 {
+		if len(b) < 1+4+2 {
 			return socks.Addr{}, 0, errUoTBadAddress
 		}
 		host := net.IP(b[1:5]).String()
 		port := binary.BigEndian.Uint16(b[5:7])
 		return socks.Addr{Host: host, Port: port}, 7, nil
 	case uotAtypIPv6:
-		if len(b) < 16+2 {
+		if len(b) < 1+16+2 {
 			return socks.Addr{}, 0, errUoTBadAddress
 		}
 		host := net.IP(b[1:17]).String()

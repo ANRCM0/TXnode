@@ -95,13 +95,44 @@ type UDPOutbound interface {
 // Session is the result of a successful inbound handshake. Layout follows
 // core.Session (size 0x60): UserID, Dest, Conn, Packets, Local, Socket.
 type Session struct {
-	UserID  int
-	ConnID  uint64 // process-unique id, assigned by the server before relay
-	Dest    socks.Addr
-	Conn    net.Conn
-	Packets PacketStream // non-nil for UDP sessions
-	Local   netip.Addr   // node-side egress address, zero = unspecified
-	Socket  *net.TCPConn // bare socket for splice, may be nil
+	UserID    int
+	ConnID    uint64 // process-unique id, assigned by the server before relay
+	Dest      socks.Addr
+	Conn      net.Conn
+	Packets   PacketStream // non-nil for UDP sessions
+	Local     netip.Addr   // node-side egress address, zero = unspecified
+	Socket    *net.TCPConn // bare socket for splice, may be nil
+	SourceIP  netip.Addr   // authenticated datagram/proxy source, when Conn has none
+	AuthValid func() bool  // rejects handshakes from an obsolete credential snapshot
+	cancel    context.CancelFunc
+	closeOnce sync.Once
+	closeErr  error
+}
+
+// Close releases both stream and packet transports, including packet-only sessions.
+func (s *Session) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.closeOnce.Do(func() {
+		if s.cancel != nil {
+			s.cancel()
+		}
+		if s.Conn != nil {
+			s.closeErr = s.Conn.Close()
+		}
+		if s.Packets != nil {
+			s.closeErr = errors.Join(s.closeErr, s.Packets.Close())
+		}
+	})
+	return s.closeErr
+}
+
+func sessionSourceIP(s *Session) netip.Addr {
+	if s.SourceIP.IsValid() {
+		return s.SourceIP
+	}
+	return clientIP(s.Conn)
 }
 
 // ChunkDirection is the relay direction of one accounted chunk: upload is

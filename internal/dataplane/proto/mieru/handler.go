@@ -10,6 +10,7 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ANRCM0/TX-Node/internal/dataplane/core"
@@ -26,17 +27,18 @@ type Handler struct {
 	log  *slog.Logger
 
 	users map[string]core.User
-	scans scanGate
+	scans *scanGate
 
 	kmu     sync.RWMutex
 	keys    []*keyEntry
 	keysFor map[string]*keyEntry
 
-	rmu  sync.Mutex
+	rmu  *sync.Mutex
 	seen map[uint64]time.Time
 
-	udpMu sync.Mutex
-	peers map[string]*udpPeer
+	packetCurrent atomic.Pointer[func() *Handler]
+	packetRelay   func(context.Context, *core.Session) error
+	packetServer  atomic.Pointer[udpServer]
 
 	// v2Mtu is the v2 fragment payload bound (Options.MTU, default 1400).
 	v2Mtu int
@@ -59,11 +61,12 @@ type keyEntry struct {
 
 // Options is the contract's option set for mieru.
 type Options struct {
-	Users          []core.User
-	Transport      string
-	TrafficPattern string
-	HintRequired   bool
-	Logger         *slog.Logger
+	Users           []core.User
+	AllowEmptyUsers bool
+	Transport       string
+	TrafficPattern  string
+	HintRequired    bool
+	Logger          *slog.Logger
 
 	// Iterations overrides the PBKDF2 work factor.
 	Iterations int
@@ -98,7 +101,7 @@ const (
 
 // NewHandler validates the users and derives their keys.
 func NewHandler(o Options) (*Handler, error) {
-	if len(o.Users) == 0 {
+	if len(o.Users) == 0 && !o.AllowEmptyUsers {
 		return nil, errors.New("mieru: no users configured")
 	}
 	log := o.Logger
@@ -112,7 +115,8 @@ func NewHandler(o Options) (*Handler, error) {
 		users:       make(map[string]core.User, len(o.Users)),
 		keysFor:     make(map[string]*keyEntry, len(o.Users)),
 		seen:        make(map[uint64]time.Time),
-		scans:       newScanGate(o.ScanRate, o.ScanBurst),
+		scans:       scanGatePointer(o.ScanRate, o.ScanBurst),
+		rmu:         new(sync.Mutex),
 		v2Mtu:       o.MTU,
 		v2Heartbeat: o.Heartbeat,
 	}
@@ -141,7 +145,7 @@ func NewHandler(o Options) (*Handler, error) {
 		h.keys = append(h.keys, entry)
 		h.keysFor[name] = entry
 	}
-	if len(h.keys) == 0 {
+	if len(h.keys) == 0 && (!o.AllowEmptyUsers || len(o.Users) > 0) {
 		return nil, errors.New("mieru: no usable users")
 	}
 	return h, nil

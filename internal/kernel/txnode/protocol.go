@@ -73,11 +73,12 @@ func buildHandler(sp *spec, users []core.User, log *slog.Logger) (core.Handler, 
 		return naive.NewHandler(naive.Options{Users: users})
 	case "mieru":
 		return mieru.NewHandler(mieru.Options{
-			Users:          users,
-			Transport:      sp.MieruTransport,
-			TrafficPattern: sp.MieruTrafficPattern,
-			HintRequired:   sp.MieruHintRequired,
-			Logger:         log,
+			AllowEmptyUsers: true,
+			Users:           users,
+			Transport:       sp.MieruTransport,
+			TrafficPattern:  sp.MieruTrafficPattern,
+			HintRequired:    sp.MieruHintRequired,
+			Logger:          log,
 		})
 	case "snell":
 		return snell.NewHandler(snell.Options{Users: users, Version: sp.Version, Logger: log})

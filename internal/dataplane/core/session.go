@@ -30,36 +30,51 @@ func (s *Server) ServeSession(ctx context.Context, sess *Session) error {
 	if sess == nil {
 		return errors.New("session refused: nil session")
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	sess.cancel = cancel
+	stopServerCancel := context.AfterFunc(s.ctx, cancel)
+	defer stopServerCancel()
 	if sess.ConnID == 0 {
-		sess.ConnID = s.connSeq.Add(1)
+		sess.ConnID = sessionSeq.Add(1)
 	}
 	if o := s.snapshot(); o.Admission != nil && !o.Admission() {
-		if sess.Conn != nil {
-			_ = sess.Conn.Close()
-		}
-		if sess.Packets != nil {
-			_ = sess.Packets.Close()
-		}
+		_ = sess.Close()
 		return errors.New("session refused: admission closed")
 	}
 	if sess.Conn == nil && sess.Packets == nil {
 		return errors.New("session refused: no transport")
 	}
-	src := clientIP(sess.Conn)
+	prepareSession(sess)
+	if !s.registerSession(sess) {
+		_ = sess.Close()
+		return ErrSessionRefused
+	}
+	defer s.unregisterSession(sess)
+	defer sess.Close()
+	stopCancel := context.AfterFunc(ctx, func() { _ = sess.Close() })
+	defer stopCancel()
+	src := sessionSourceIP(sess)
 	o := s.snapshot()
 	lease, ok := s.acquire(sess, src, o.Logger)
 	if !ok {
-		if sess.Conn != nil {
-			_ = sess.Conn.Close()
-		}
+		_ = sess.Close()
 		return ErrSessionRefused
 	}
 	defer lease.Release()
-	if u, ok := sess.Packets.(*uotStream); ok {
-		// The UoT stream owns the TCP connection.
-		defer u.Close()
-	}
 	return s.serveSession(ctx, sess, src)
+}
+
+func prepareSession(sess *Session) {
+	if sess.Packets != nil || sess.Conn == nil {
+		return
+	}
+	switch strings.ToLower(sess.Dest.Host) {
+	case "sp.udp-over-tcp.arpa":
+		sess.Packets = NewUoT(sess.Conn, 1)
+	case "sp.v2.udp-over-tcp.arpa":
+		sess.Packets = NewUoT(sess.Conn, 2)
+	}
 }
 
 // serveSession dispatches an already-accounted session.
@@ -152,13 +167,30 @@ func (s *Server) MuxStreamSession(ctx context.Context, parent *Session, src neti
 		return errors.New("mux: stream without a parent session")
 	}
 	child := &Session{
-		UserID:  parent.UserID,
-		Dest:    dest,
-		Conn:    conn,
-		Packets: packets,
-		Local:   parent.Local,
-		Socket:  tcpWriter(conn),
+		ConnID:    sessionSeq.Add(1),
+		UserID:    parent.UserID,
+		Dest:      dest,
+		Conn:      conn,
+		Packets:   packets,
+		Local:     parent.Local,
+		Socket:    tcpWriter(conn),
+		SourceIP:  src,
+		AuthValid: parent.AuthValid,
 	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	child.cancel = cancel
+	prepareSession(child)
+	if parent.AuthValid != nil && !parent.AuthValid() {
+		_ = child.Close()
+		return ErrSessionRefused
+	}
+	if !s.registerSession(child) {
+		_ = child.Close()
+		return ErrSessionRefused
+	}
+	defer s.unregisterSession(child)
+	defer child.Close()
 	return s.serveSession(ctx, child, src)
 }
 

@@ -147,12 +147,13 @@ type Handler struct {
 	max    int
 	idle   time.Duration
 
-	pkt atomic.Pointer[packetServer]
+	pkt *atomic.Pointer[packetServer]
 }
 
 // NewHandler validates Options and builds the handler.
 func NewHandler(o Options) (*Handler, error) {
 	h := &Handler{
+		pkt:    new(atomic.Pointer[packetServer]),
 		users:  make(map[string]*core.User, len(o.Users)),
 		noAuth: o.NoAuth,
 		udp:    o.UDP,

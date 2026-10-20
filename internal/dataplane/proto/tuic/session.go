@@ -2,30 +2,39 @@ package tuic
 
 import (
 	"errors"
+	"io"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/apernet/quic-go"
 
+	"github.com/ANRCM0/TX-Node/internal/dataplane/core"
 	"github.com/ANRCM0/TX-Node/internal/dataplane/socks"
 )
 
 // udpSession is one UDP association, keyed by assocID in client+0x38
 // (map[uint16]*udpSession, notes/rev-proto-udp.md §2.2).
 type udpSession struct {
-	id     uint16
-	c      *client
-	dest   socks.Addr
-	socket net.Conn
-	pktID  atomic.Uint32
-	once   sync.Once
-	done   chan struct{}
-	seen   atomic.Int64
+	id      uint16
+	c       *client
+	dest    socks.Addr
+	socket  net.Conn
+	pktID   atomic.Uint32
+	once    sync.Once
+	done    chan struct{}
+	seen    atomic.Int64
+	packets chan queuedPacket
 
 	fragMu sync.Mutex
 	frags  map[uint8]*fragSet
+}
+
+type queuedPacket struct {
+	addr    socks.Addr
+	payload []byte
 }
 
 type fragSet struct {
@@ -45,6 +54,9 @@ func (s *udpSession) Close() error {
 
 // deliverPacket routes one inbound packet frame to its association.
 func (c *client) deliverPacket(f *frame) {
+	if !c.authValid() {
+		return
+	}
 	c.mu.Lock()
 	sess := c.sessions[f.assocID]
 	c.mu.Unlock()
@@ -70,38 +82,104 @@ func (c *client) deliverPacket(f *frame) {
 			return
 		}
 	}
+	if c.srv.opts.Relay != nil {
+		addr := f.addr
+		if !f.hasAddr || addr.IsZero() {
+			addr = sess.dest
+		}
+		packet := queuedPacket{addr: addr, payload: append([]byte(nil), payload...)}
+		select {
+		case <-sess.done:
+		case sess.packets <- packet:
+		default:
+		}
+		return
+	}
 	_, _ = sess.socket.Write(payload)
 }
 
 // openSession dials the destination and starts the return pump.
 func (c *client) openSession(id uint16, dest socks.Addr) (*udpSession, error) {
-	raddr, err := net.ResolveUDPAddr("udp", dest.String())
-	if err != nil {
-		return nil, err
-	}
-	conn, err := net.DialUDP("udp", nil, raddr)
-	if err != nil {
-		return nil, err
+	var conn net.Conn
+	if c.srv.opts.Relay == nil {
+		raddr, err := net.ResolveUDPAddr("udp", dest.String())
+		if err != nil {
+			return nil, err
+		}
+		conn, err = net.DialUDP("udp", nil, raddr)
+		if err != nil {
+			return nil, err
+		}
 	}
 	s := &udpSession{
-		id:     id,
-		c:      c,
-		dest:   dest,
-		socket: conn,
-		done:   make(chan struct{}),
-		frags:  make(map[uint8]*fragSet),
+		id:      id,
+		c:       c,
+		dest:    dest,
+		socket:  conn,
+		done:    make(chan struct{}),
+		frags:   make(map[uint8]*fragSet),
+		packets: make(chan queuedPacket, 64),
 	}
 	s.seen.Store(time.Now().UnixNano())
 	c.mu.Lock()
 	if old := c.sessions[id]; old != nil {
 		c.mu.Unlock()
-		_ = old.Close()
-		c.mu.Lock()
+		_ = s.Close()
+		return old, nil
 	}
 	c.sessions[id] = s
+	userID := int(c.userID)
 	c.mu.Unlock()
-	go s.pump()
+	if relay := c.srv.opts.Relay; relay != nil {
+		go func() {
+			sess := &core.Session{UserID: userID, Dest: dest, Packets: s, SourceIP: c.sourceIP(), AuthValid: c.authValid}
+			defer sess.Close()
+			_ = relay(c.ctx, sess)
+			c.mu.Lock()
+			if c.sessions[id] == s {
+				delete(c.sessions, id)
+			}
+			c.mu.Unlock()
+		}()
+	} else {
+		go s.pump()
+	}
 	return s, nil
+}
+
+func (c *client) sourceIP() netip.Addr {
+	if c.conn == nil {
+		return netip.Addr{}
+	}
+	addr, err := netip.ParseAddrPort(c.conn.RemoteAddr().String())
+	if err != nil {
+		return netip.Addr{}
+	}
+	return addr.Addr()
+}
+
+func (s *udpSession) ReadPacket(p []byte) (int, socks.Addr, error) {
+	select {
+	case <-s.done:
+		return 0, socks.Addr{}, net.ErrClosed
+	case pkt := <-s.packets:
+		if len(pkt.payload) > len(p) {
+			return 0, socks.Addr{}, io.ErrShortBuffer
+		}
+		return copy(p, pkt.payload), pkt.addr, nil
+	}
+}
+
+func (s *udpSession) WritePacket(p []byte, addr socks.Addr) error {
+	select {
+	case <-s.done:
+		return net.ErrClosed
+	default:
+	}
+	if addr.IsZero() {
+		addr = s.dest
+	}
+	return s.writePacket(p, addr)
 }
 
 // pump reads datagrams from the destination and writes them back to the client.
@@ -112,7 +190,7 @@ func (s *udpSession) pump() {
 		if err != nil {
 			return
 		}
-		s.writePacket(buf[:n])
+		_ = s.writePacket(buf[:n], s.dest)
 	}
 }
 
@@ -121,21 +199,21 @@ func (s *udpSession) pump() {
 //	SendDatagram(frame); on DatagramTooLargeError split by (errLen - 0x1d) and
 //	send the fragments as datagrams; on any other error fall back to a
 //	unidirectional stream with a 10 s write deadline.
-func (s *udpSession) writePacket(payload []byte) {
+func (s *udpSession) writePacket(payload []byte, addr socks.Addr) error {
 	base := &frame{
 		assocID: s.id,
 		pktID:   uint16(s.pktID.Add(1)),
 		// The peer needs the origin address back: a SOCKS5 UDP relay writes it
 		// into the reply header, and dropping it would leave the association
 		// without a source for the echoed datagram.
-		addr:    s.dest,
+		addr:    addr,
 		hasAddr: true,
 		payload: payload,
 	}
 	first := base.marshal()
 	err := s.c.conn.SendDatagram(first)
 	if err == nil {
-		return
+		return nil
 	}
 	var tooLarge *quic.DatagramTooLargeError
 	if errors.As(err, &tooLarge) {
@@ -143,29 +221,38 @@ func (s *udpSession) writePacket(payload []byte) {
 		for _, f := range fragment(base, payload, chunk) {
 			if e := s.c.conn.SendDatagram(f.marshal()); e != nil {
 				s.c.srv.log.Debug("tuic: fragmented datagram failed", "error", e)
+				return e
 			}
 		}
-		return
+		return nil
 	}
 	// DATAGRAM is not usable on this connection: fall back to uni streams, one
 	// frame per stream.
 	for _, f := range fragment(base, payload, 0xffff-fragOverhead) {
-		s.writeStream(f)
+		if err := s.writeStream(f); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // writeStream writes one frame on a fresh unidirectional stream.
-func (s *udpSession) writeStream(f *frame) {
+func (s *udpSession) writeStream(f *frame) error {
 	st, err := s.c.conn.OpenUniStream()
 	if err != nil {
-		return
+		return err
 	}
 	_ = st.SetWriteDeadline(time.Now().Add(writeTimeout))
-	if _, err := st.WriteWithLimit(f.marshal(), nil); err != nil {
-		st.CancelWrite(quic.StreamErrorCode(0))
-		return
+	packet := f.marshal()
+	n, err := st.WriteWithLimit(packet, nil)
+	if err == nil && n != len(packet) {
+		err = io.ErrShortWrite
 	}
-	_ = st.Close()
+	if err != nil {
+		st.CancelWrite(quic.StreamErrorCode(0))
+		return err
+	}
+	return st.Close()
 }
 
 // reassemble stores a fragment and returns the payload once all arrived.

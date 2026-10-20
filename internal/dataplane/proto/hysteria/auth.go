@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/apernet/quic-go"
@@ -43,9 +44,10 @@ type connState struct {
 	srv  *Server
 	conn *quic.Conn
 
-	mu     sync.Mutex
-	authed bool
-	user   core.User
+	mu        sync.Mutex
+	authed    bool
+	user      core.User
+	userValid *atomic.Bool
 
 	sessMu    sync.Mutex
 	sessions  map[uint32]*udpSession
@@ -69,7 +71,7 @@ func (st *connState) dispatchStream(ft http3.FrameType, str *quic.Stream, err er
 		return false, nil
 	}
 	st.mu.Lock()
-	authed := st.authed
+	authed := st.authed && st.userValid != nil && st.userValid.Load()
 	st.mu.Unlock()
 	if !authed {
 		// Before /auth succeeds the connection has no data plane. Dropping the
@@ -103,7 +105,10 @@ func (h *authHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	token := r.Header.Get(headerAuth)
 	st.mu.Lock()
 	if !st.authed {
-		u, ok := h.srv.lookupUser(token)
+		h.srv.usersMu.RLock()
+		u, ok := h.srv.users[token]
+		valid := h.srv.credentialValidity[token]
+		h.srv.usersMu.RUnlock()
 		if !ok {
 			st.mu.Unlock()
 			h.srv.authFailures.Add(1)
@@ -112,6 +117,12 @@ func (h *authHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		st.authed = true
 		st.user = u
+		st.userValid = valid
+	}
+	if st.userValid == nil || !st.userValid.Load() {
+		st.mu.Unlock()
+		h.notFound(w)
+		return
 	}
 	user := st.user
 	st.mu.Unlock()
@@ -160,6 +171,12 @@ func (st *connState) userIDValue() int {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	return st.user.ID
+}
+
+func (st *connState) authValid() bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.authed && st.userValid != nil && st.userValid.Load()
 }
 
 func (h *authHandler) notFound(w http.ResponseWriter) {

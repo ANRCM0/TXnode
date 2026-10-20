@@ -144,8 +144,8 @@ jobs:
         run: make test
       - name: Check independent Node image channels
         run: bash scripts/test-image-tags.sh
-      - name: Verify pinned protocol authentication publication and replay history
-        run: go test -race -count=1 github.com/sagernet/sing-vmess github.com/sagernet/sing-vmess/vless
+      - name: Verify native credential publication and replay history
+        run: go test -race -count=1 -run 'Test(LiveHandler|KernelHotUserCredentials|KernelRevokesLiveSessionsAndRetainsTraffic|NativeMeterAuthorizationGenerations|PacketSession|ObsoletePacketHandshake|.*Replay)' ./internal/dataplane/core/... ./internal/dataplane/proto/... ./internal/kernel/txnode/...
       - name: Check Go types and diagnostics
         run: go vet ./...
       - name: Enforce legacy retirement boundary

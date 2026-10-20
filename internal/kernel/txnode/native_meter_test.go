@@ -51,7 +51,7 @@ func TestNativeMeterRefusesWhenCollectorUnknown(t *testing.T) {
 		t.Fatalf("err = %v, want ErrUnknown", err)
 	}
 	m.StopBoundedUsageTraffic()
-	if _, err := m.Begin(core.Chunk{ConnID: 1, UserID: 2}); err != nil {
-		t.Fatalf("stopped meter still refuses: %v", err)
+	if _, err := m.Begin(core.Chunk{ConnID: 1, UserID: 2}); !errors.Is(err, usageinterval.ErrUnknown) {
+		t.Fatalf("stopped meter must fail closed: %v", err)
 	}
 }

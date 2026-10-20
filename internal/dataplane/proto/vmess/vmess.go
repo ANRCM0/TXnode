@@ -172,7 +172,7 @@ type Handler struct {
 	log   *slog.Logger
 	mux   func(net.Conn) core.PacketStream
 
-	replayMu sync.Mutex
+	replayMu *sync.Mutex
 	replay   map[[16]byte]time.Time
 }
 
@@ -180,11 +180,12 @@ type Handler struct {
 // cipher every AEAD peer supports.
 func NewHandler(o Options) (*Handler, error) {
 	h := &Handler{
-		users:  make(map[[16]byte]*core.User, len(o.Users)),
-		key:    make(map[[16]byte][]byte, len(o.Users)),
-		log:    o.Logger,
-		mux:    o.MuxPackets,
-		replay: make(map[[16]byte]time.Time),
+		users:    make(map[[16]byte]*core.User, len(o.Users)),
+		key:      make(map[[16]byte][]byte, len(o.Users)),
+		log:      o.Logger,
+		mux:      o.MuxPackets,
+		replay:   make(map[[16]byte]time.Time),
+		replayMu: new(sync.Mutex),
 	}
 	if h.log == nil {
 		h.log = slog.New(slog.DiscardHandler)

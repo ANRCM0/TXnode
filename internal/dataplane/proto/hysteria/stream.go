@@ -241,6 +241,20 @@ func (st *connState) handleStream(str *quic.Stream) {
 		return
 	}
 	_ = str.SetReadDeadline(time.Time{})
+	sess := &core.Session{
+		UserID:    st.userIDValue(),
+		Dest:      dest,
+		Conn:      &streamConn{Stream: str, conn: st.conn},
+		SourceIP:  st.sourceIP(),
+		AuthValid: st.authValid,
+	}
+	if relay := srv.opts.Relay; relay != nil {
+		if err := relay(ctx, sess); err != nil {
+			srv.log.Debug("hysteria: relay finished", "error", err)
+		}
+		_ = sess.Close()
+		return
+	}
 
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	conn, err := dialer.DialContext(ctx, "tcp", dest.String())
@@ -255,17 +269,6 @@ func (st *connState) handleStream(str *quic.Stream) {
 		return
 	}
 
-	sess := &core.Session{
-		UserID: st.userIDValue(),
-		Dest:   dest,
-		Conn:   &streamConn{Stream: str, conn: st.conn},
-	}
-	if relay := srv.opts.Relay; relay != nil {
-		if err := relay(ctx, sess); err != nil {
-			srv.log.Debug("hysteria: relay finished", "error", err)
-		}
-		return
-	}
 	// No relay wired (tests, or a node that lets the protocol forward): pipe.
 	pipeStream(ctx, sess.Conn, conn)
 }
@@ -306,10 +309,20 @@ type streamConn struct {
 
 func (c *streamConn) Read(p []byte) (int, error)  { return c.Stream.Read(p) }
 func (c *streamConn) Write(p []byte) (int, error) { return c.Stream.Write(p) }
-func (c *streamConn) Close() error                { return c.Stream.Close() }
-func (c *streamConn) CloseWrite() error           { return c.Stream.Close() }
-func (c *streamConn) LocalAddr() net.Addr         { return c.conn.LocalAddr() }
-func (c *streamConn) RemoteAddr() net.Addr        { return c.conn.RemoteAddr() }
+func (c *streamConn) Close() error {
+	c.Stream.CancelRead(0)
+	c.Stream.CancelWrite(0)
+	return nil
+}
+func (c *streamConn) HandshakeSucceeded(net.Addr) error {
+	return writeResponse(c.Stream, statusOK, "connected")
+}
+func (c *streamConn) HandshakeFailed(err error) error {
+	return writeResponse(c.Stream, statusError, err.Error())
+}
+func (c *streamConn) CloseWrite() error    { return c.Stream.Close() }
+func (c *streamConn) LocalAddr() net.Addr  { return c.conn.LocalAddr() }
+func (c *streamConn) RemoteAddr() net.Addr { return c.conn.RemoteAddr() }
 func (c *streamConn) SetDeadline(t time.Time) error {
 	if err := c.Stream.SetReadDeadline(t); err != nil {
 		return err

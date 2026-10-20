@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,21 +17,19 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/dataplane/socks"
 )
 
-// ServePackets implements core.PacketHandler: the node binds the UDP socket and
-// the handler runs the NAT table itself, exactly like ss.(*Handler).ListenUDP
-// @0xb1b580 plus the ss.(*PacketServer) family (openClassic/handleClassic/
-// searchClassic/handle2022/udpKey).
-//
-// Session idle is 120 s (`movabs rdx,0x1bf08eb000` @0xb1b580); the per-destination
-// sockets live in a map keyed by the destination address, which is what the
-// openClassic/open2022 symbol names imply.
+// ServePackets decrypts client datagrams and hands authenticated packet streams
+// to the common relay, which owns routing, admission, limits and accounting.
 func (h *Handler) ServePackets(ctx context.Context, pc net.PacketConn) error {
 	if !h.udp {
 		return errors.New("shadowsocks: UDP is not available on this node")
 	}
-	srv := &udpServer{h: h, pc: pc, sess: make(map[string]*udpSession)}
+	if h.relay == nil {
+		return errors.New("shadowsocks: UDP relay is not configured")
+	}
+	srv := &udpServer{h: h, pc: pc, ctx: ctx, sess: make(map[string]*udpSession)}
+	defer srv.closeSessions()
 	h.pkt.Store(srv)
-	defer h.pkt.Store(nil)
+	defer h.pkt.CompareAndSwap(srv, nil)
 
 	stop := make(chan struct{})
 	defer close(stop)
@@ -60,40 +60,67 @@ func (h *Handler) ServePackets(ctx context.Context, pc net.PacketConn) error {
 
 // udpServer is ss.(*PacketServer).
 type udpServer struct {
-	h    *Handler
-	pc   net.PacketConn
-	mu   sync.Mutex
-	sess map[string]*udpSession
+	h      *Handler
+	active *Handler
+	ctx    context.Context
+	pc     net.PacketConn
+	mu     sync.Mutex
+	sess   map[string]*udpSession
 }
 
 func (s *udpServer) handle(from net.Addr, datagram []byte) {
-	dest, payload, us, err := s.h.openUDP(datagram)
-	if err != nil {
+	handler := s.h.currentHandler()
+	if handler != s.active {
+		s.closeSessions()
+		s.active = handler
+	}
+	if handler == nil {
 		return
 	}
-	sess := s.session(from, us)
-	sess.forward(dest, payload, us)
+	dest, payload, us, err := handler.openUDP(datagram)
+	if err != nil || us.user == nil || us.user.ID <= 0 {
+		return
+	}
+	key := fmt.Sprintf("%s/%d/%x/%d", from.String(), us.user.ID, us.key, us.sessID)
+	s.mu.Lock()
+	sess := s.sess[key]
+	if sess == nil {
+		sessionCtx, cancel := context.WithCancel(s.ctx)
+		sess = &udpSession{srv: s, client: from, us: us, key: key, ctx: sessionCtx, cancel: cancel, done: make(chan struct{}), incoming: make(chan udpPacket, 64)}
+		sess.touch()
+		s.sess[key] = sess
+		go sess.expire()
+		go func() {
+			defer sess.Close()
+			host, _, _ := net.SplitHostPort(from.String())
+			source, _ := netip.ParseAddr(host)
+			_ = handler.relay(sess.ctx, &core.Session{UserID: us.user.ID, Packets: sess, SourceIP: source, AuthValid: func() bool { return s.h.currentHandler() == handler }})
+		}()
+	}
+	s.mu.Unlock()
+	packet := udpPacket{dest: dest, payload: append([]byte(nil), payload...)}
+	select {
+	case <-sess.done:
+		return
+	default:
+	}
+	select {
+	case sess.incoming <- packet:
+		sess.touch()
+	default:
+	}
 }
 
-func (s *udpServer) session(from net.Addr, us *udpKeyState) *udpSession {
-	key := from.String()
+func (s *udpServer) closeSessions() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if sess, ok := s.sess[key]; ok {
-		sess.touch()
-		return sess
+	sessions := make([]*udpSession, 0, len(s.sess))
+	for _, sess := range s.sess {
+		sessions = append(sessions, sess)
 	}
-	sess := &udpSession{
-		srv:    s,
-		client: from,
-		us:     us,
-		target: make(map[string]*udpTarget),
-		done:   make(chan struct{}),
+	s.mu.Unlock()
+	for _, sess := range sessions {
+		_ = sess.Close()
 	}
-	sess.touch()
-	s.sess[key] = sess
-	go sess.expire()
-	return sess
 }
 
 // udpKeyState carries what the reply direction needs: the key material and the
@@ -211,23 +238,71 @@ func (h *Handler) openUDP2022(datagram []byte) (socks.Addr, []byte, *udpKeyState
 	return socks.Addr{}, nil, nil, errAuth
 }
 
-// udpSession is ss.(*udpSession): one client endpoint and its destination map.
+// udpSession is one authenticated client endpoint bridged to the common relay.
 type udpSession struct {
-	srv    *udpServer
-	client net.Addr
-	us     *udpKeyState
-
-	once   sync.Once
-	mu     sync.Mutex
-	target map[string]*udpTarget
-	last   atomic.Int64
-	done   chan struct{}
-	packet atomic.Uint64
+	srv      *udpServer
+	client   net.Addr
+	us       *udpKeyState
+	key      string
+	ctx      context.Context
+	cancel   context.CancelFunc
+	writeMu  sync.Mutex
+	once     sync.Once
+	last     atomic.Int64
+	done     chan struct{}
+	incoming chan udpPacket
+	packet   atomic.Uint64
 }
 
-type udpTarget struct {
-	conn net.Conn
-	addr socks.Addr
+type udpPacket struct {
+	dest    socks.Addr
+	payload []byte
+}
+
+func (s *udpSession) RemoteAddr() net.Addr { return s.client }
+
+func (s *udpSession) ReadPacket(p []byte) (int, socks.Addr, error) {
+	select {
+	case <-s.done:
+		return 0, socks.Addr{}, net.ErrClosed
+	default:
+	}
+	select {
+	case <-s.done:
+		return 0, socks.Addr{}, net.ErrClosed
+	case pkt := <-s.incoming:
+		select {
+		case <-s.done:
+			return 0, socks.Addr{}, net.ErrClosed
+		default:
+		}
+		if len(p) < len(pkt.payload) {
+			return 0, socks.Addr{}, io.ErrShortBuffer
+		}
+		return copy(p, pkt.payload), pkt.dest, nil
+	}
+}
+
+func (s *udpSession) WritePacket(p []byte, dest socks.Addr) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	select {
+	case <-s.done:
+		return net.ErrClosed
+	default:
+	}
+	reply, err := s.srv.h.sealUDP(dest, p, s.us, s)
+	if err != nil {
+		return err
+	}
+	n, err := s.srv.pc.WriteTo(reply, s.client)
+	if err == nil && n != len(reply) {
+		err = io.ErrShortWrite
+	}
+	if err == nil {
+		s.touch()
+	}
+	return err
 }
 
 func (s *udpSession) touch() { s.last.Store(time.Now().UnixNano()) }
@@ -245,57 +320,6 @@ func (s *udpSession) expire() {
 				return
 			}
 		}
-	}
-}
-
-// forward sends one datagram to its destination, opening the NAT entry on demand
-// and starting the reply pump.
-func (s *udpSession) forward(dest socks.Addr, payload []byte, us *udpKeyState) {
-	key := dest.String()
-	s.mu.Lock()
-	t, ok := s.target[key]
-	if !ok {
-		conn, err := net.Dial("udp", dest.String())
-		if err != nil {
-			s.mu.Unlock()
-			return
-		}
-		t = &udpTarget{conn: conn, addr: dest}
-		s.target[key] = t
-		go s.pump(t, us)
-	}
-	s.mu.Unlock()
-
-	if _, err := t.conn.Write(payload); err != nil {
-		s.mu.Lock()
-		delete(s.target, key)
-		s.mu.Unlock()
-		_ = t.conn.Close()
-	}
-	s.touch()
-}
-
-// pump reads replies from one destination and re-encrypts them for the client.
-func (s *udpSession) pump(t *udpTarget, us *udpKeyState) {
-	buf := make([]byte, 0x10000)
-	for {
-		n, err := t.conn.Read(buf)
-		if err != nil {
-			return
-		}
-		select {
-		case <-s.done:
-			return
-		default:
-		}
-		reply, err := s.srv.h.sealUDP(t.addr, buf[:n], us, s)
-		if err != nil {
-			continue
-		}
-		if _, err := s.srv.pc.WriteTo(reply, s.client); err != nil {
-			return
-		}
-		s.touch()
 	}
 }
 
@@ -348,15 +372,17 @@ func (h *Handler) sealUDP(dest socks.Addr, payload []byte, us *udpKeyState, sess
 // Close tears the session down (ss.(*udpSession).Close).
 func (s *udpSession) Close() error {
 	s.once.Do(func() {
-		close(s.done)
-		s.mu.Lock()
-		for _, t := range s.target {
-			_ = t.conn.Close()
+		if s.cancel != nil {
+			s.cancel()
 		}
-		s.target = nil
-		s.mu.Unlock()
+		s.writeMu.Lock()
+		close(s.done)
+		s.writeMu.Unlock()
+
 		s.srv.mu.Lock()
-		delete(s.srv.sess, s.client.String())
+		if s.srv.sess[s.key] == s {
+			delete(s.srv.sess, s.key)
+		}
 		s.srv.mu.Unlock()
 	})
 	return nil
@@ -369,4 +395,4 @@ func nonceForPacket(size int, id uint64) []byte {
 	return n
 }
 
-var _ = io.EOF
+var _ core.PacketStream = (*udpSession)(nil)

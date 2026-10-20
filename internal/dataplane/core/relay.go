@@ -101,9 +101,13 @@ func (s *Server) relayTCP(ctx context.Context, sess *Session) error {
 	}
 	user := sess.UserID
 	dest := sess.Dest
-	from := clientIP(sess.Conn)
+	from := sessionSourceIP(sess)
 
 	ec := newEarlyConn(sess.Conn)
+	meta := Chunk{ConnID: sess.ConnID, UserID: user, Path: "conn"}
+	if o.Hooks != nil {
+		defer o.Hooks.Close(meta)
+	}
 	// A protocol that carries an inner SOCKS5 handshake (mieru) must answer the
 	// peer before the relay can read application bytes: the peer legitimately
 	// sends nothing until it sees the SOCKS5 reply. For those sessions the peek
@@ -112,7 +116,21 @@ func (s *Server) relayTCP(ctx context.Context, sess *Session) error {
 	var head []byte
 	var err error
 	if reply == nil {
+		var token any
+		if o.Hooks != nil {
+			c := meta
+			c.Dir, c.N = DirUpload, 8192
+			token, err = o.Hooks.Begin(c)
+			if err != nil {
+				return err
+			}
+		}
 		head, err = ec.peek(o.HandshakeTimeout)
+		if o.Hooks != nil {
+			c := meta
+			c.Dir, c.N, c.Err = DirUpload, int64(len(head)), err
+			o.Hooks.Complete(c, token)
+		}
 		if err != nil && len(head) == 0 {
 			if errors.Is(err, io.EOF) {
 				return nil
@@ -265,15 +283,18 @@ func (s *Server) relayTCP(ctx context.Context, sess *Session) error {
 	// splice(2) stays available on a plain TCP node. Buffered wrappers are
 	// rejected by tcpWriter, which keeps TLS/REALITY on the io.Copy path.
 	if len(head) > 0 {
-		if _, err := remote.Write(head); err != nil {
+		if err := waiterSet(upLims).Wait(ctx, int64(len(head))); err != nil {
+			return err
+		}
+		n, err := remote.Write(head)
+		upCount(int64(n))
+		if err != nil {
 			log.Debug("dial failed", "dest", dest.String(), "err", err)
 			return err
 		}
-		upCount(int64(len(head)))
-	}
-	meta := Chunk{ConnID: sess.ConnID, UserID: user, Path: "conn"}
-	if o.Hooks != nil {
-		defer o.Hooks.Close(meta)
+		if n != len(head) {
+			return io.ErrShortWrite
+		}
 	}
 	return pipeLimited(ctx, sess.Conn, remote, upLims, downLims, upCount, downCount, o.Hooks, meta)
 }
@@ -306,7 +327,7 @@ func (s *Server) relayUDP(ctx context.Context, sess *Session) error {
 		return errors.New("udp session without packets")
 	}
 	user := sess.UserID
-	from := clientIP(sess.Conn)
+	from := sessionSourceIP(sess)
 	fromStr := ""
 	if from.IsValid() {
 		fromStr = from.String()
@@ -327,10 +348,12 @@ func (s *Server) relayUDP(ctx context.Context, sess *Session) error {
 		downLims: downLims,
 		assocs:   make(map[socks.Addr]*udpAssoc),
 	}
-	defer u.close()
-	if o.Hooks != nil {
-		defer o.Hooks.Close(Chunk{ConnID: sess.ConnID, UserID: user, Path: "udp"})
-	}
+	defer func() {
+		u.close()
+		if o.Hooks != nil {
+			o.Hooks.Close(Chunk{ConnID: sess.ConnID, UserID: user, Path: "udp"})
+		}
+	}()
 	u.StartWatchdog()
 
 	buf := make([]byte, 65535)
@@ -340,7 +363,20 @@ func (s *Server) relayUDP(ctx context.Context, sess *Session) error {
 			return ctx.Err()
 		default:
 		}
+		meta := Chunk{ConnID: sess.ConnID, UserID: user, Dir: DirUpload, Path: "udp", N: int64(len(buf))}
+		var token any
+		if o.Hooks != nil {
+			var err error
+			token, err = o.Hooks.Begin(meta)
+			if err != nil {
+				return err
+			}
+		}
 		n, dest, err := sess.Packets.ReadPacket(buf)
+		if o.Hooks != nil {
+			meta.N, meta.Err = int64(n), err
+			o.Hooks.Complete(meta, token)
+		}
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 				return nil
@@ -363,10 +399,12 @@ func (s *Server) relayUDP(ctx context.Context, sess *Session) error {
 // udpAssoc is one destination association (a connected UDP socket or an
 // outbound PacketStream).
 type udpAssoc struct {
-	dest   socks.Addr
-	conn   net.Conn
-	stream PacketStream
-	last   atomic.Int64
+	dest      socks.Addr
+	conn      net.Conn
+	stream    PacketStream
+	last      atomic.Int64
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (u *udpRelay) forward(payload []byte, dest socks.Addr) {
@@ -434,8 +472,12 @@ func (u *udpRelay) forward(payload []byte, dest socks.Addr) {
 			return
 		}
 		u.assocs[dest] = a
+		u.readers.Add(1)
 		u.mu.Unlock()
-		go u.readBack(a)
+		go func() {
+			defer u.readers.Done()
+			u.readBack(a)
+		}()
 	}
 
 	a.last.Store(time.Now().UnixNano())
@@ -444,48 +486,40 @@ func (u *udpRelay) forward(payload []byte, dest socks.Addr) {
 			return
 		}
 	}
-	var token any
-	if u.opts.Hooks != nil {
-		meta := Chunk{ConnID: u.sess.ConnID, UserID: u.user, Dir: DirUpload, Path: "udp", N: int64(len(payload))}
-		var herr error
-		token, herr = u.opts.Hooks.Begin(meta)
-		if herr != nil {
-			return
-		}
-	}
-	if err := a.Write(payload); err != nil {
-		if u.opts.Hooks != nil {
-			meta := Chunk{ConnID: u.sess.ConnID, UserID: u.user, Dir: DirUpload, Path: "udp", N: int64(len(payload)), Err: err}
-			u.opts.Hooks.Complete(meta, token)
-		}
+	n, err := a.Write(payload)
+	u.count(true, int64(n))
+	if err != nil {
 		u.log.Debug("udp through outbound failed; dropping until it can be retried",
 			"dest", dest.String(), "err", err)
 		u.remove(dest, a)
 		return
 	}
-	if u.opts.Hooks != nil {
-		meta := Chunk{ConnID: u.sess.ConnID, UserID: u.user, Dir: DirUpload, Path: "udp", N: int64(len(payload))}
-		u.opts.Hooks.Complete(meta, token)
-	}
 }
 
-func (a *udpAssoc) Write(payload []byte) error {
+func (a *udpAssoc) Write(payload []byte) (int, error) {
 	if a.stream != nil {
-		return a.stream.WritePacket(payload, a.dest)
+		if err := a.stream.WritePacket(payload, a.dest); err != nil {
+			return 0, err
+		}
+		return len(payload), nil
 	}
-	_, err := a.conn.Write(payload)
-	return err
+	n, err := a.conn.Write(payload)
+	if err == nil && n != len(payload) {
+		err = io.ErrShortWrite
+	}
+	return n, err
 }
 
 // Close releases both association shapes exactly once.
 func (a *udpAssoc) Close() error {
-	if a.stream != nil {
-		return a.stream.Close()
-	}
-	if a.conn != nil {
-		return a.conn.Close()
-	}
-	return nil
+	a.closeOnce.Do(func() {
+		if a.stream != nil {
+			a.closeErr = a.stream.Close()
+		} else if a.conn != nil {
+			a.closeErr = a.conn.Close()
+		}
+	})
+	return a.closeErr
 }
 
 type udpRelay struct {
@@ -500,10 +534,28 @@ type udpRelay struct {
 	upLims   []waiter
 	downLims []waiter
 	writeMu  sync.Mutex
+	readers  sync.WaitGroup
 
 	mu     sync.Mutex
 	assocs map[socks.Addr]*udpAssoc
 	closed bool
+}
+
+func (u *udpRelay) count(upload bool, n int64) {
+	if n <= 0 {
+		return
+	}
+	var up, down int64
+	if upload {
+		up = n
+	} else {
+		down = n
+	}
+	if u.opts.OnTraffic != nil {
+		u.opts.OnTraffic(u.user, up, down)
+	} else if u.opts.Tracker != nil {
+		u.opts.Tracker.Traffic(u.user, up, down)
+	}
 }
 
 func (u *udpRelay) assoc(dest socks.Addr) *udpAssoc {
@@ -527,24 +579,11 @@ func (u *udpRelay) readBack(a *udpAssoc) {
 	for {
 		var n int
 		var err error
-		var token any
 		addr := a.dest
-		if u.opts.Hooks != nil {
-			meta := Chunk{ConnID: u.sess.ConnID, UserID: u.user, Dir: DirDownload, Path: "udp", N: int64(len(buf))}
-			var herr error
-			if token, herr = u.opts.Hooks.Begin(meta); herr != nil {
-				u.remove(a.dest, a)
-				return
-			}
-		}
 		if a.stream != nil {
 			n, addr, err = a.stream.ReadPacket(buf)
 		} else {
 			n, err = a.conn.Read(buf)
-		}
-		if u.opts.Hooks != nil {
-			meta := Chunk{ConnID: u.sess.ConnID, UserID: u.user, Dir: DirDownload, Path: "udp", N: int64(n), Err: err}
-			u.opts.Hooks.Complete(meta, token)
 		}
 		if err != nil {
 			u.remove(a.dest, a)
@@ -561,10 +600,34 @@ func (u *udpRelay) readBack(a *udpAssoc) {
 			}
 		}
 		u.writeMu.Lock()
-		if !u.isClosed() {
-			_ = u.sess.Packets.WritePacket(buf[:n], addr)
+		if u.isClosed() {
+			u.writeMu.Unlock()
+			return
+		}
+		meta := Chunk{ConnID: u.sess.ConnID, UserID: u.user, Dir: DirDownload, Path: "udp", N: int64(n)}
+		var token any
+		if u.opts.Hooks != nil {
+			token, err = u.opts.Hooks.Begin(meta)
+			if err != nil {
+				u.writeMu.Unlock()
+				u.remove(a.dest, a)
+				return
+			}
+		}
+		err = u.sess.Packets.WritePacket(buf[:n], addr)
+		if u.opts.Hooks != nil {
+			meta.Err = err
+			if err != nil {
+				meta.N = 0
+			}
+			u.opts.Hooks.Complete(meta, token)
 		}
 		u.writeMu.Unlock()
+		if err != nil {
+			u.remove(a.dest, a)
+			return
+		}
+		u.count(false, int64(n))
 	}
 }
 
@@ -584,9 +647,12 @@ func (u *udpRelay) close() {
 	}
 	u.assocs = make(map[socks.Addr]*udpAssoc)
 	u.mu.Unlock()
+	// Interrupt client writes before waiting for the readers that issue them.
+	_ = u.sess.Close()
 	for _, a := range list {
 		_ = a.Close()
 	}
+	u.readers.Wait()
 }
 
 // watchdog closes associations idle for longer than udp_timeout.

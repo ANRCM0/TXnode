@@ -66,13 +66,14 @@ const (
 // Options is the contract's QUIC inbound option set plus the two knobs the
 // hysteria implementation needs to reproduce the sample.
 type Options struct {
-	Users      []core.User
-	TLSConfig  *tls.Config
-	Congestion string
-	UpMbps     int
-	DownMbps   int
-	Brutal     bool
-	Logger     *slog.Logger
+	Users           []core.User
+	AllowEmptyUsers bool
+	TLSConfig       *tls.Config
+	Congestion      string
+	UpMbps          int
+	DownMbps        int
+	Brutal          bool
+	Logger          *slog.Logger
 	// Relay hands an established session to the node. When nil the server
 	// relays the stream itself (useful for the loopback tests).
 	Relay func(ctx context.Context, sess *core.Session) error
@@ -92,8 +93,9 @@ type Server struct {
 	opts Options
 	log  *slog.Logger
 
-	usersMu sync.RWMutex
-	users   map[string]core.User
+	usersMu            sync.RWMutex
+	users              map[string]core.User
+	credentialValidity map[string]*atomic.Bool
 
 	// upBytesPerSec and downBytesPerSec convert the Mbps options to the byte
 	// rates the protocol speaks. INFERRED: pkg.FlexInt -> *1e6/8 is not
@@ -124,7 +126,7 @@ func NewServer(o Options) (*Server, error) {
 	if o.TLSConfig == nil {
 		return nil, errors.New("hysteria: a TLS config is required (QUIC has no plaintext mode)")
 	}
-	if len(o.Users) == 0 {
+	if len(o.Users) == 0 && !o.AllowEmptyUsers {
 		return nil, errors.New("hysteria: no users configured")
 	}
 	log := o.Logger
@@ -147,9 +149,10 @@ func NewServer(o Options) (*Server, error) {
 		}
 		s.users[token] = u
 	}
-	if len(s.users) == 0 {
+	if len(s.users) == 0 && !(o.AllowEmptyUsers && len(o.Users) == 0) {
 		return nil, errors.New("hysteria: no usable auth tokens")
 	}
+	s.SetUsers(o.Users)
 	s.upBytesPerSec = mbpsToBytesPerSec(o.UpMbps)
 	s.downBytesPerSec = mbpsToBytesPerSec(o.DownMbps)
 	// cfg->cc_auto (+0x28) is false when the node has a fixed bandwidth. Same
@@ -182,7 +185,23 @@ func (s *Server) SetUsers(users []core.User) {
 		next[u.UUID] = u
 	}
 	s.usersMu.Lock()
+	valid := make(map[string]*atomic.Bool, len(next))
+	for token, u := range next {
+		if old, ok := s.users[token]; ok && old.ID == u.ID && s.credentialValidity[token] != nil {
+			valid[token] = s.credentialValidity[token]
+		} else {
+			v := new(atomic.Bool)
+			v.Store(true)
+			valid[token] = v
+		}
+	}
+	for token, v := range s.credentialValidity {
+		if valid[token] != v {
+			v.Store(false)
+		}
+	}
 	s.users = next
+	s.credentialValidity = valid
 	s.usersMu.Unlock()
 }
 

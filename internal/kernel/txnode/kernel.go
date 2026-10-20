@@ -27,14 +27,16 @@ type Kernel struct {
 	rt  RuntimeConfig
 	log *slog.Logger
 
-	mu      sync.Mutex
-	spec    *spec
-	tracker *core.Tracker
-	srv     *core.Server
-	bind    *bindResult
-	users   map[int]model.UserSpec
-	gate    *deviceGate
-	running bool
+	mu       sync.Mutex
+	spec     *spec
+	tracker  *core.Tracker
+	srv      *core.Server
+	bind     *bindResult
+	auth     *liveHandler
+	retiring map[*core.Server]*nativeMeter
+	users    map[int]model.UserSpec
+	gate     *deviceGate
+	running  bool
 
 	router atomic.Pointer[core.Router]
 
@@ -55,11 +57,12 @@ type Kernel struct {
 func New(rt RuntimeConfig) *Kernel {
 	rt = rt.normalized()
 	k := &Kernel{
-		rt:      rt,
-		log:     rt.logger(),
-		tracker: core.NewTracker(),
-		users:   make(map[int]model.UserSpec),
-		gate:    newDeviceGate(),
+		rt:       rt,
+		log:      rt.logger(),
+		tracker:  core.NewTracker(),
+		users:    make(map[int]model.UserSpec),
+		gate:     newRuntimeDeviceGate(rt),
+		retiring: make(map[*core.Server]*nativeMeter),
 	}
 	k.tracker.SetDeviceGate(k.gate)
 	if rt.UserTCPLimit > 0 {
@@ -101,8 +104,7 @@ func (k *Kernel) Capabilities() kernel.Capabilities {
 	}
 }
 
-// Start builds and binds the node. Calling Start while running replaces the
-// listener atomically (build first, swap, then close the old one).
+// Start builds and binds the node. Reload preserves established sessions.
 func (k *Kernel) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
@@ -111,15 +113,33 @@ func (k *Kernel) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls k
 	if err != nil {
 		return err
 	}
-	k.replaceUsersLocked(users)
+	if k.running && k.meter != nil && k.meter.collector != nil {
+		return fmt.Errorf("txnode: stop bounded runtime and install a fresh meter before Start")
+	}
 	if k.running {
 		k.stopLocked()
 	}
+	if k.meter != nil && k.meter.stopped.Load() {
+		if k.meter.collector != nil {
+			return fmt.Errorf("txnode: stopped bounded runtime requires a fresh meter")
+		}
+		k.installEventMeterLocked(k.localEvents())
+	}
+	if k.meter != nil && k.meter.collector != nil && !k.meter.enforcingNow() {
+		return fmt.Errorf("txnode: bounded runtime requires an enforcing meter")
+	}
+	k.admission.Store(false)
 
 	_, router, _, _, srv, res, err := k.buildLocked(nodeConfig, sp, users, tls)
 	if err != nil {
 		return err
 	}
+	if err := res.activateDatagrams(); err != nil {
+		res.closeAll()
+		_ = srv.Close()
+		return err
+	}
+	k.publishUsersLocked(users)
 	if err := k.installLocked(sp, router, srv, res); err != nil {
 		res.closeAll()
 		return err
@@ -133,21 +153,33 @@ func (k *Kernel) Start(nodeConfig *model.NodeSpec, users []model.UserSpec, tls k
 func (k *Kernel) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls kernel.TLSCert) error {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	if !k.running {
+		return fmt.Errorf("txnode: Reload requires a running runtime")
+	}
+	if k.meter != nil && k.meter.stopped.Load() {
+		return fmt.Errorf("txnode: stopped meter requires a fresh runtime")
+	}
 
 	sp, err := specFromNode(nodeConfig)
 	if err != nil {
 		return err
 	}
-	k.replaceUsersLocked(users)
-
-	_, router, _, _, srv, res, err := k.buildLocked(nodeConfig, sp, sortedUsers(k.users), tls)
+	_, router, _, _, srv, res, err := k.buildLocked(nodeConfig, sp, users, tls)
 	if err != nil {
 		return err
 	}
-	oldSrv, oldBind := k.srv, k.bind
-	if oldBind != nil {
-		oldBind.closeDatagrams()
+	oldSrv, oldBind, oldAuth, oldMeter := k.srv, k.bind, k.auth, k.meter
+	wasAdmitted := k.admission.Swap(false)
+	if err := switchDatagrams(oldBind, res); err != nil {
+		res.closeAll()
+		_ = srv.Close()
+		k.admission.Store(wasAdmitted)
+		return err
 	}
+	if oldAuth != nil {
+		oldAuth.Retire()
+	}
+	k.publishUsersLocked(users)
 	if err := k.installLocked(sp, router, srv, res); err != nil {
 		res.closeAll()
 		return err
@@ -156,13 +188,19 @@ func (k *Kernel) Reload(nodeConfig *model.NodeSpec, users []model.UserSpec, tls 
 		oldBind.closeAll()
 	}
 	if oldSrv != nil {
+		k.retiring[oldSrv] = oldMeter
 		go func() {
 			// Let sessions accepted by the old generation finish on their old
 			// handler, then release its resources.
 			time.Sleep(k.rt.DrainTimeout)
-			drainServer(oldSrv, 0)
+			drainServer(oldSrv, k.rt.DrainTimeout)
+			oldMeter.detachServer(oldSrv)
+			k.mu.Lock()
+			delete(k.retiring, oldSrv)
+			k.mu.Unlock()
 		}()
 	}
+	k.admission.Store(wasAdmitted)
 	k.log.Info("node reloaded", "protocol", sp.Protocol, "addr", sp.Addr())
 	return nil
 }
@@ -175,10 +213,11 @@ func (k *Kernel) buildLocked(nc *model.NodeSpec, sp *spec, users []model.UserSpe
 	// server side has to be installed before the first listener accepts.
 	installMuxServer()
 	cu := coreUsers(users)
-	handler, err := buildHandler(sp, cu, k.log)
+	handler, err := newLiveHandler(sp, cu, k.log)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, err
 	}
+	handler.Inherit(k.auth)
 	router, err := compileRouter(nc, k.rt, k.log)
 	if err != nil {
 		return nil, nil, nil, nil, nil, nil, err
@@ -198,6 +237,7 @@ func (k *Kernel) buildLocked(nc *model.NodeSpec, sp *spec, users []model.UserSpe
 		Forbidden: k.rt.InvalidAccessForbidden,
 	}, k.log)
 
+	meter := k.meter
 	srv := core.NewServer(core.ServerOptions{
 		Handler:              handler,
 		Tracker:              k.tracker,
@@ -212,7 +252,7 @@ func (k *Kernel) buildLocked(nc *model.NodeSpec, sp *spec, users []model.UserSpe
 		ProxyProtocol:        sp.ProxyProtocol || k.rt.ProxyProtocol,
 		RequireProxyProtocol: sp.RequireProxyProtocol || k.rt.RequireProxyProtocol,
 		BindLocal:            k.rt.AutoOutIP,
-		Admission:            k.admitted,
+		Admission:            func() bool { return k.admitted() && (meter == nil || !meter.stopped.Load()) },
 		OnAudit:              k.auditSession,
 		Hooks:                k.chunkHook(),
 	})
@@ -221,6 +261,7 @@ func (k *Kernel) buildLocked(nc *model.NodeSpec, sp *spec, users []model.UserSpe
 		_ = srv.Close()
 		return nil, nil, nil, nil, nil, nil, err
 	}
+	res.auth = handler
 	return handler, router, tlsCfg, re, srv, res, nil
 }
 
@@ -229,14 +270,9 @@ func (k *Kernel) installLocked(sp *spec, router *core.Router, srv *core.Server, 
 	k.router.Store(router)
 	k.srv = srv
 	k.bind = res
+	k.auth = res.auth
 	publishMux(k)
-	if k.meter != nil {
-		k.meter.onStop = func() {
-			if k.srv != nil {
-				k.srv.CloseAllSessions()
-			}
-		}
-	}
+	k.meter.attachServer(srv)
 	k.spec = sp
 	k.running = true
 	serveTCP(srv, res.ln, k.log)
@@ -251,6 +287,10 @@ func (k *Kernel) Stop() {
 }
 
 func (k *Kernel) stopLocked() {
+	k.admission.Store(false)
+	if k.auth != nil {
+		k.auth.Retire()
+	}
 	unpublishMux(k)
 	if k.bind != nil {
 		k.bind.closeAll()
@@ -258,8 +298,15 @@ func (k *Kernel) stopLocked() {
 	}
 	if k.srv != nil {
 		drainServer(k.srv, k.rt.DrainTimeout)
+		k.meter.detachServer(k.srv)
 		k.srv = nil
 	}
+	for srv, meter := range k.retiring {
+		drainServer(srv, k.rt.DrainTimeout)
+		meter.detachServer(srv)
+		delete(k.retiring, srv)
+	}
+	k.meter.retire()
 	if k.running {
 		k.log.Info("node stopped")
 	}
@@ -277,16 +324,22 @@ func (k *Kernel) IsRunning() bool {
 func (k *Kernel) AddUsers(users []model.UserSpec) (int, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	next := make(map[int]model.UserSpec, len(k.users)+len(users))
+	for id, u := range k.users {
+		next[id] = u
+	}
 	added := 0
 	for _, u := range users {
-		if _, exists := k.users[u.ID]; exists {
+		if _, exists := next[u.ID]; exists {
 			continue
 		}
-		k.users[u.ID] = u
+		next[u.ID] = u
 		added++
 	}
 	if added > 0 {
-		k.syncLocked()
+		if err := k.replaceUsersLocked(sortedUsers(next)); err != nil {
+			return 0, err
+		}
 	}
 	return added, nil
 }
@@ -295,25 +348,24 @@ func (k *Kernel) AddUsers(users []model.UserSpec) (int, error) {
 func (k *Kernel) RemoveUsers(users []model.UserSpec) (int, error) {
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	removed := make([]int, 0, len(users))
+	next := make(map[int]model.UserSpec, len(k.users))
+	for id, u := range k.users {
+		next[id] = u
+	}
+	removed := 0
 	for _, u := range users {
-		if _, exists := k.users[u.ID]; !exists {
+		if _, exists := next[u.ID]; !exists {
 			continue
 		}
-		delete(k.users, u.ID)
-		removed = append(removed, u.ID)
+		delete(next, u.ID)
+		removed++
 	}
-	if len(removed) > 0 {
-		k.syncLocked()
-	}
-	k.mu.Unlock()
-	for _, id := range removed {
-		if n := k.tracker.CloseUserConns(id); n > 0 {
-			k.log.Debug("closed sessions of removed user", "user", id, "sessions", n)
+	if removed > 0 {
+		if err := k.replaceUsersLocked(sortedUsers(next)); err != nil {
+			return 0, err
 		}
 	}
-	k.mu.Lock()
-	return len(removed), nil
+	return removed, nil
 }
 
 // UpdateUsers replaces the whole table.
@@ -335,13 +387,9 @@ func (k *Kernel) UpdateUsers(users []model.UserSpec) (int, int, error) {
 			removed = append(removed, id)
 		}
 	}
-	k.users = next
-	k.syncLocked()
-	k.mu.Unlock()
-	for _, id := range removed {
-		k.tracker.CloseUserConns(id)
+	if err := k.replaceUsersLocked(sortedUsers(next)); err != nil {
+		return 0, 0, err
 	}
-	k.mu.Lock()
 	return added, len(removed), nil
 }
 
@@ -435,6 +483,9 @@ func (k *Kernel) StopAuthorization() {
 	if k.srv != nil {
 		k.srv.CloseAllSessions()
 	}
+	for srv := range k.retiring {
+		srv.CloseAllSessions()
+	}
 	if k.bind != nil {
 		if k.bind.ln != nil {
 			_ = k.bind.ln.Close()
@@ -459,23 +510,11 @@ func (k *Kernel) NewNativeMeter(collector *usageinterval.NativeCollector, users 
 	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
-	if k.running {
+	meter, ok := k.replaceNativeMeterLocked(collector, users)
+	if !ok {
 		return nil, false
 	}
-	if k.meter != nil {
-		if k.meter.collector != nil {
-			return nil, false
-		}
-		k.meter.collector = collector
-		k.meter.users = users
-		return k.meter, true
-	}
-	m := &nativeMeter{collector: collector, users: users}
-	if k.localEvents() != nil {
-		m.setEventMeter(k.localEvents())
-	}
-	k.meter = m
-	return m, true
+	return meter, true
 }
 
 // SetNativeUsageTracker implements service.nativeUsageKernel: it turns the meter
@@ -515,9 +554,7 @@ func (k *Kernel) SetLocalEventConsumer(consumer *usagebucket.Coordinator) bool {
 	}
 	k.localCoord = consumer
 	k.localEventMeter = meter
-	if k.meter != nil {
-		k.meter.setEventMeter(meter)
-	}
+	k.installEventMeterLocked(meter)
 	return true
 }
 
@@ -534,24 +571,57 @@ func (k *Kernel) chunkHook() core.ChunkHook {
 
 // syncLocked refreshes the tracker, the device gate and the limit buckets from
 // the current user table.
-func (k *Kernel) syncLocked() {
+func (k *Kernel) syncLocked() error {
+	wasAdmitted := k.admission.Swap(false)
+	defer k.admission.Store(wasAdmitted)
 	users := sortedUsers(k.users)
-	k.tracker.SetUsers(coreUsers(users))
+	cu := coreUsers(users)
+	if k.auth != nil {
+		if err := k.auth.SetUsers(cu); err != nil {
+			return err
+		}
+	}
+	if k.bind != nil {
+		k.bind.datagramUsers = append([]core.User(nil), cu...)
+		for _, setter := range k.bind.userSetters {
+			setter.SetUsers(cu)
+		}
+	}
+	k.refreshPolicyLocked(users)
+	return nil
+}
+
+func (k *Kernel) refreshPolicyLocked(users []model.UserSpec) {
 	if k.gate != nil {
 		k.gate.setUsers(users)
 	}
+	k.tracker.SetUsers(coreUsers(users))
 	for _, u := range users {
 		k.applyUserLimitLocked(u)
 	}
 }
 
-func (k *Kernel) replaceUsersLocked(users []model.UserSpec) {
+func (k *Kernel) replaceUsersLocked(users []model.UserSpec) error {
+	previous := k.users
+	k.publishUserMapLocked(users)
+	if err := k.syncLocked(); err != nil {
+		k.users = previous
+		return err
+	}
+	return nil
+}
+
+func (k *Kernel) publishUsersLocked(users []model.UserSpec) {
+	k.publishUserMapLocked(users)
+	k.refreshPolicyLocked(users)
+}
+
+func (k *Kernel) publishUserMapLocked(users []model.UserSpec) {
 	next := make(map[int]model.UserSpec, len(users))
 	for _, u := range users {
 		next[u.ID] = u
 	}
 	k.users = next
-	k.syncLocked()
 }
 
 func (k *Kernel) applyLimitsLocked() {

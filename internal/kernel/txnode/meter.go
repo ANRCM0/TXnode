@@ -21,15 +21,26 @@ const deviceGlobalTTL = 60 * time.Second
 // called from Tracker.Acquire while the tracker is locked: it must never call
 // back into the kernel or the tracker.
 type deviceGate struct {
-	mu       sync.RWMutex
-	uuid     map[int]string
-	global   map[int]map[string]bool
-	globalAt time.Time
-	limitFn  func(uuid string) (int, bool)
+	mu           sync.RWMutex
+	uuid         map[int]string
+	global       map[int]map[string]bool
+	globalAt     time.Time
+	limitFn      func(uuid string) (int, bool)
+	defaultLimit int
+	ipv6Prefix   int
 }
 
 func newDeviceGate() *deviceGate {
-	return &deviceGate{uuid: make(map[int]string), global: make(map[int]map[string]bool)}
+	return &deviceGate{uuid: make(map[int]string), global: make(map[int]map[string]bool), ipv6Prefix: 64}
+}
+
+func newRuntimeDeviceGate(rt RuntimeConfig) *deviceGate {
+	g := newDeviceGate()
+	g.defaultLimit = rt.DeviceLimit
+	if rt.DeviceIPv6Prefix > 0 && rt.DeviceIPv6Prefix <= 128 {
+		g.ipv6Prefix = rt.DeviceIPv6Prefix
+	}
+	return g
 }
 
 func (g *deviceGate) setUsers(users []model.UserSpec) {
@@ -56,7 +67,8 @@ func (g *deviceGate) setGlobal(users map[int][]string) {
 	for id, addrs := range users {
 		set := make(map[string]bool, len(addrs))
 		for _, a := range addrs {
-			if key := normalizeDeviceAddr(a); key != "" {
+			addr, _ := netip.ParseAddr(a)
+			if key := deviceKeyWithPrefix(addr, g.ipv6Prefix); key != "" {
 				set[key] = true
 			}
 		}
@@ -75,7 +87,7 @@ func (g *deviceGate) clearGlobal() {
 
 // Allow implements core.DeviceGate.
 func (g *deviceGate) Allow(userID int, src netip.Addr, local map[string]int) bool {
-	key := deviceKeyOf(src)
+	key := deviceKeyWithPrefix(src, g.ipv6Prefix)
 	if key == "" {
 		return true
 	}
@@ -87,14 +99,16 @@ func (g *deviceGate) Allow(userID int, src netip.Addr, local map[string]int) boo
 	globalAt := g.globalAt
 	g.mu.RUnlock()
 
-	if limitFn == nil {
+	limit := g.defaultLimit
+	if limitFn != nil {
+		if n, ok := limitFn(uuid); ok && n > 0 && (limit <= 0 || n < limit) {
+			limit = n
+		}
+	}
+	if limit <= 0 {
 		return true
 	}
-	limit, ok := limitFn(uuid)
-	if !ok || limit <= 0 {
-		return true
-	}
-	if _, known := local[key]; known {
+	if local[key] > 0 {
 		return true
 	}
 
@@ -103,10 +117,10 @@ func (g *deviceGate) Allow(userID int, src netip.Addr, local map[string]int) boo
 		if len(local) < limit {
 			return true
 		}
-		return admitsLexicographically(local, key, limit)
+		return false
 	}
 	if globalSet[key] {
-		return true
+		return len(local) < limit
 	}
 	union := make(map[string]struct{}, len(local)+len(globalSet)+1)
 	for k := range local {
@@ -117,6 +131,11 @@ func (g *deviceGate) Allow(userID int, src netip.Addr, local map[string]int) boo
 	}
 	if len(union) < limit {
 		return true
+	}
+	// Locally live sessions cannot be evicted by a lexicographically earlier
+	// newcomer, so admitting that newcomer would exceed the actual quota.
+	if len(local) >= limit {
+		return false
 	}
 	return admitsLexicographicallySet(union, key, limit)
 }
@@ -147,6 +166,10 @@ func admitsLexicographicallySet(union map[string]struct{}, key string, limit int
 // deviceKeyOf normalises a source address the same way core.Tracker.deviceKey
 // does: IPv6 collapses to its /64 prefix.
 func deviceKeyOf(a netip.Addr) string {
+	return deviceKeyWithPrefix(a, 64)
+}
+
+func deviceKeyWithPrefix(a netip.Addr, prefix int) string {
 	if !a.IsValid() {
 		return ""
 	}
@@ -154,7 +177,7 @@ func deviceKeyOf(a netip.Addr) string {
 		a = a.Unmap()
 	}
 	if a.Is6() {
-		if p, err := a.Prefix(64); err == nil {
+		if p, err := a.Prefix(prefix); err == nil {
 			return p.String()
 		}
 	}

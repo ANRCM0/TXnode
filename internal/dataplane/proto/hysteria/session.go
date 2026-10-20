@@ -160,11 +160,15 @@ func (s *udpSession) ReadPacket(p []byte) (int, socks.Addr, error) {
 
 // WritePacket sends one response datagram back to the client.
 func (s *udpSession) WritePacket(p []byte, addr socks.Addr) error {
+	select {
+	case <-s.done:
+		return net.ErrClosed
+	default:
+	}
 	if addr.IsZero() {
 		addr = s.Dest
 	}
-	s.st.sendUDPMessage(s.id, addr.String(), p)
-	return nil
+	return s.st.sendUDPMessage(s.id, addr.String(), p)
 }
 
 func (s *udpSession) Close() error {
@@ -198,6 +202,9 @@ func (st *connState) startDatagramLoop() {
 
 // dispatch routes one inbound datagram to its session.
 func (st *connState) dispatch(p []byte) {
+	if !st.authValid() {
+		return
+	}
 	if now := time.Now(); now.After(st.sweepAt) {
 		st.sweepAt = now.Add(time.Second)
 		st.sweep(now)
@@ -279,12 +286,16 @@ func (st *connState) session(sid uint32, dest socks.Addr) (*udpSession, error) {
 		go s.receive()
 	} else {
 		go func() {
-			sess := &core.Session{UserID: st.userIDValue(), Dest: dest, Conn: conn, Packets: s}
+			sess := &core.Session{UserID: st.userIDValue(), Dest: dest, Packets: s, SourceIP: st.sourceIP(), AuthValid: st.authValid}
 			if err := st.srv.opts.Relay(st.conn.Context(), sess); err != nil {
 				st.srv.log.Debug("hysteria: udp relay finished", "error", err)
 			}
 			_ = s.Close()
-			st.dropSession(sid)
+			st.sessMu.Lock()
+			if st.sessions[sid] == s {
+				delete(st.sessions, sid)
+			}
+			st.sessMu.Unlock()
 		}()
 	}
 	return s, nil
@@ -367,34 +378,49 @@ func (s *udpSession) reassemble(packetID uint16, id, total uint8, part []byte) [
 
 // sendUDPMessage serialises one response, fragmenting when it exceeds the
 // datagram budget.
-func (st *connState) sendUDPMessage(sid uint32, addr string, payload []byte) {
+func (st *connState) sendUDPMessage(sid uint32, addr string, payload []byte) error {
 	max := maxDatagramPayload - datagramOverhead - len(addr) - quicvarint.Len(uint64(len(addr)))
 	if max < 64 {
 		max = 64
 	}
 	if len(payload) <= max {
-		st.sendDatagram((&udpMessage{SessionID: sid, FragCount: 1, Addr: addr, Data: payload}).marshal())
-		return
+		return st.sendDatagram((&udpMessage{SessionID: sid, FragCount: 1, Addr: addr, Data: payload}).marshal())
 	}
 	total := (len(payload) + max - 1) / max
 	if total > maxFragments {
-		total = maxFragments
+		return errors.New("hysteria: udp payload exceeds fragment capacity")
 	}
 	for i := 0; i < total; i++ {
 		chunk := payload[i*max:]
 		if len(chunk) > max {
 			chunk = chunk[:max]
 		}
-		st.sendDatagram((&udpMessage{
+		if err := st.sendDatagram((&udpMessage{
 			SessionID: sid, FragID: uint8(i), FragCount: uint8(total), Addr: addr, Data: chunk,
-		}).marshal())
+		}).marshal()); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
-func (st *connState) sendDatagram(p []byte) {
+func (st *connState) sendDatagram(p []byte) error {
 	if err := st.conn.SendDatagram(p); err != nil {
 		st.srv.log.Debug("hysteria: datagram send failed", "error", err)
+		return err
 	}
+	return nil
+}
+
+func (st *connState) sourceIP() netip.Addr {
+	if st.conn == nil {
+		return netip.Addr{}
+	}
+	addr, err := netip.ParseAddrPort(st.conn.RemoteAddr().String())
+	if err != nil {
+		return netip.Addr{}
+	}
+	return addr.Addr()
 }
 
 func dialUDP(dest socks.Addr) (net.Conn, error) {

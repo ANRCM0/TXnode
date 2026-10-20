@@ -2,11 +2,13 @@ package txnode
 
 import (
 	"bufio"
+	"context"
 	"encoding/binary"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
@@ -146,14 +148,17 @@ func TestKernelLocalEventMeterAccountsRelay(t *testing.T) {
 	}))
 	defer origin.Close()
 
-	meter, err := usagebucket.New(usagebucket.Options{Enabled: true, Window: time.Second, MaxEvents: 64, MaxSealed: 4})
+	consumer, err := usagebucket.NewAsyncCoordinator(filepath.Join(t.TempDir(), "events"), usagebucket.StoreOptions{}, usagebucket.CoordinatorOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = consumer.Close(context.Background()) })
 	port := freePortTB(t)
 	k := New(RuntimeConfig{TrustedProxies: "private", MaxFresh: 64, HandshakeTimeout: 5 * time.Second})
-	k.meter = &nativeMeter{}
-	k.meter.setEventMeter(meter)
+	if !k.SetLocalEventConsumer(consumer) {
+		t.Fatal("SetLocalEventConsumer refused")
+	}
+	meter := k.localEvents()
 	ns := &model.NodeSpec{Protocol: "socks", ListenIP: "127.0.0.1", ServerPort: port}
 	if err := k.Start(ns, []model.UserSpec{{ID: 1, UUID: "secret-pass"}}, kernel.TLSCert{}); err != nil {
 		t.Fatalf("start: %v", err)
@@ -180,7 +185,8 @@ func TestKernelLocalEventMeterAccountsRelay(t *testing.T) {
 		for _, b := range snap.Sealed {
 			total += len(b.Events)
 		}
-		if total > 0 {
+		stored, _ := consumer.StoreSnapshot()
+		if total > 0 || stored.Buckets > 0 {
 			return
 		}
 		if time.Now().After(deadline) {

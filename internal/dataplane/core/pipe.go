@@ -78,16 +78,26 @@ func pipeLimited(ctx context.Context, a, b net.Conn, upLim, downLim []waiter, up
 // copyPipe is the userspace fallback: one goroutine per direction, half-close on
 // EOF so the peer's copy loop terminates.
 func copyPipe(ctx context.Context, a, b net.Conn, upLim, downLim []waiter, up, down func(int64), hook ChunkHook, meta Chunk) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	var wg sync.WaitGroup
 	wg.Add(2)
 	errCh := make(chan error, 2)
 	go func() {
 		defer wg.Done()
-		errCh <- copyDirection(ctx, b, a, upLim, up, hook, meta, DirUpload)
+		err := copyDirection(ctx, b, a, upLim, up, hook, meta, DirUpload)
+		errCh <- err
+		if err != nil {
+			cancel()
+		}
 	}()
 	go func() {
 		defer wg.Done()
-		errCh <- copyDirection(ctx, a, b, downLim, down, hook, meta, DirDownload)
+		err := copyDirection(ctx, a, b, downLim, down, hook, meta, DirDownload)
+		errCh <- err
+		if err != nil {
+			cancel()
+		}
 	}()
 
 	done := make(chan struct{})
@@ -126,7 +136,7 @@ func copyDirection(ctx context.Context, dst, src net.Conn, lims []waiter, count 
 	buf := make([]byte, copyBuf)
 	for {
 		var token any
-		if hook != nil {
+		if hook != nil && dir == DirUpload {
 			c := meta
 			c.Dir, c.N = dir, int64(len(buf))
 			var herr error
@@ -136,7 +146,7 @@ func copyDirection(ctx context.Context, dst, src net.Conn, lims []waiter, count 
 			}
 		}
 		n, rerr := src.Read(buf)
-		if hook != nil {
+		if hook != nil && dir == DirUpload {
 			c := meta
 			c.Dir, c.N, c.Err = dir, int64(n), rerr
 			hook.Complete(c, token)
@@ -147,7 +157,24 @@ func copyDirection(ctx context.Context, dst, src net.Conn, lims []waiter, count 
 					return err
 				}
 			}
+			if hook != nil && dir == DirDownload {
+				c := meta
+				c.Dir, c.N = dir, int64(n)
+				var herr error
+				token, herr = hook.Begin(c)
+				if herr != nil {
+					return herr
+				}
+			}
 			w, werr := dst.Write(buf[:n])
+			if werr == nil && w != n {
+				werr = io.ErrShortWrite
+			}
+			if hook != nil && dir == DirDownload {
+				c := meta
+				c.Dir, c.N, c.Err = dir, int64(w), werr
+				hook.Complete(c, token)
+			}
 			if w > 0 && count != nil {
 				count(int64(w))
 			}

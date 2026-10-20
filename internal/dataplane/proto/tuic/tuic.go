@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/apernet/quic-go"
@@ -56,14 +57,15 @@ const authErrorCode = quic.ApplicationErrorCode(21)
 // Options is the contract's QUIC inbound option set plus the TUIC-specific
 // knobs.
 type Options struct {
-	Users      []core.User
-	TLSConfig  *tls.Config
-	Congestion string
-	UpMbps     int
-	DownMbps   int
-	Brutal     bool
-	Logger     *slog.Logger
-	Relay      func(ctx context.Context, sess *core.Session) error
+	Users           []core.User
+	AllowEmptyUsers bool
+	TLSConfig       *tls.Config
+	Congestion      string
+	UpMbps          int
+	DownMbps        int
+	Brutal          bool
+	Logger          *slog.Logger
+	Relay           func(ctx context.Context, sess *core.Session) error
 
 	// Passwords maps a UUID string to its TUIC password. When nil the password
 	// is taken from User.UUID's "uuid:password" form (the panel hands the node a
@@ -88,8 +90,9 @@ type Server struct {
 	opts Options
 	log  *slog.Logger
 
-	usersMu sync.RWMutex
-	users   map[[16]byte]user
+	usersMu            sync.RWMutex
+	credentialValidity map[[16]byte]*atomic.Bool
+	users              map[[16]byte]user
 
 	pc net.PacketConn
 	tr *quic.Transport
@@ -122,7 +125,7 @@ func NewServer(o Options) (*Server, error) {
 	if o.TLSConfig == nil {
 		return nil, errors.New("tuic: a TLS config is required")
 	}
-	if len(o.Users) == 0 {
+	if len(o.Users) == 0 && !o.AllowEmptyUsers {
 		return nil, errors.New("tuic: no users configured")
 	}
 	log := o.Logger
@@ -131,7 +134,7 @@ func NewServer(o Options) (*Server, error) {
 	}
 	s := &Server{opts: o, log: log, users: make(map[[16]byte]user), closed: make(chan struct{})}
 	s.SetUsers(o.Users)
-	if len(s.users) == 0 {
+	if len(s.users) == 0 && !(o.AllowEmptyUsers && len(o.Users) == 0) {
 		return nil, errors.New("tuic: no user has a usable UUID")
 	}
 	return s, nil
@@ -154,7 +157,23 @@ func (s *Server) SetUsers(users []core.User) {
 		next[id] = user{ID: int64(u.ID), Password: password}
 	}
 	s.usersMu.Lock()
+	valid := make(map[[16]byte]*atomic.Bool, len(next))
+	for uuid, u := range next {
+		if old, ok := s.users[uuid]; ok && old.ID == u.ID && bytes.Equal(old.Password, u.Password) && s.credentialValidity[uuid] != nil {
+			valid[uuid] = s.credentialValidity[uuid]
+		} else {
+			v := new(atomic.Bool)
+			v.Store(true)
+			valid[uuid] = v
+		}
+	}
+	for uuid, v := range s.credentialValidity {
+		if valid[uuid] != v {
+			v.Store(false)
+		}
+	}
 	s.users = next
+	s.credentialValidity = valid
 	s.usersMu.Unlock()
 }
 
@@ -332,10 +351,11 @@ type client struct {
 	authDone chan struct{}
 	authOnce sync.Once
 
-	mu       sync.Mutex
-	authed   bool
-	userID   int64
-	sessions map[uint16]*udpSession
+	mu        sync.Mutex
+	authed    bool
+	userID    int64
+	userValid *atomic.Bool
+	sessions  map[uint16]*udpSession
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -393,15 +413,17 @@ func (c *client) waitAuth(ctx context.Context) bool {
 	case <-ctx.Done():
 		return false
 	case <-c.authDone:
-		return true
+		return c.isAuthed()
 	}
 }
 
 func (c *client) isAuthed() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.authed
+	return c.authed && c.userValid != nil && c.userValid.Load()
 }
+
+func (c *client) authValid() bool { return c.isAuthed() }
 
 func (c *client) failAuth() {
 	// Same call the binary makes for every auth failure.
@@ -457,6 +479,7 @@ func (c *client) authenticate(str *quic.ReceiveStream) {
 
 	c.srv.usersMu.RLock()
 	u, ok := c.srv.users[uuid]
+	valid := c.srv.credentialValidity[uuid]
 	c.srv.usersMu.RUnlock()
 	if !ok {
 		c.failAuth()
@@ -487,6 +510,7 @@ func (c *client) authenticate(str *quic.ReceiveStream) {
 		c.mu.Lock()
 		c.authed = true
 		c.userID = u.ID
+		c.userValid = valid
 		c.mu.Unlock()
 		// Congestion choice happens once, after authentication
 		// (node.applyQUIC.func1 @0xc9af80 only passes BBR for "bbr").
@@ -593,20 +617,22 @@ func (c *client) connect(str *quic.Stream) {
 		str.CancelWrite(quic.StreamErrorCode(0))
 		return
 	}
-	conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(c.ctx, "tcp", dest.String())
-	if err != nil {
-		str.CancelWrite(quic.StreamErrorCode(0))
-		return
-	}
 	sess := &core.Session{
-		UserID: int(c.userIDLocked()),
-		Dest:   dest,
-		Conn:   &streamConn{Stream: str, conn: c.conn},
+		UserID:    int(c.userIDLocked()),
+		AuthValid: c.authValid,
+		Dest:      dest,
+		Conn:      &streamConn{Stream: str, conn: c.conn},
 	}
 	if relay := c.srv.opts.Relay; relay != nil {
 		_ = relay(c.ctx, sess)
 		return
 	}
+	conn, err := (&net.Dialer{Timeout: 10 * time.Second}).DialContext(c.ctx, "tcp", dest.String())
+	if err != nil {
+		str.CancelWrite(quic.StreamErrorCode(0))
+		return
+	}
+	defer conn.Close()
 	pipeStream(c.ctx, sess.Conn, conn)
 }
 
@@ -624,10 +650,14 @@ type streamConn struct {
 
 func (c *streamConn) Read(p []byte) (int, error)  { return c.Stream.Read(p) }
 func (c *streamConn) Write(p []byte) (int, error) { return c.Stream.Write(p) }
-func (c *streamConn) Close() error                { return c.Stream.Close() }
-func (c *streamConn) CloseWrite() error           { return c.Stream.Close() }
-func (c *streamConn) LocalAddr() net.Addr         { return c.conn.LocalAddr() }
-func (c *streamConn) RemoteAddr() net.Addr        { return c.conn.RemoteAddr() }
+func (c *streamConn) Close() error {
+	c.Stream.CancelRead(0)
+	c.Stream.CancelWrite(0)
+	return nil
+}
+func (c *streamConn) CloseWrite() error    { return c.Stream.Close() }
+func (c *streamConn) LocalAddr() net.Addr  { return c.conn.LocalAddr() }
+func (c *streamConn) RemoteAddr() net.Addr { return c.conn.RemoteAddr() }
 func (c *streamConn) SetDeadline(t time.Time) error {
 	if err := c.Stream.SetReadDeadline(t); err != nil {
 		return err

@@ -84,17 +84,19 @@ type Server struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	connsMu sync.Mutex
-	conns   map[net.Conn]struct{}
+	connsMu  sync.Mutex
+	conns    map[net.Conn]struct{}
+	sessions map[*Session]struct{}
+	idle     chan struct{}
 
 	proxyMu   sync.Mutex
 	proxyWarn map[string]time.Time
 
 	closeOnce sync.Once
 	closed    chan struct{}
-
-	connSeq atomic.Uint64
 }
+
+var sessionSeq atomic.Uint64
 
 // ErrSessionRefused is returned by ServeSession when the tracker refuses the
 // session (connection or device limit). The caller has already logged the
@@ -130,9 +132,12 @@ func NewServer(o ServerOptions) *Server {
 		ctx:       ctx,
 		cancel:    cancel,
 		conns:     make(map[net.Conn]struct{}),
+		sessions:  make(map[*Session]struct{}),
+		idle:      make(chan struct{}),
 		proxyWarn: make(map[string]time.Time),
 		closed:    make(chan struct{}),
 	}
+	close(s.idle)
 	if o.Handler != nil {
 		s.handler.Store(&handlerBox{h: o.Handler})
 	}
@@ -345,15 +350,7 @@ func (s *Server) Close() error {
 				first = err
 			}
 		}
-		s.connsMu.Lock()
-		conns := make([]net.Conn, 0, len(s.conns))
-		for c := range s.conns {
-			conns = append(conns, c)
-		}
-		s.connsMu.Unlock()
-		for _, c := range conns {
-			_ = c.Close()
-		}
+		s.CloseAllSessions()
 	})
 	return first
 }
@@ -378,22 +375,83 @@ func (s *Server) CloseAllSessions() {
 	for c := range s.conns {
 		conns = append(conns, c)
 	}
+	sessions := make([]*Session, 0, len(s.sessions))
+	for sess := range s.sessions {
+		sessions = append(sessions, sess)
+	}
 	s.connsMu.Unlock()
+	for _, sess := range sessions {
+		_ = sess.Close()
+	}
 	for _, c := range conns {
 		_ = c.Close()
 	}
 }
 
-func (s *Server) track(c net.Conn) {
+func (s *Server) track(c net.Conn) bool {
 	s.connsMu.Lock()
+	defer s.connsMu.Unlock()
+	if s.isClosed() {
+		return false
+	}
+	if len(s.conns)+len(s.sessions) == 0 {
+		s.idle = make(chan struct{})
+	}
 	s.conns[c] = struct{}{}
-	s.connsMu.Unlock()
+	return true
 }
 
 func (s *Server) untrack(c net.Conn) {
 	s.connsMu.Lock()
 	delete(s.conns, c)
+	s.signalIdleLocked()
 	s.connsMu.Unlock()
+}
+
+func (s *Server) registerSession(sess *Session) bool {
+	s.connsMu.Lock()
+	defer s.connsMu.Unlock()
+	if s.isClosed() {
+		return false
+	}
+	if o := s.snapshot(); o.Admission != nil && !o.Admission() {
+		return false
+	}
+	if len(s.conns)+len(s.sessions) == 0 {
+		s.idle = make(chan struct{})
+	}
+	s.sessions[sess] = struct{}{}
+	return true
+}
+
+func (s *Server) unregisterSession(sess *Session) {
+	s.connsMu.Lock()
+	delete(s.sessions, sess)
+	s.signalIdleLocked()
+	s.connsMu.Unlock()
+}
+
+func (s *Server) signalIdleLocked() {
+	if len(s.conns)+len(s.sessions) == 0 {
+		select {
+		case <-s.idle:
+		default:
+			close(s.idle)
+		}
+	}
+}
+
+// WaitSessions waits for teardown and final accounting after admission is stopped.
+func (s *Server) WaitSessions(ctx context.Context) error {
+	s.connsMu.Lock()
+	idle := s.idle
+	s.connsMu.Unlock()
+	select {
+	case <-idle:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // warnUntrustedProxy logs the actionable warning once per source address in a
@@ -425,7 +483,10 @@ func (s *Server) handle(c net.Conn) {
 	}
 
 	// 1. track
-	s.track(c)
+	if !s.track(c) {
+		_ = c.Close()
+		return
+	}
 	defer s.untrack(c)
 
 	// 2. TCP keepalive
@@ -564,7 +625,7 @@ func (s *Server) serve(o ServerOptions, conn net.Conn, src netip.Addr, local net
 	}
 	o.Guard.Succeeded(src)
 	if sess.ConnID == 0 {
-		sess.ConnID = s.connSeq.Add(1)
+		sess.ConnID = sessionSeq.Add(1)
 	}
 	if sess.Conn == nil {
 		sess.Conn = conn
@@ -575,24 +636,45 @@ func (s *Server) serve(o ServerOptions, conn net.Conn, src netip.Addr, local net
 	if sess.Socket == nil {
 		sess.Socket = tcpWriter(conn)
 	}
+	sess.SourceIP = src
+	ctx, cancel := context.WithCancel(s.ctx)
+	defer cancel()
+	sess.cancel = cancel
+	prepareSession(sess)
+	if !s.registerSession(sess) {
+		_ = sess.Close()
+		return
+	}
+	defer s.unregisterSession(sess)
+	defer sess.Close()
 
 	lease, ok := s.acquire(sess, src, log)
 	if !ok {
-		_ = sess.Conn.Close()
+		_ = sess.Close()
 		return
 	}
 	defer lease.Release()
-	_ = s.serveSession(s.ctx, sess, src)
+	_ = s.serveSession(ctx, sess, src)
 }
 
 // acquire reserves the tracker quota for a session. A userID of 0 (protocols
 // without users) and a nil tracker are unrestricted.
 func (s *Server) acquire(sess *Session, src netip.Addr, log *slog.Logger) (*Lease, bool) {
 	o := s.snapshot()
+	if s.isClosed() || (o.Admission != nil && !o.Admission()) {
+		return nil, false
+	}
 	if o.Tracker == nil || sess.UserID <= 0 {
+		if sess.AuthValid != nil && !sess.AuthValid() {
+			return nil, false
+		}
 		return nil, true
 	}
-	lease, ok := o.Tracker.Acquire(sess.UserID, src, sess.Conn)
+	valid := func() bool {
+		return !s.isClosed() && (o.Admission == nil || o.Admission()) &&
+			(sess.AuthValid == nil || sess.AuthValid())
+	}
+	lease, ok := o.Tracker.AcquireAuthenticated(sess.UserID, src, sess, valid)
 	if ok {
 		return lease, true
 	}
