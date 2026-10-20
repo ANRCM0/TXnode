@@ -397,9 +397,16 @@ func TestInteropXrayVMessNativeOutbound(t *testing.T) {
 	xrayBinary(t)
 	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer r.Body.Close()
-		w.Header().Set("Content-Length", strconv.FormatInt(r.ContentLength, 10))
-		if _, err := io.Copy(w, r.Body); err != nil {
-			t.Errorf("echo request: %v", err)
+		// HTTP/1 may drain an unread request body when the response starts.
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read echo request: %v", err)
+			http.Error(w, "read request", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		if _, err := w.Write(body); err != nil {
+			t.Errorf("write echo response: %v", err)
 		}
 	}))
 	t.Cleanup(origin.Close)
