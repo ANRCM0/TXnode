@@ -959,7 +959,7 @@ func udpEcho(t *testing.T) string {
 	}
 	t.Cleanup(func() { _ = pc.Close() })
 	go func() {
-		buf := make([]byte, 2048)
+		buf := make([]byte, 65535)
 		for {
 			n, addr, err := pc.ReadFrom(buf)
 			if err != nil {

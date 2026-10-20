@@ -127,8 +127,18 @@ func (h *Handler) fromStream(st Stream) (*core.Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	_ = PaddingHeader() // the response padding value, mirroring naive.PaddingHeader
-	data := st.Accept()
+	var data net.Conn
+	if padded, ok := st.(interface {
+		PaddingRequested() bool
+		AcceptPadding(string) net.Conn
+	}); ok && padded.PaddingRequested() {
+		data = padded.AcceptPadding(PaddingHeader())
+		if data != nil {
+			data = &paddingConn{Conn: data}
+		}
+	} else {
+		data = st.Accept()
+	}
 	if data == nil {
 		return nil, ErrNotTransport
 	}
@@ -165,7 +175,12 @@ func (h *Handler) fromHTTP1(conn net.Conn) (*core.Session, error) {
 		return nil, err
 	}
 	// The 200 carries the padding header, produced by naive.PaddingHeader.
-	resp := "HTTP/1.1 200 OK\r\nPadding: " + PaddingHeader() + "\r\n\r\n"
+	resp := "HTTP/1.1 200 OK\r\n"
+	padded := req.Header.Get("Padding") != ""
+	if padded {
+		resp += "Padding: " + PaddingHeader() + "\r\n"
+	}
+	resp += "\r\n"
 	if _, err := io.WriteString(conn, resp); err != nil {
 		return nil, err
 	}
@@ -173,10 +188,14 @@ func (h *Handler) fromHTTP1(conn net.Conn) (*core.Session, error) {
 	if user != nil {
 		userID = user.ID
 	}
+	var data net.Conn = &replayConn{Conn: conn, r: br}
+	if padded {
+		data = &paddingConn{Conn: data}
+	}
 	return &core.Session{
 		UserID: userID,
 		Dest:   dest,
-		Conn:   &replayConn{Conn: conn, r: br},
+		Conn:   data,
 		Socket: tcpConn(conn),
 	}, nil
 }
