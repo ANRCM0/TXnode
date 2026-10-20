@@ -347,6 +347,11 @@ func (s *Server) relayUDP(ctx context.Context, sess *Session) error {
 			}
 			return err
 		}
+		if dest.IsZero() {
+			// A packet stream without a per-packet destination rides on the
+			// session target.
+			dest = sess.Dest
+		}
 		if n == 0 {
 			continue
 		}

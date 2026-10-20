@@ -263,12 +263,14 @@ func (s *Stream) SetReadDeadline(t time.Time) error { return s.conn.SetReadDeadl
 // SetWriteDeadline implements net.Conn.
 func (s *Stream) SetWriteDeadline(t time.Time) error { return s.conn.SetWriteDeadline(t) }
 
-// Handler relays one Mux.Cool session.
-type Handler func(id uint16, dest socks.Addr, stream *Stream) error
+// Handler relays one Mux.Cool session: a TCP session carries stream, a UDP
+// (XUDP) session carries packets.
+type Handler func(id uint16, dest socks.Addr, stream *Stream, packets *UDPSession) error
 
 type session struct {
 	stream *Stream
 	pw     *io.PipeWriter
+	udp    *UDPSession
 }
 
 // Serve demultiplexes one Mux.Cool connection and relays every NEW TCP session
@@ -284,7 +286,12 @@ func Serve(conn net.Conn, h Handler) error {
 	open := make(map[uint16]*session)
 	defer func() {
 		for _, s := range open {
-			_ = s.pw.Close()
+			if s.pw != nil {
+				_ = s.pw.Close()
+			}
+			if s.udp != nil {
+				s.udp.close()
+			}
 		}
 	}()
 
@@ -298,12 +305,20 @@ func Serve(conn net.Conn, h Handler) error {
 			if !meta.HasTarget {
 				return errors.New("muxcool: NEW without target")
 			}
-			if meta.Network != NetworkTCP {
-				// xudp sessions are not carried; end the session so the peer
-				// fails cleanly.
-				_ = writeMetadata(conn, &Metadata{SessionID: meta.SessionID, Status: StatusEnd})
+			if meta.Network == NetworkUDP {
+				udp := newUDPSession(conn, meta.SessionID, meta.Dest)
+				open[meta.SessionID] = &session{udp: udp}
+				go func(id uint16, dest socks.Addr, u *UDPSession) {
+					_ = h(id, dest, nil, u)
+				}(meta.SessionID, meta.Dest, udp)
 				if meta.HasData() {
-					_, _ = io.Copy(io.Discard, &chunkReader{r: br})
+					body, err := readOneChunk(br)
+					if err != nil {
+						return err
+					}
+					if err := udp.feed(body); err != nil {
+						return err
+					}
 				}
 				continue
 			}
@@ -311,7 +326,7 @@ func Serve(conn net.Conn, h Handler) error {
 			st := &Stream{conn: conn, pr: pr, id: meta.SessionID, dest: meta.Dest}
 			open[meta.SessionID] = &session{stream: st, pw: pw}
 			go func(id uint16, dest socks.Addr, st *Stream) {
-				_ = h(id, dest, st)
+				_ = h(id, dest, st, nil)
 				_ = st.CloseWrite()
 			}(meta.SessionID, meta.Dest, st)
 			if meta.HasData() {
@@ -329,6 +344,16 @@ func Serve(conn net.Conn, h Handler) error {
 				continue
 			}
 			if meta.HasData() {
+				if s.udp != nil {
+					body, err := readOneChunk(br)
+					if err != nil {
+						return err
+					}
+					if err := s.udp.feed(body); err != nil {
+						return err
+					}
+					continue
+				}
 				if _, err := io.Copy(s.pw, &chunkReader{r: br}); err != nil {
 					_ = s.pw.Close()
 					delete(open, meta.SessionID)
@@ -376,4 +401,23 @@ func (c *chunkReader) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
 	c.remain -= n
 	return n, err
+}
+
+// readOneChunk reads exactly one chunk of a frame body: SIZE(2) | payload. A
+// Mux.Cool frame carries one chunk, so the next bytes are the next metadata
+// frame (Xray reads its mux link with a chunk reader capped at one chunk).
+func readOneChunk(r *bufio.Reader) ([]byte, error) {
+	var size [2]byte
+	if _, err := io.ReadFull(r, size[:]); err != nil {
+		return nil, err
+	}
+	n := int(binary.BigEndian.Uint16(size[:]))
+	if n == 0 {
+		return nil, nil
+	}
+	body := make([]byte, n)
+	if _, err := io.ReadFull(r, body); err != nil {
+		return nil, err
+	}
+	return body, nil
 }

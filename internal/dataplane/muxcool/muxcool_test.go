@@ -99,7 +99,7 @@ func TestServeRelaysSession(t *testing.T) {
 			return
 		}
 		defer conn.Close()
-		_ = Serve(conn, func(id uint16, dest socks.Addr, stream *Stream) error {
+		_ = Serve(conn, func(id uint16, dest socks.Addr, stream *Stream, _ *UDPSession) error {
 			if id != 9 || dest.Port != 53 {
 				t.Errorf("session id=%d dest=%v", id, dest)
 			}

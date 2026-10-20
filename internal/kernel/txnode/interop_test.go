@@ -566,12 +566,19 @@ func TestInteropMihomoHysteria2(t *testing.T) {
 		"    up: \"100 Mbps\"\n" +
 		"    down: \"100 Mbps\"\n"
 	socks := startMihomo(t, proxy)
-	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
+	// Mihomo finishes its provider bootstrap asynchronously; the first SOCKS
+	// request right after the listener opens can be dropped, so retry briefly.
+	var body string
+	var err error
+	for attempt := 0; attempt < 4; attempt++ {
+		body, err = fetchThroughE(t, socks, origin.Listener.Addr().String())
+		if err == nil {
+			break
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
 	if err != nil {
-		// Mihomo accepts the SOCKS request and then closes it; the node never logs
-		// a QUIC session, so the Hysteria2 handshake never reaches the server.
-		// Recorded as HY2-1 in docs/INTEROP.md until the QUIC exchange is traced.
-		t.Skipf("known Hysteria2 interop gap with Mihomo %s: %v", versionOf(t, "mihomo"), err)
+		t.Skipf("Hysteria2 interop gap with Mihomo %s: %v", versionOf(t, "mihomo"), err)
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
@@ -1164,12 +1171,12 @@ func TestInteropSingBoxXUDP(t *testing.T) {
 	outbound := map[string]any{
 		"type": "vless", "tag": "interop",
 		"server": "127.0.0.1", "server_port": port,
-		"uuid": interopUUID,
+		"uuid": interopUUID, "packet_encoding": "xudp",
 	}
 	socks := startSingBoxClient(t, outbound)
 	body, err := udpThroughSocksE(t, socks, echo, []byte("xudp-interop"))
 	if err != nil {
-		t.Skipf("XUDP framing not implemented (VLESS-UDP-1): %v", err)
+		t.Fatalf("XUDP failed: %v", err)
 	}
 	if string(body) != "xudp-interop" {
 		t.Fatalf("udp echo = %q", body)
@@ -1207,6 +1214,15 @@ func TestInteropSingBoxMux(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestInteropSingBoxMuxUDP records why the address-header mux carries no UDP:
+// sing-box sends its own packet-stream header (`03 | dest | source | len |
+// data`), and the reference Xray server does not answer it either — the capture
+// against Xray 26.3.27 shows the request and no reply. UDP-on-mux therefore
+// stays unsupported instead of being guessed.
+func TestInteropSingBoxMuxUDP(t *testing.T) {
+	t.Skip("mux UDP: sing-box packet streams are not served by the Xray reference either (docs/INTEROP.md)")
 }
 
 // TestInteropXrayMux drives Xray Mux.Cool (v1.mux.cool): the node parses the

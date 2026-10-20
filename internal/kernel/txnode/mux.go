@@ -65,8 +65,18 @@ func installMuxServer() {
 		if rt == nil || rt.srv == nil {
 			return errors.New("mux: the node is not running")
 		}
-		err := muxcool.Serve(conn, func(_ uint16, dest socks.Addr, stream *muxcool.Stream) error {
-			return relay(ctx, stream, dest)
+		err := muxcool.Serve(conn, func(_ uint16, dest socks.Addr, stream *muxcool.Stream, packets *muxcool.UDPSession) error {
+			// Convert explicitly: a nil *UDPSession stored in a core.PacketStream
+			// interface is non-nil and would be used as a live packet stream.
+			var child net.Conn
+			if stream != nil {
+				child = stream
+			}
+			var ps core.PacketStream
+			if packets != nil {
+				ps = packets
+			}
+			return relay(ctx, child, ps, dest)
 		})
 		return err
 	})

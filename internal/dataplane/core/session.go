@@ -102,10 +102,9 @@ type muxServerFunc func(ctx context.Context, parent *Session, src netip.Addr, co
 
 var muxServer atomic.Pointer[muxServerFunc]
 
-// MuxCoolRelay is the per-stream callback for the Xray Mux.Cool framing. A
-// Mux.Cool stream is already a framed net.Conn, so the callback only carries it
-// and its destination; packets is nil for TCP sessions.
-type MuxCoolRelay func(ctx context.Context, conn net.Conn, dest socks.Addr) error
+// MuxCoolRelay relays one Mux.Cool session. A TCP session carries conn and a
+// nil packets; a UDP session carries packets and a nil conn.
+type MuxCoolRelay func(ctx context.Context, conn net.Conn, packets PacketStream, dest socks.Addr) error
 
 // SetMuxCoolServer installs the Mux.Cool (v1.mux.cool) server. It is separate
 // from SetMuxServer because the two mux protocols use different framing on the
@@ -174,8 +173,8 @@ func (s *Server) serveMux(ctx context.Context, sess *Session, src netip.Addr) er
 		if sess.Conn == nil {
 			return errors.New("session refused: no transport")
 		}
-		return (*fd)(ctx, sess, src, sess.Conn, func(ctx context.Context, conn net.Conn, dest socks.Addr) error {
-			return s.MuxStreamSession(ctx, sess, src, conn, nil, dest)
+		return (*fd)(ctx, sess, src, sess.Conn, func(ctx context.Context, conn net.Conn, packets PacketStream, dest socks.Addr) error {
+			return s.MuxStreamSession(ctx, sess, src, conn, packets, dest)
 		})
 	}
 	fn := muxServer.Load()
