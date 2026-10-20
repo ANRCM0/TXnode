@@ -78,6 +78,12 @@ type PacketStream interface {
 	Close() error
 }
 
+// PacketWriteCounter optionally reports payload bytes accepted before a write
+// error. Framing adapters must exclude their wire headers from this count.
+type PacketWriteCounter interface {
+	WritePacketCount(p []byte, addr socks.Addr) (n int, err error)
+}
+
 // Outbound is the client side of a protocol. DialTCP must honour ctx.
 type Outbound interface {
 	Name() string

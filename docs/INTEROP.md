@@ -141,6 +141,27 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 SIGKILL 使用 ready/ARM/gate 事件握手，在准确持久化阶段杀进程；超时仍失败，不能
 自动变成环境不足或 Skip。当前源码和实际候选结果见 `docs/OUTSTANDING-WORK.zh.md`。
 
+## 地址头 mux 写出与计量完成边界
+
+固定 sing-box 1.14.3 对应的 sing-mux revision 为 `caf09fe32475`。
+服务端保留 `smux v1.5.57` 和 `yamux v0.1.2` 的线格式；本地完成边界补丁、
+完整许可证及确定性回归保存在 `internal/deps/{smux,yamux}`。
+
+调用链为 `mux.Serve -> handleStream -> NewServerPackets -> core.Session.Packets ->
+Server.ServeSession -> udpRelay.readBack -> PacketWriteCounter -> NativeMeter.Complete ->
+原代际 NativeCollector/本地事件`。状态、地址和长度头不计入业务字节。
+现有 `PacketStream.WritePacket` 兼容入口继续保留；支持可选 `WritePacketCount` 的
+framing adapter 可同时返回实际 payload 字节和错误，core 保留错误并完成真实尾部计量。
+不支持该可选接口的原 packet transport 继续使用既有完整报文成功/失败语义。
+
+两个 mux 库的发送请求分别拥有 queued/active 完成状态：排队取消后不再读取或发送
+调用方 buffer；已经开始的写入必须回收真实 `n + err`。完整帧已写出后发生撤权不能
+把它记成零字节，部分写入也不能当作完整报文成功。TCP 子流同样保留真实写出尾部。
+共享帧开始后，子流 deadline 可能等待该帧完成；正常子流关闭不关闭兄弟流。
+父 transport 写入仍有安全上界（smux 30 秒、yamux 既有 ConnectionWriteTimeout），
+撤权关闭父连接会立即打断底层 I/O。原“客户端读到应答后立即撤权”的回归保持不变。
+这些实现仍须由包含补丁的精确提交执行 nested race、完整 Node 和严格互通验收。
+
 ## 复现
 
 客户端由 `scripts/fetch-interop-clients.sh` 下载，按版本和 SHA-256 固定；

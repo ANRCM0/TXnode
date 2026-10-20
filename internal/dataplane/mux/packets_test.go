@@ -3,6 +3,7 @@ package mux
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"testing"
@@ -90,6 +91,46 @@ func TestPacketFramingBounds(t *testing.T) {
 	truncated := NewServerPackets(&fixtureConn{input: bytes.NewReader([]byte{0, 2, 'x'})}, FlagUDP, dest)
 	if _, _, err := truncated.ReadPacket(make([]byte, 8)); !errors.Is(err, io.ErrUnexpectedEOF) {
 		t.Fatalf("truncated packet=%v", err)
+	}
+}
+
+type completionPacketConn struct {
+	*fixtureConn
+	accepted int
+	err      error
+}
+
+func (c *completionPacketConn) Write(b []byte) (int, error) {
+	n := len(b)
+	if c.accepted >= 0 && n > c.accepted {
+		n = c.accepted
+	}
+	_, _ = c.output.Write(b[:n])
+	return n, c.err
+}
+
+func TestPacketWriteCountPreservesErroredPayloadTail(t *testing.T) {
+	dest := socks.Addr{Host: "127.0.0.1", Port: 53}
+	for _, flags := range []uint16{FlagUDP, FlagUDP | FlagAddr} {
+		prefix := 3
+		if flags&FlagAddr != 0 {
+			prefix += 7
+		}
+		for _, test := range []struct {
+			name     string
+			accepted int
+			want     int
+		}{{"full", -1, 7}, {"partial", prefix + 3, 3}, {"header-only", prefix - 1, 0}} {
+			t.Run(fmt.Sprintf("flags-%d/%s", flags, test.name), func(t *testing.T) {
+				writeErr := errors.New("parent shutdown after wire acceptance")
+				conn := &completionPacketConn{fixtureConn: &fixtureConn{}, accepted: test.accepted, err: writeErr}
+				packets := NewServerPackets(conn, flags, dest)
+				n, err := packets.WritePacketCount([]byte("payload"), dest)
+				if n != test.want || !errors.Is(err, writeErr) || !conn.closed {
+					t.Fatalf("payload n=%d err=%v closed=%v want=%d", n, err, conn.closed, test.want)
+				}
+			})
+		}
 	}
 }
 

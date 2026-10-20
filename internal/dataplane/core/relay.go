@@ -614,20 +614,32 @@ func (u *udpRelay) readBack(a *udpAssoc) {
 				return
 			}
 		}
-		err = u.sess.Packets.WritePacket(buf[:n], addr)
-		if u.opts.Hooks != nil {
-			meta.Err = err
-			if err != nil {
-				meta.N = 0
+		written := n
+		if counted, ok := u.sess.Packets.(PacketWriteCounter); ok {
+			written, err = counted.WritePacketCount(buf[:n], addr)
+			if written < 0 || written > n {
+				written, err = 0, errors.Join(err, io.ErrShortWrite)
+			} else if written != n && err == nil {
+				err = io.ErrShortWrite
 			}
+		} else {
+			err = u.sess.Packets.WritePacket(buf[:n], addr)
+			if err != nil {
+				written = 0
+			}
+		}
+		if u.opts.Hooks != nil {
+			meta.N, meta.Err = int64(written), err
 			u.opts.Hooks.Complete(meta, token)
 		}
 		u.writeMu.Unlock()
+		if written > 0 {
+			u.count(false, int64(written))
+		}
 		if err != nil {
 			u.remove(a.dest, a)
 			return
 		}
-		u.count(false, int64(n))
 	}
 }
 

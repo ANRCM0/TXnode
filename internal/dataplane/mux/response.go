@@ -9,20 +9,27 @@ import (
 )
 
 func writeFull(w io.Writer, p []byte) error {
+	_, err := writeFullCount(w, p)
+	return err
+}
+
+func writeFullCount(w io.Writer, p []byte) (int, error) {
+	total := 0
 	for len(p) > 0 {
 		n, err := w.Write(p)
 		if n < 0 || n > len(p) {
-			return io.ErrShortWrite
+			return total, io.ErrShortWrite
 		}
+		total += n
 		p = p[n:]
 		if err != nil {
-			return err
+			return total, err
 		}
 		if n == 0 {
-			return io.ErrShortWrite
+			return total, io.ErrShortWrite
 		}
 	}
-	return nil
+	return total, nil
 }
 
 // Do not read ahead into the first response payload.

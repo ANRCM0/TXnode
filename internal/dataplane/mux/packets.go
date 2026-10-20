@@ -83,8 +83,15 @@ func (p *Packets) ReadPacket(buf []byte) (int, socks.Addr, error) {
 }
 
 func (p *Packets) WritePacket(data []byte, addr socks.Addr) error {
+	_, err := p.WritePacketCount(data, addr)
+	return err
+}
+
+// WritePacketCount preserves an actual payload tail even when the underlying
+// stream also reports shutdown. Status, destination and length are not usage.
+func (p *Packets) WritePacketCount(data []byte, addr socks.Addr) (int, error) {
 	if len(data) > packetsMaxSize {
-		return errors.New("mux: UDP packet is too large")
+		return 0, errors.New("mux: UDP packet is too large")
 	}
 	p.writeMu.Lock()
 	defer p.writeMu.Unlock()
@@ -97,18 +104,24 @@ func (p *Packets) WritePacket(data []byte, addr socks.Addr) error {
 			addr = p.dest
 		}
 		if addr.IsZero() || len(addr.Host) > 255 {
-			return errors.New("mux: invalid UDP packet address")
+			return 0, errors.New("mux: invalid UDP packet address")
 		}
 		frame = AppendAddr(frame, addr)
 	}
 	frame = binary.BigEndian.AppendUint16(frame, uint16(len(data)))
+	prefix := len(frame)
 	frame = append(frame, data...)
-	if err := writeFull(p.c, frame); err != nil {
+	n, err := writeFullCount(p.c, frame)
+	n -= prefix
+	if n < 0 {
+		n = 0
+	}
+	if err != nil {
 		_ = p.c.Close()
-		return err
+		return n, err
 	}
 	p.responseWritten = true
-	return nil
+	return n, nil
 }
 
 func (p *Packets) Close() error { return p.c.Close() }
