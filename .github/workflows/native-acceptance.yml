@@ -113,6 +113,67 @@ jobs:
           path: artifacts/native-soak/
           if-no-files-found: error
 
+  faults:
+    name: Native live load lifecycle durability and process faults
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+          cache-dependency-path: go.sum
+      - name: Record exact fault-suite source and runtime
+        env:
+          CANDIDATE_SHA: ${{ needs.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          mkdir -p artifacts/native-faults
+          git rev-parse HEAD > artifacts/native-faults/commit.txt
+          git rev-parse 'HEAD^{tree}' > artifacts/native-faults/tree.txt
+          go version > artifacts/native-faults/go-version.txt
+          uname -a > artifacts/native-faults/runner.txt
+      - name: Exercise mutations on the nodes carrying real traffic
+        run: |
+          set -euo pipefail
+          go test -race -json ./internal/kernel/txnode ./internal/service ./internal/usagebucket \
+            -run '^TestNative(ActiveLoadLifecycleFaults|LoadRateCancellation|UpstreamDisconnectKeepsLoadedPeerFlows|AuthenticatedShortWriteKeepsActualTail|LoadedSIGKILLRestartsWithOriginalUsagePeriod|LoadedAuthorizationExpiryDuringBlockedReport|RelayLoadSlowDiskRetainsExclusiveOwnerAndOriginalEvidence)$' \
+            -count=1 -timeout=10m 2>artifacts/native-faults/stderr.log | tee artifacts/native-faults/events.jsonl
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          required = {
+              'TestNativeActiveLoadLifecycleFaults',
+              'TestNativeLoadRateCancellation',
+              'TestNativeUpstreamDisconnectKeepsLoadedPeerFlows',
+              'TestNativeAuthenticatedShortWriteKeepsActualTail',
+              'TestNativeLoadedSIGKILLRestartsWithOriginalUsagePeriod',
+              'TestNativeLoadedAuthorizationExpiryDuringBlockedReport',
+              'TestNativeRelayLoadSlowDiskRetainsExclusiveOwnerAndOriginalEvidence',
+          }
+          events = [json.loads(line) for line in Path('artifacts/native-faults/events.jsonl').read_text().splitlines()]
+          passed = {event.get('Test') for event in events if event.get('Action') == 'pass'}
+          rejected = [event for event in events if event.get('Action') in ('skip', 'fail')]
+          summary = {'required': sorted(required), 'passed': sorted(required & passed), 'rejected': rejected,
+                     'accepted': required <= passed and not rejected}
+          Path('artifacts/native-faults/summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+          if not summary['accepted']:
+              raise SystemExit('native loaded fault acceptance incomplete')
+          PY
+      - name: Retain real relay and durable recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-faults-${{ needs.source.outputs.sha }}
+          path: artifacts/native-faults/
+          if-no-files-found: error
+
   performance:
     name: Same runner legacy candidate A B
     needs: source
@@ -146,4 +207,58 @@ jobs:
         with:
           name: native-performance-${{ needs.source.outputs.sha }}
           path: artifacts/native-performance/
+          if-no-files-found: error
+
+  acceptance:
+    name: Exact source S3 acceptance ledger
+    if: always()
+    needs: [source, soak, faults, performance]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*-${{ needs.source.outputs.sha }}
+          path: evidence
+      - name: Require all measured scopes on the identical candidate
+        env:
+          CANDIDATE_SHA: ${{ needs.source.outputs.sha }}
+          SOAK_JOB: ${{ needs.soak.result }}
+          FAULTS_JOB: ${{ needs.faults.result }}
+          PERFORMANCE_JOB: ${{ needs.performance.result }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          sha = os.environ['CANDIDATE_SHA']
+          root = Path('evidence')
+          checks = {name: os.environ[name + '_JOB'] == 'success' for name in ('SOAK', 'FAULTS', 'PERFORMANCE')}
+          def read(kind, name):
+              return json.loads((root / ('native-' + kind + '-' + sha) / name).read_text())
+          try:
+              soak = read('soak', 'soak-summary.json')
+              faults = read('faults', 'summary.json')
+              performance = read('performance', 'report.json')
+              checks['same_candidate'] = performance['candidate'] == sha and all((root / ('native-' + kind + '-' + sha) / 'commit.txt').read_text().strip() == sha for kind in ('soak', 'faults'))
+              checks['sustained_loaded_lifecycle'] = soak['accepted'] and soak['elapsed_seconds'] >= 1800 and len(soak['phases']) == 4 and all(p['lifecycle_cycles'] >= 8 and p['load_bearing_generations_recovered'] == p['lifecycle_cycles'] + 1 and p['expected_retired_disconnects'] == p['lifecycle_cycles'] * p['load_bearing_tls_workers'] for p in soak['phases'])
+              checks['loaded_faults'] = faults['accepted']
+              checks['equivalent_ab'] = performance['accepted'] and len(performance['comparisons']) == 12
+              checks['image_sizes'] = all(performance['runtime_images'][side]['uncompressed_bytes'] > 0 for side in ('legacy', 'candidate'))
+              checks['allocation_windows'] = len(performance['samples']) >= 120 and all(s.get('allocated_bytes_per_business_byte', -1) >= 0 and s.get('allocations_per_business_byte', -1) >= 0 for s in performance['samples'])
+          except (OSError, ValueError, KeyError) as error:
+              checks['evidence_complete'] = False
+              checks['evidence_error'] = str(error)
+          accepted = all(value is True for value in checks.values())
+          result = {'schema': 'txnode-s3-acceptance/v1', 'candidate': sha, 'checks': checks, 'full_S3_accepted': accepted,
+                    'scope': 'fixed Linux Actions loopback profile: 30 minute staged TCP/UDP/mux, load-bearing TLS lifecycle, separate loaded faults, same-runner legacy sing-box versus native SOCKS A/B; no production or physical multi-host claim'}
+          Path('s3-acceptance.json').write_text(json.dumps(result, indent=2) + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('## Exact source S3 evidence\n\nCandidate: `' + sha + '`\n\n```json\n' + json.dumps(result, indent=2) + '\n```\n')
+          if not accepted:
+              raise SystemExit('S3 evidence incomplete, noisy, or outside fixed performance thresholds')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-s3-acceptance-${{ needs.source.outputs.sha }}
+          path: s3-acceptance.json
           if-no-files-found: error

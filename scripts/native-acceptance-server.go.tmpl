@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -37,14 +38,14 @@ func main() {
 	switch *mode {
 	case "ordinary":
 	case "events":
-		coordinator, err = usagebucket.NewAsyncCoordinator(filepath.Join(*root, "events"), usagebucket.StoreOptions{}, usagebucket.CoordinatorOptions{})
+		coordinator, err = usagebucket.NewAsyncCoordinator(filepath.Join(*root, "events"), usagebucket.StoreOptions{MaxBytes: 1 << 30}, usagebucket.CoordinatorOptions{})
 		if err != nil || !node.SetLocalEventConsumer(coordinator) {
 			panic(fmt.Sprintf("event installation: %v", err))
 		}
 	case "usage_v2":
 		now := time.Now().Unix()
 		session := usagev2.Session{ProtocolVersion: 2, CoreInstanceID: "native-ab", NodeID: "3", SourceEpoch: "5", ReceiptGeneration: "1", RetentionSeconds: 86400, MaxLateReportSeconds: 3600, ReceiptRetentionSeconds: 86400, IssuedAt: now - 1,
-			Grants: []usagev2.Grant{{UserID: "7", AccessSubjectID: "8", AuthSnapshotID: "11", TariffRevisionID: "12", TermsID: "13", UsagePeriodID: "14", IssuedAt: now - 1, LeaseExpiresAt: now + 3600, RevocationVersion: "0"}}}
+			Grants: []usagev2.Grant{{UserID: "7", AccessSubjectID: "8", AuthSnapshotID: "11", TariffRevisionID: "12", TermsID: "13", UsagePeriodID: "14", IssuedAt: now - 1, LeaseExpiresAt: now + 90, RevocationVersion: "0"}}}
 		spool, err = usagev2.OpenSpool(filepath.Join(*root, "spool"), 0)
 		if err != nil {
 			panic(err)
@@ -53,7 +54,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		collector, err = store.NewCollector(session, usageinterval.NativeWindow{Revision: "1", Digest: strings.Repeat("a", 64), IssuedAt: now - 1, ExpiresAt: now + 3600}, map[string]int{"native-ab-secret": 7})
+		collector, err = store.NewCollector(session, usageinterval.NativeWindow{Revision: "1", Digest: strings.Repeat("a", 64), IssuedAt: now - 1, ExpiresAt: now + 90}, map[string]int{"native-ab-secret": 7})
 		if err != nil {
 			panic(err)
 		}
@@ -72,13 +73,30 @@ func main() {
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
-	if err := node.Start(&model.NodeSpec{Protocol: "socks", ListenIP: "127.0.0.1", ServerPort: port}, []model.UserSpec{{ID: 7, UUID: "native-ab-secret"}}, kernel.TLSCert{}); err != nil {
+	spec := &model.NodeSpec{Protocol: "socks", ListenIP: "127.0.0.1", ServerPort: port,
+		CustomRouteRules: []model.CustomRouteRule{{Name: "benchmark-loopback", Match: model.RouteMatch{IPCIDRs: []string{"127.0.0.1/32"}}, Action: model.RouteAction{Type: "direct"}}}}
+	if err := node.Start(spec, []model.UserSpec{{ID: 7, UUID: "native-ab-secret"}}, kernel.TLSCert{}); err != nil {
 		panic(err)
 	}
 	fmt.Println("NATIVE_AB_READY " + strconv.Itoa(port))
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
-	<-signals
+	signals := make(chan os.Signal, 4)
+	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT, syscall.SIGUSR1)
+	for snapshots := 0; ; {
+		if received := <-signals; received != syscall.SIGUSR1 {
+			break
+		}
+		var memory runtime.MemStats
+		runtime.ReadMemStats(&memory)
+		snapshots++
+		body, _ := json.Marshal(map[string]uint64{"total_alloc_bytes": memory.TotalAlloc, "mallocs": memory.Mallocs, "heap_bytes": memory.HeapAlloc})
+		name := filepath.Join(*root, fmt.Sprintf("runtime-%d.json", snapshots))
+		if err := os.WriteFile(name+".tmp", body, 0600); err != nil {
+			panic(err)
+		}
+		if err := os.Rename(name+".tmp", name); err != nil {
+			panic(err)
+		}
+	}
 	node.Stop()
 	evidence := map[string]any{"mode": *mode, "stopped": true}
 	if collector != nil {
@@ -128,6 +146,37 @@ func main() {
 			panic(fmt.Sprintf("event evidence incomplete: %+v %v", status, ok))
 		}
 		evidence["event_store"] = status
+		var up, down int64
+		var eventCount uint64
+		paths := map[string]uint64{}
+		for sequence := uint64(1); sequence <= status.Sequence; sequence++ {
+			record, readErr := coordinator.ReadRecord(sequence)
+			if readErr != nil {
+				panic(readErr)
+			}
+			if record.Authorizes || record.Attribution != "unattributable" || !record.TailUnknown || !record.RestoreUnknown {
+				panic("local observation changed its authority or unknown-tail semantics")
+			}
+			if record.Bucket == nil {
+				continue
+			}
+			if record.Capture == nil || record.Capture.Degraded || record.Capture.DroppedEvents != 0 {
+				panic("local observation lost events")
+			}
+			up += record.Bucket.PhysicalTotals[0]
+			down += record.Bucket.PhysicalTotals[1]
+			for _, event := range record.Bucket.Events {
+				if event.UserID != 7 || event.Attribution != "unattributable" {
+					panic("local observation changed its original user or attribution")
+				}
+				eventCount++
+				paths[string(event.Path)]++
+			}
+		}
+		evidence["event_contract"] = "physical-byte-observation-v1"
+		evidence["event_raw_up_bytes"], evidence["event_raw_down_bytes"] = up, down
+		evidence["event_count"], evidence["event_paths"] = eventCount, paths
+		evidence["event_authorizes"], evidence["event_tail_unknown"] = false, true
 	}
 	body, _ := json.MarshalIndent(evidence, "", "  ")
 	if err = os.WriteFile(filepath.Join(*root, "evidence.json"), body, 0600); err != nil {

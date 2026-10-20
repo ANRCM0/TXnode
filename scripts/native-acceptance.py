@@ -194,6 +194,42 @@ def process_resources(pid):
     return cpu, pages * os.sysconf("SC_PAGE_SIZE")
 
 
+def runtime_snapshot(process, state, number):
+    process.send_signal(signal.SIGUSR1)
+    path = state / ("runtime-%d.json" % number)
+    deadline = time.monotonic() + 5
+    while not path.exists():
+        if process.poll() is not None or time.monotonic() >= deadline:
+            raise RuntimeError("Node runtime allocation snapshot missing")
+        time.sleep(0.01)
+    return json.loads(path.read_text())
+
+
+def build_runtime_images(output, report):
+    command(["docker", "pull", "--platform", "linux/amd64", "alpine:3.20"])
+    base = json.loads(command(["docker", "image", "inspect", "alpine:3.20"]))[0]["RepoDigests"][0]
+    recipe = ("FROM " + base + "\nRUN apk add --no-cache ca-certificates tzdata\n"
+              "COPY tx-node /usr/local/bin/tx-node\nRUN mkdir -p /etc/txnode /etc/xboard-node\n"
+              "WORKDIR /etc/txnode\nENTRYPOINT [\"tx-node\"]\nCMD [\"-c\", \"/etc/txnode/config.yml\"]\n")
+    report["runtime_images"] = {"base": base, "scope": "identical immutable Alpine runtime recipe and prebuilt business binaries"}
+    for side in ("legacy", "candidate"):
+        context = output / ("runtime-image-" + side)
+        context.mkdir()
+        (context / "Dockerfile").write_text(recipe)
+        target = context / "tx-node"
+        shutil.copyfile(output / ("tx-node-" + side), target)
+        target.chmod(0o755)
+        tag = "txnode-native-ab:%s-%s" % (report["candidate"][:12], side)
+        try:
+            log = command(["docker", "build", "--platform", "linux/amd64", "-t", tag, str(context)])
+            (context / "build.log").write_text(log)
+            metadata = json.loads(command(["docker", "image", "inspect", tag]))[0]
+            (context / "inspect.json").write_text(json.dumps(metadata, indent=2) + "\n")
+            report["runtime_images"][side] = {"image_id": metadata["Id"], "uncompressed_bytes": metadata["Size"], "business_binary_sha256": digest(target)}
+        finally:
+            target.unlink()
+
+
 def sample(binary, state, mode, workload, args, origin):
     state.mkdir(parents=True)
     log = (state / "server.log").open("w")
@@ -224,27 +260,39 @@ def sample(binary, state, mode, workload, args, origin):
         if port is None:
             raise RuntimeError("server readiness missing; see server.log")
         warmup = transfer(port, origin.port, workload, args.warmup, args.concurrency)
+        memory_start = runtime_snapshot(process, state, 1)
         cpu_start, rss = process_resources(process.pid)
         rss_samples.append(rss)
         watcher = threading.Thread(target=monitor, daemon=True)
         watcher.start()
         measurements.update(transfer(port, origin.port, workload, args.seconds, args.concurrency))
         cpu_end, rss = process_resources(process.pid)
+        memory_end = runtime_snapshot(process, state, 2)
         rss_samples.append(rss)
         measurements["cpu_seconds_per_gib"] = (cpu_end-cpu_start) / (measurements["bytes"]/1073741824)
         measurements["rss_peak_bytes"] = max(rss_samples)
+        measurements["allocated_bytes_per_business_byte"] = (memory_end["total_alloc_bytes"] - memory_start["total_alloc_bytes"]) / measurements["bytes"]
+        measurements["allocations_per_business_byte"] = (memory_end["mallocs"] - memory_start["mallocs"]) / measurements["bytes"]
         process.send_signal(signal.SIGTERM)
         if process.wait(timeout=30) != 0:
             raise RuntimeError("server shutdown/accounting failed; see server.log")
         proof = json.loads((state / "evidence.json").read_text())
         if proof.get("mode") != mode or not proof.get("stopped"):
             raise ValueError("accounting mode proof mismatch")
-        if mode == "usage_v2":
+        if mode in ("usage_v2", "events"):
+            prefix = "usage" if mode == "usage_v2" else "event"
             for direction in ("up", "down"):
                 wire_key = "wire_%sload_bytes" % direction
                 expected = warmup[wire_key] + measurements[wire_key]
-                if proof.get("usage_raw_%s_bytes" % direction) != expected:
-                    raise ValueError("usage_v2 durable %s bytes differ from actual client I/O" % direction)
+                if proof.get("%s_raw_%s_bytes" % (prefix, direction)) != expected:
+                    raise ValueError("%s durable %s bytes differ from actual client I/O" % (mode, direction))
+        if mode == "events":
+            if (proof.get("event_contract") != "physical-byte-observation-v1"
+                    or proof.get("event_authorizes") is not False
+                    or proof.get("event_tail_unknown") is not True
+                    or proof.get("event_count", 0) <= 0):
+                raise ValueError("local event projection contract incomplete")
+            measurements["semantic_contract"] = "physical-byte-observation-v1"
         measurements["accounting_evidence"] = proof
         measurements["status"] = "measured"
     except Exception as error:
@@ -277,10 +325,12 @@ def compare(samples, groups):
                 entry["reason"] = "all five complete samples per side are required"
                 comparisons.append(entry)
                 continue
-            if mode == "events":
-                entry.update(status="unresolved", reason="local-event boundaries have not been proven equivalent; raw samples retained without a ratio")
+            if mode == "events" and any(s.get("semantic_contract") != "physical-byte-observation-v1" for side in sides.values() for s in side):
+                entry.update(reason="every sample must prove the shared durable physical byte/unknown-tail/nonbilling contract")
                 comparisons.append(entry)
                 continue
+            if mode == "events":
+                entry["semantic_contract"] = "physical-byte-observation-v1"
             rates = {side: [s["mib_per_second"] for s in sides[side]] for side in sides}
             cpus = {side: [s["cpu_seconds_per_gib"] for s in sides[side]] for side in sides}
             entry["throughput_candidate_over_legacy"] = statistics.median(rates["candidate"]) / statistics.median(rates["legacy"])
@@ -306,6 +356,8 @@ def run(args):
         raise RuntimeError("native performance execution is restricted to Linux GitHub Actions")
     if args.groups < 5 or args.seconds < 10 or args.warmup < 2 or args.concurrency < 1:
         raise ValueError("acceptance requires >=5 groups, >=10s samples, >=2s warmup and positive concurrency")
+    if args.seconds + args.warmup > 60:
+        raise ValueError("sample plus warmup must fit the explicit 90 second bounded authorization lease")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     candidate = command(["git", "rev-parse", args.candidate + "^{commit}"])
@@ -322,10 +374,12 @@ def run(args):
               "settings": {"groups": args.groups, "sample_seconds": args.seconds, "warmup_seconds": args.warmup,
                            "concurrency": args.concurrency, "buffer_bytes": 32768, "short_buffer_bytes": 1024,
                            "build_flags": FLAGS, "protocol": "SOCKS5 RFC1929 IPv4 loopback", "tls": "none on both sides",
-                           "legacy_kernel": "sing-box", "throughput_floor": 0.95, "cpu_ceiling": 1.05, "noise_cv_ceiling": 0.10},
+                           "legacy_kernel": "sing-box", "loopback_route": "127.0.0.1/32 direct, identical structured rule on both sides",
+                           "event_store_max_bytes": 1 << 30, "usage_lease_seconds": 90,
+                           "throughput_floor": 0.95, "cpu_ceiling": 1.05, "noise_cv_ceiling": 0.10},
               "scope": "same runner SOCKS forwarding; ordinary/events/usage_v2 configured identically; local durability, no Core receipts",
-              "not_measured": ["image-size", "allocations-per-byte", "cross-region-network", "xray-legacy-kernel", "protocols-other-than-SOCKS", "formal-local-event-semantic-equivalence"],
-              "full_S3_accepted": False, "builds": {}, "samples": [], "comparisons": [], "status": "incomplete"}
+              "not_measured": ["cross-region-network", "xray-legacy-kernel", "protocols-other-than-SOCKS", "internal-event-path-and-timestamp-equivalence"],
+              "accepted": False, "builds": {}, "samples": [], "comparisons": [], "status": "incomplete"}
     workspace = Path(tempfile.mkdtemp(prefix="txnode-native-ab-"))
     checkouts = []
     origin = None
@@ -349,6 +403,7 @@ def run(args):
                 report["builds"][side] = {"status": "incomplete", "error": error.output}
         if any(report["builds"][side]["status"] != "built" for side in ("legacy", "candidate")):
             return report
+        build_runtime_images(output, report)
         origin = Origin()
         for group in range(args.groups):
             order = ("legacy", "candidate") if group % 2 == 0 else ("candidate", "legacy")
@@ -363,6 +418,7 @@ def run(args):
                         print("group=%d mode=%s workload=%s side=%s status=%s" % (group+1, mode, workload, side, result["status"]), flush=True)
         report["comparisons"] = compare(report["samples"], args.groups)
         report["status"] = "measured-with-limitations" if all(s["status"] == "measured" for s in report["samples"]) else "incomplete"
+        report["accepted"] = report["status"] == "measured-with-limitations" and len(report["comparisons"]) == len(MODES)*len(WORKLOADS) and all(item["status"] == "within-initial-thresholds" for item in report["comparisons"])
         return report
     finally:
         if origin is not None:
@@ -373,7 +429,7 @@ def run(args):
             command(["git", "worktree", "remove", "--force", str(checkout)])
         shutil.rmtree(workspace, ignore_errors=True)
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-        lines = ["# Native / legacy performance", "", "Candidate: `%s`; baseline: `%s`." % (candidate, BASELINE), "", "Status: **%s**. Full S3 accepted: **false**." % report["status"], "", "| Mode | Workload | Status | Candidate / legacy throughput | Candidate / legacy CPU |", "|---|---|---|---:|---:|"]
+        lines = ["# Native / legacy performance", "", "Candidate: `%s`; baseline: `%s`." % (candidate, BASELINE), "", "Status: **%s**. Scoped A/B accepted: **%s**." % (report["status"], report["accepted"]), "", "| Mode | Workload | Status | Candidate / legacy throughput | Candidate / legacy CPU |", "|---|---|---|---:|---:|"]
         for item in report["comparisons"]:
             lines.append("| %s | %s | %s | %.4f | %.4f |" % (item["mode"], item["workload"], item["status"], item.get("throughput_candidate_over_legacy", 0), item.get("cpu_candidate_over_legacy", 0)))
         lines.extend(["", "Not measured: " + ", ".join(report["not_measured"]) + ".", "", "Loopback evidence does not establish production or cross-region performance."])
@@ -392,7 +448,7 @@ def main():
     report = run(args)
     # Semantic-equivalence gaps and unsupported measurements are explicit, and
     # an incomplete or noisy measurement never satisfies a performance gate.
-    return 0 if report["status"] == "measured-with-limitations" and all(item["status"] == "within-initial-thresholds" or (item["mode"] == "events" and item["status"] == "unresolved") for item in report["comparisons"]) else 1
+    return 0 if report["accepted"] else 1
 
 
 if __name__ == "__main__":

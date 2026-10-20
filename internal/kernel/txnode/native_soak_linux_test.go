@@ -5,14 +5,19 @@ package txnode
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,6 +33,7 @@ type soakCounters struct {
 	completed [3]atomic.Int64
 	failed    [3]atomic.Int64
 	starved   [3]atomic.Int64
+	retired   atomic.Int64
 	latency   [3][12]atomic.Int64
 	active    atomic.Int64
 	peak      atomic.Int64
@@ -46,6 +52,7 @@ type soakSample struct {
 	Completed   [3]int64    `json:"completed_tcp_udp_mux"`
 	Errors      [3]int64    `json:"errors_tcp_udp_mux"`
 	Starved     [3]int64    `json:"under_completed_workers_tcp_udp_mux"`
+	Retired     int64       `json:"expected_retired_tls_disconnects"`
 	Bytes       int64       `json:"business_bytes_round_trip"`
 	LatencyMS   [3][3]int64 `json:"latency_upper_bound_ms_p50_p95_p99_tcp_udp_mux"`
 }
@@ -53,7 +60,7 @@ type soakSample struct {
 func soakResource(phase int, c *soakCounters, nodes ...*Kernel) soakSample {
 	var memory runtime.MemStats
 	runtime.ReadMemStats(&memory)
-	s := soakSample{At: time.Now().UTC(), Phase: phase, Active: c.active.Load(), Goroutines: runtime.NumGoroutine(), Heap: memory.HeapAlloc, HeapObjects: memory.HeapObjects}
+	s := soakSample{At: time.Now().UTC(), Phase: phase, Active: c.active.Load(), Retired: c.retired.Load(), Goroutines: runtime.NumGoroutine(), Heap: memory.HeapAlloc, HeapObjects: memory.HeapObjects}
 	fds, _ := os.ReadDir("/proc/self/fd")
 	s.FDs = len(fds)
 	if body, err := os.ReadFile("/proc/self/statm"); err == nil {
@@ -130,47 +137,59 @@ func TestNativeSessionSoak(t *testing.T) {
 		}
 	}()
 	packetEcho := udpEcho(t)
-	newNode := func(protocol string) (*Kernel, *model.NodeSpec) {
+	certs := [2]kernel.TLSCert{selfSignedPEM(t), selfSignedPEM(t)}
+	roots := x509.NewCertPool()
+	for _, cert := range certs {
+		if !roots.AppendCertsFromPEM(cert.CertPEM) {
+			t.Fatal("invalid soak TLS root")
+		}
+	}
+	tlsConfig := &tls.Config{RootCAs: roots, ServerName: "localhost", MinVersion: tls.VersionTLS12}
+	newNode := func(protocol string, secure bool) (*Kernel, *model.NodeSpec) {
 		k := New(RuntimeConfig{MaxFresh: 4096, HandshakeTimeout: 10 * time.Second, DrainTimeout: time.Second, UDPTimeout: 3 * time.Second})
 		spec := &model.NodeSpec{Protocol: protocol, ListenIP: "127.0.0.1", ServerPort: freePortTB(t), Transport: "tcp"}
 		if protocol == "shadowsocks" {
 			spec.Cipher = "aes-128-gcm"
 		}
-		if err := k.Start(spec, []model.UserSpec{{ID: 1, UUID: interopUUID}}, kernel.TLSCert{}); err != nil {
+		var cert kernel.TLSCert
+		if secure {
+			spec.TLS = 1
+			cert = certs[0]
+		}
+		if err := k.Start(spec, []model.UserSpec{{ID: 1, UUID: interopUUID}}, cert); err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(k.Stop)
 		return k, spec
 	}
-	tcpNode, tcpSpec := newNode("vless")
-	udpNode, udpSpec := newNode("shadowsocks")
-	muxNode, muxSpec := newNode("vless")
+	tcpNode, tcpSpec := newNode("vless", true)
+	udpNode, udpSpec := newNode("shadowsocks", false)
+	muxNode, muxSpec := newNode("vless", false)
+	var stopClients []func()
 	client := func(port int, mux bool) string {
 		outbound := map[string]any{"type": "vless", "server": "127.0.0.1", "server_port": port, "uuid": interopUUID}
 		if mux {
 			outbound["multiplex"] = map[string]any{"enabled": true, "protocol": "smux", "max_streams": 32}
 		}
-		return startSingBoxClient(t, outbound)
+		endpoint, stop := startSoakSingBox(t, outbound, dir, "mux")
+		stopClients = append(stopClients, stop)
+		return endpoint
 	}
-	endpoints := [3]string{client(tcpSpec.ServerPort, false), startSingBoxClient(t, map[string]any{"type": "shadowsocks", "server": "127.0.0.1", "server_port": udpSpec.ServerPort, "method": "aes-128-gcm", "password": interopUUID}), client(muxSpec.ServerPort, true)}
+	udpEndpoint, stopUDPClient := startSoakSingBox(t, map[string]any{"type": "shadowsocks", "server": "127.0.0.1", "server_port": udpSpec.ServerPort, "method": "aes-128-gcm", "password": interopUUID}, dir, "udp")
+	stopClients = append(stopClients, stopUDPClient)
+	endpoints := [3]string{"direct-verified-TLS-VLESS", udpEndpoint, client(muxSpec.ServerPort, true)}
 	var counters soakCounters
 	runtime.GC()
 	baseline := soakResource(0, &counters, tcpNode, udpNode, muxNode)
+	soakDiagnostics(t, dir, "baseline", tcpNode, udpNode, muxNode)
 	if err := encoder.Encode(baseline); err != nil {
 		t.Fatal(err)
 	}
-	// Credential fault traffic is a separate Node instance: its revocation must
-	// neither interrupt the stable users nor cross instance ownership.
-	fault := New(RuntimeConfig{MaxFresh: 64, DrainTimeout: time.Second, HandshakeTimeout: time.Second})
-	faultSpec := &model.NodeSpec{Protocol: "socks", ListenIP: "127.0.0.1", ServerPort: freePortTB(t)}
-	if err := fault.Start(faultSpec, []model.UserSpec{{ID: 7, UUID: "initial"}}, kernel.TLSCert{}); err != nil {
-		t.Fatal(err)
-	}
-	defer fault.Stop()
 	started := time.Now()
 	var phases []map[string]any
+	totalLifecycleCycles := 0
 	defer func() {
-		body, _ := json.MarshalIndent(map[string]any{"schema": "txnode-native-soak/v1", "elapsed_seconds": time.Since(started).Seconds(), "duration_required_seconds": 1800, "phases": phases, "accepted": !t.Failed() && len(phases) == 4 && time.Since(started) >= 30*time.Minute, "full_S3_accepted": false, "scope": "VLESS TCP, Shadowsocks UDP, smux TCP; independent SOCKS lifecycle faults", "unimplemented_faults": []string{"report-blocking", "slow-disk", "short-write", "certificate-refresh", "usage-v2-lease-refresh", "process-restart-during-load", "load-bearing-node-reload", "persistent-queue-depth"}}, "", "  ")
+		body, _ := json.MarshalIndent(map[string]any{"schema": "txnode-native-soak/v2", "elapsed_seconds": time.Since(started).Seconds(), "duration_required_seconds": 1800, "phases": phases, "accepted": !t.Failed() && len(phases) == 4 && time.Since(started) >= 30*time.Minute, "scope": "verified TLS VLESS TCP, Shadowsocks UDP, smux TCP; credential rotation, revocation, same-port certificate Reload and invalid replacement retention on the load-bearing TLS Node", "load_bearing_lifecycle_cycles": totalLifecycleCycles, "separate_loaded_fault_job": []string{"report-blocking", "slow-disk", "short-write", "rate-cancellation", "signed-lease-refresh-expiry", "SIGKILL-restart"}}, "", "  ")
 		_ = os.WriteFile(filepath.Join(dir, "soak-summary.json"), body, 0o600)
 	}()
 	for _, target := range []int{100, 250, 500, 1000} {
@@ -179,12 +198,16 @@ func TestNativeSessionSoak(t *testing.T) {
 		defer func() { cancel(); wg.Wait() }()
 		before := soakResource(target, &counters)
 		counters.peak.Store(0)
+		loaded := &soakLoadedNode{last: make([]atomic.Uint64, (target+2)/3)}
+		loaded.generation.Store(1)
 		for worker := 0; worker < target; worker++ {
 			wg.Add(1)
-			go func(kind int) {
+			go func(kind, index int) {
 				defer wg.Done()
-				soakWorker(ctx, kind, endpoints[kind], echo.Addr().String(), packetEcho, &counters)
-			}(worker % 3)
+				soakWorker(ctx, kind, index, endpoints[kind], echo.Addr().String(), packetEcho, &counters, loaded, func() (net.Conn, error) {
+					return nativeFaultVLESSDial(tcpSpec.ServerPort, interopUUID, echo.Addr().String(), tlsConfig)
+				})
+			}(worker%3, worker/3)
 		}
 		phaseStart := time.Now()
 		ticker := time.NewTicker(5 * time.Second)
@@ -202,10 +225,9 @@ func TestNativeSessionSoak(t *testing.T) {
 					break loop
 				}
 			case <-faultTick.C:
-				soakLifecycle(t, fault, faultSpec, echo.Addr().String(), faults)
+				soakLoadedLifecycle(t, tcpNode, tcpSpec, echo.Addr().String(), tlsConfig, certs, loaded, totalLifecycleCycles)
 				faults++
-				// Stable workers also prove that lifecycle mutations remain scoped
-				// to the independently owned Node instance.
+				totalLifecycleCycles++
 			}
 		}
 		cancel()
@@ -228,7 +250,11 @@ func TestNativeSessionSoak(t *testing.T) {
 		if counters.peak.Load() < int64(target) {
 			t.Errorf("phase %d capacity incomplete: peak=%d", target, counters.peak.Load())
 		}
-		phases = append(phases, map[string]any{"sessions_required": target, "peak_active": counters.peak.Load(), "elapsed_seconds": time.Since(phaseStart).Seconds(), "completed": after.Completed, "errors": after.Errors, "lifecycle_cycles": faults})
+		retired := after.Retired - before.Retired
+		if faults < 8 || retired != int64(faults*len(loaded.last)) {
+			t.Errorf("phase %d missing loaded TLS lifecycle proof: cycles=%d retired=%d required=%d", target, faults, retired, faults*len(loaded.last))
+		}
+		phases = append(phases, map[string]any{"sessions_required": target, "peak_active": counters.peak.Load(), "elapsed_seconds": time.Since(phaseStart).Seconds(), "completed": after.Completed, "errors": after.Errors, "lifecycle_cycles": faults, "load_bearing_tls_workers": len(loaded.last), "expected_retired_disconnects": retired, "load_bearing_generations_recovered": loaded.generation.Load()})
 		t.Logf("phase %d complete: %+v", target, after)
 	}
 	if time.Since(started) < 30*time.Minute {
@@ -239,12 +265,25 @@ func TestNativeSessionSoak(t *testing.T) {
 	tcpNode.Stop()
 	udpNode.Stop()
 	muxNode.Stop()
-	fault.Stop()
+	for _, stop := range stopClients {
+		stop()
+	}
 	time.Sleep(6 * time.Second)
 	runtime.GC()
 	time.Sleep(time.Second)
 	runtime.GC()
+	// Go's net splice pool uses asynchronous runtime.AddCleanup for pipe FDs.
+	// Keep the original numeric budgets and allow only bounded cleanup latency.
+	cleanupDeadline := time.Now().Add(5 * time.Second)
+	for {
+		fds, _ := os.ReadDir("/proc/self/fd")
+		if len(fds) <= baseline.FDs+32 || time.Now().After(cleanupDeadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	final := soakResource(0, &counters)
+	soakDiagnostics(t, dir, "final", tcpNode, udpNode, muxNode)
 	if err := encoder.Encode(final); err != nil {
 		t.Error(err)
 	}
@@ -253,7 +292,102 @@ func TestNativeSessionSoak(t *testing.T) {
 	}
 }
 
-func soakWorker(ctx context.Context, kind int, proxy, tcp, udp string, c *soakCounters) {
+func startSoakSingBox(t *testing.T, outbound map[string]any, artifacts, name string) (string, func()) {
+	t.Helper()
+	root := t.TempDir()
+	port := freePortTB(t)
+	config := map[string]any{"log": map[string]any{"level": "warn"}, "inbounds": []any{map[string]any{"type": "socks", "listen": "127.0.0.1", "listen_port": port}}, "outbounds": []any{outbound}}
+	body, err := json.Marshal(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "config.json")
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	log, err := os.Create(filepath.Join(artifacts, "client-"+name+".log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(singBoxBinary(t), "run", "-c", path, "-D", root)
+	command.Stdout, command.Stderr = log, log
+	if err := command.Start(); err != nil {
+		_ = log.Close()
+		t.Fatal(err)
+	}
+	var once sync.Once
+	stop := func() { once.Do(func() { _ = command.Process.Kill(); _ = command.Wait(); _ = log.Close() }) }
+	t.Cleanup(stop)
+	address := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	deadline := time.Now().Add(8 * time.Second)
+	for time.Now().Before(deadline) {
+		c, err := net.DialTimeout("tcp4", address, 100*time.Millisecond)
+		if err == nil {
+			_ = c.Close()
+			time.Sleep(100 * time.Millisecond)
+			return address, stop
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	stop()
+	t.Fatalf("soak client %s readiness missing; see retained client log", name)
+	return "", stop
+}
+
+func soakDiagnostics(t *testing.T, dir, stage string, nodes ...*Kernel) {
+	t.Helper()
+	type descriptor struct {
+		FD     string `json:"fd"`
+		Target string `json:"target"`
+	}
+	var descriptors []descriptor
+	classes := map[string]int{}
+	fds, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fd := range fds {
+		target, err := os.Readlink(filepath.Join("/proc/self/fd", fd.Name()))
+		if err != nil {
+			continue
+		}
+		descriptors = append(descriptors, descriptor{fd.Name(), target})
+		kind := "file"
+		if strings.HasPrefix(target, "socket:") {
+			kind = "socket"
+		} else if strings.HasPrefix(target, "pipe:") {
+			kind = "pipe"
+		} else if strings.HasPrefix(target, "anon_inode:") {
+			kind = "anon_inode"
+		}
+		classes[kind]++
+	}
+	var diagnostics []map[string]any
+	for _, node := range nodes {
+		diagnostics = append(diagnostics, node.RuntimeDiagnostics())
+	}
+	body, _ := json.MarshalIndent(map[string]any{"descriptor_classes": classes, "descriptors": descriptors, "nodes": diagnostics}, "", "  ")
+	if err := os.WriteFile(filepath.Join(dir, stage+"-descriptors.json"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range []string{"heap", "goroutine"} {
+		file, err := os.Create(filepath.Join(dir, stage+"-"+profile+".pprof"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := pprof.Lookup(profile).WriteTo(file, 0); err != nil {
+			_ = file.Close()
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Logf("%s descriptor classes: %v", stage, classes)
+}
+
+func soakWorker(ctx context.Context, kind, index int, proxy, tcp, udp string, c *soakCounters, loaded *soakLoadedNode, direct func() (net.Conn, error)) {
+	var generation uint64
 	payload := bytes.Repeat([]byte{0x37}, 1024)
 	var conn net.Conn
 	var packet *soakPacket
@@ -296,7 +430,14 @@ func soakWorker(ctx context.Context, kind int, proxy, tcp, udp string, c *soakCo
 			}
 		} else {
 			if conn == nil {
-				conn, err = socksNoAuthConnectE(proxy, tcp)
+				if kind == 0 {
+					loaded.mu.RLock()
+					generation = loaded.generation.Load()
+					conn, err = direct()
+					loaded.mu.RUnlock()
+				} else {
+					conn, err = socksNoAuthConnectE(proxy, tcp)
+				}
 				if err == nil {
 					n := c.active.Add(1)
 					for n > c.peak.Load() {
@@ -321,7 +462,11 @@ func soakWorker(ctx context.Context, kind int, proxy, tcp, udp string, c *soakCo
 		}
 		if err != nil {
 			if ctx.Err() == nil {
-				c.failed[kind].Add(1)
+				if kind == 0 && generation < loaded.generation.Load() && nativeFaultDisconnected(err) {
+					c.retired.Add(1)
+				} else {
+					c.failed[kind].Add(1)
+				}
 			}
 			if conn != nil {
 				_ = conn.Close()
@@ -335,6 +480,9 @@ func soakWorker(ctx context.Context, kind int, proxy, tcp, udp string, c *soakCo
 			}
 		} else {
 			c.completed[kind].Add(1)
+			if kind == 0 {
+				loaded.last[index].Store(generation)
+			}
 			successes++
 			elapsed := time.Since(started).Milliseconds()
 			bucket := 0
@@ -443,58 +591,113 @@ func (p *soakPacket) Exchange(payload []byte) ([]byte, error) {
 	return buf[10:n], nil
 }
 
-func soakLifecycle(t *testing.T, k *Kernel, spec *model.NodeSpec, dest string, cycle int) {
+type soakLoadedNode struct {
+	mu         sync.RWMutex
+	generation atomic.Uint64
+	last       []atomic.Uint64
+}
+
+func (s *soakLoadedNode) wait(t *testing.T) {
 	t.Helper()
-	old := fmt.Sprintf("cycle-%d", cycle)
-	users := []model.UserSpec{{ID: 7, UUID: old}}
-	if _, _, err := k.UpdateUsers(users); err != nil {
+	deadline := time.Now().Add(12 * time.Second)
+	for {
+		ready := true
+		for i := range s.last {
+			if s.last[i].Load() < s.generation.Load() {
+				ready = false
+			}
+		}
+		if ready {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("loaded TLS generation %d did not fully recover", s.generation.Load())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func soakLoadedLifecycle(t *testing.T, k *Kernel, spec *model.NodeSpec, dest string, tlsConfig *tls.Config, certs [2]kernel.TLSCert, load *soakLoadedNode, cycle int) {
+	t.Helper()
+	load.wait(t)
+	stable := model.UserSpec{ID: 1, UUID: interopUUID}
+	old := model.UserSpec{ID: 7, UUID: "11223344-5566-7788-9900-aabbccddeeff"}
+	fresh := model.UserSpec{ID: 7, UUID: "22334455-6677-8899-aabb-ccddeeff0011"}
+	if _, err := k.AddUsers([]model.UserSpec{old}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := k.AddUsers([]model.UserSpec{{ID: 8, UUID: "ephemeral"}}); err != nil {
+	c, err := nativeFaultVLESSDial(spec.ServerPort, old.UUID, dest, tlsConfig)
+	if err != nil {
 		t.Fatal(err)
 	}
-	c := socksConnectTB(t, spec.ServerPort, old, dest)
-	if _, err := c.Write([]byte("tail")); err != nil {
+	defer c.Close()
+	if err := nativeFaultEcho(c, []byte("tail")); err != nil {
 		t.Fatal(err)
 	}
-	var reply [4]byte
-	if _, err := io.ReadFull(c, reply[:]); err != nil {
-		t.Fatal(err)
-	}
-	users[0].UUID = old + "-rotated"
+	users := []model.UserSpec{stable, fresh}
 	if _, _, err := k.UpdateUsers(users); err != nil {
 		t.Fatal(err)
 	}
 	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
 	var one [1]byte
-	if _, err := c.Read(one[:]); err == nil {
-		t.Error("old authenticated session survived rotation")
-	} else if e, ok := err.(net.Error); ok && e.Timeout() {
-		t.Error("revocation did not close old session")
+	if _, err := c.Read(one[:]); !nativeFaultDisconnected(err) {
+		t.Fatalf("rotation did not close old TLS stream: %v", err)
 	}
 	_ = c.Close()
-	if socksCredentialAccepted(t, spec.ServerPort, old) {
-		t.Fatal("old credential revived")
+	reject := func(uuid string) {
+		t.Helper()
+		c, err := nativeFaultVLESSDial(spec.ServerPort, uuid, dest, tlsConfig)
+		if err == nil {
+			defer c.Close()
+			err = nativeFaultEcho(c, []byte("revoked"))
+		}
+		if err == nil {
+			t.Fatal("revoked TLS credential authenticated")
+		}
 	}
-	if _, err := k.RemoveUsers(users); err != nil {
+	reject(old.UUID)
+	if _, err := k.RemoveUsers([]model.UserSpec{fresh}); err != nil {
 		t.Fatal(err)
 	}
-	if socksCredentialAccepted(t, spec.ServerPort, users[0].UUID) {
-		t.Fatal("removed credential accepted")
-	}
-	if _, err := k.AddUsers(users); err != nil {
+	reject(fresh.UUID)
+	if _, err := k.AddUsers([]model.UserSpec{fresh}); err != nil {
 		t.Fatal(err)
 	}
-	if err := k.Reload(spec, users, kernel.TLSCert{}); err != nil {
+	if err := k.Reload(spec, users, kernel.TLSCert{CertPEM: []byte("invalid"), KeyPEM: []byte("invalid")}); err == nil {
+		t.Fatal("invalid TLS replacement unexpectedly succeeded")
+	}
+	cert := certs[(cycle+1)%2]
+	load.mu.Lock()
+	load.generation.Add(1)
+	err = k.Reload(spec, []model.UserSpec{stable}, cert)
+	load.mu.Unlock()
+	if err != nil {
 		t.Fatal(err)
+	}
+	load.wait(t)
+	identity, err := tls.DialWithDialer(&net.Dialer{Timeout: 3 * time.Second}, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(spec.ServerPort)), tlsConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual := sha256.Sum256(identity.ConnectionState().PeerCertificates[0].Raw)
+	_ = identity.Close()
+	pair, err := tls.X509KeyPair(cert.CertPEM, cert.KeyPEM)
+	if err != nil || actual != sha256.Sum256(pair.Certificate[0]) {
+		t.Fatal("loaded TLS reload retained wrong certificate", err)
 	}
 	bad := *spec
 	bad.Protocol = "unsupported-soak-rollback"
-	if err := k.Reload(&bad, users, kernel.TLSCert{}); err == nil {
+	if err := k.Reload(&bad, []model.UserSpec{stable}, cert); err == nil {
 		t.Fatal("invalid replacement unexpectedly succeeded")
 	}
-	if !socksCredentialAccepted(t, spec.ServerPort, users[0].UUID) {
-		t.Fatal("failed replacement lost previous listener")
+	probe, err := nativeFaultVLESSDial(spec.ServerPort, stable.UUID, dest, tlsConfig)
+	if err != nil {
+		t.Fatal("failed replacement lost loaded TLS listener", err)
+	}
+	err = nativeFaultEcho(probe, []byte("rollback-preserved"))
+	_ = probe.Close()
+	if err != nil {
+		t.Fatal("failed replacement lost fresh TLS admission", err)
 	}
 	traffic, _, _, err := k.GetUserTraffic(t.Context())
 	if err != nil || traffic[7][0] < 4 || traffic[7][1] < 4 {
