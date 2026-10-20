@@ -203,6 +203,7 @@ jobs:
           path: |
             artifacts/native-performance-diagnostics/report.json
             artifacts/native-performance-diagnostics/report.md
+            artifacts/native-performance-diagnostics/prefetch-*.log
             artifacts/native-performance-diagnostics/diagnostic-*/
           if-no-files-found: error
 
