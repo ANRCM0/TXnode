@@ -10,14 +10,20 @@ import (
 // timestamp window plus 64 s, and both handshakes consult it
 // (handshake2022 @0xb18edf, handshakeClassic @0xb18591).
 type saltCache struct {
-	mu    sync.Mutex
-	ttl   time.Duration
-	salts map[string]time.Time
-	last  time.Time
+	mu        sync.Mutex
+	ttl       time.Duration
+	origin    time.Time
+	salts     map[saltKey]int64
+	oversized map[string]int64
+	timer     *time.Timer
 }
 
+// Length is part of the key: salts with a common zero-padded prefix must not
+// alias. Uncommon methods with longer salts use the exact string fallback.
+type saltKey [33]byte
+
 func newSaltCache(ttl time.Duration) *saltCache {
-	return &saltCache{ttl: ttl, salts: make(map[string]time.Time, 256)}
+	return &saltCache{ttl: ttl, origin: time.Now()}
 }
 
 // add records a salt and reports whether it was fresh. false means "replayed".
@@ -25,23 +31,86 @@ func (c *saltCache) add(salt []byte) bool {
 	if len(salt) == 0 {
 		return true
 	}
-	now := time.Now()
-	key := string(salt)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if exp, ok := c.salts[key]; ok && now.Before(exp) {
-		return false
-	}
-	c.salts[key] = now.Add(c.ttl)
-	if now.Sub(c.last) > c.ttl {
-		c.last = now
-		for k, exp := range c.salts {
-			if now.After(exp) {
-				delete(c.salts, k)
-			}
+	// origin retains time.Now's monotonic reading. Neither wall-clock jumps
+	// nor a clock adjustment can shorten the replay window.
+	now := time.Since(c.origin).Nanoseconds()
+	expires := now + int64(c.ttl)
+	if len(salt) <= 32 {
+		var key saltKey
+		key[0] = byte(len(salt))
+		copy(key[1:], salt)
+		if exp, ok := c.salts[key]; ok && now < exp {
+			return false
 		}
+		if c.salts == nil {
+			c.salts = make(map[saltKey]int64, 256)
+		}
+		c.salts[key] = expires
+	} else {
+		key := string(salt)
+		if exp, ok := c.oversized[key]; ok && now < exp {
+			return false
+		}
+		if c.oversized == nil {
+			c.oversized = make(map[string]int64)
+		}
+		c.oversized[key] = expires
+	}
+	if c.timer == nil {
+		c.timer = time.AfterFunc(c.ttl, c.expire)
 	}
 	return true
+}
+
+// A shared cache owns at most one pending timer, not a goroutine per handler.
+// It survives handler retirement while any replay history is still live, then
+// releases the maps and stops scheduling itself when the final salt expires.
+func (c *saltCache) expire() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.timer = nil
+	now := time.Since(c.origin).Nanoseconds()
+	if next := c.pruneLocked(now); next > now {
+		delay := time.Duration(next - now)
+		interval := c.ttl
+		if interval > time.Second {
+			interval = time.Second
+		}
+		// Salts can expire nanoseconds apart. Avoid a full-map scan for each
+		// individual expiry; delayed reclamation never extends replay admission.
+		if delay < interval {
+			delay = interval
+		}
+		c.timer = time.AfterFunc(delay, c.expire)
+	}
+}
+
+func (c *saltCache) pruneLocked(now int64) int64 {
+	var next int64
+	for key, expires := range c.salts {
+		if expires <= now {
+			delete(c.salts, key)
+		} else if next == 0 || expires < next {
+			next = expires
+		}
+	}
+	for key, expires := range c.oversized {
+		if expires <= now {
+			delete(c.oversized, key)
+		} else if next == 0 || expires < next {
+			next = expires
+		}
+	}
+	// Deleting entries alone retains the high-water map allocation.
+	if len(c.salts) == 0 {
+		c.salts = nil
+	}
+	if len(c.oversized) == 0 {
+		c.oversized = nil
+	}
+	return next
 }
 
 // Timestamp window of SIP022. notes §4.3 reads three constants out of
