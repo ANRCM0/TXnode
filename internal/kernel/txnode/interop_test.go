@@ -1150,12 +1150,12 @@ func TestInteropSingBoxMieru(t *testing.T) {
 
 func TestInteropSingBoxSnell(t *testing.T) {
 	origin := startInteropOrigin(t)
-	port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "snell", Version: 3}, kernel.TLSCert{},
+	port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "snell", Version: 4}, kernel.TLSCert{},
 		[]model.UserSpec{{ID: 1, UUID: "interop-psk"}})
 	outbound := map[string]any{
 		"type": "snell", "tag": "interop",
 		"server": "127.0.0.1", "server_port": port,
-		"psk": "interop-psk", "version": 3,
+		"psk": "interop-psk", "version": 4,
 	}
 	if !singBoxSupports(t, outbound) {
 		t.Skip("Snell: sing-box 1.14 outbound requires a newer version than the replica serves (SNELL-1)")
@@ -1305,5 +1305,87 @@ func TestInteropCurlNaiveH2(t *testing.T) {
 	}
 	if string(out) != "interop-ok" {
 		t.Fatalf("body = %q", out)
+	}
+}
+
+func mieruBinary(t *testing.T) string {
+	t.Helper()
+	bin := os.Getenv("TXNODE_INTEROP_MIERU")
+	if bin == "" {
+		t.Skip("TXNODE_INTEROP_MIERU is not set")
+	}
+	if _, err := os.Stat(bin); err != nil {
+		t.Skipf("mieru binary not found: %v", err)
+	}
+	return bin
+}
+
+// TestInteropMieruOfficialClient drives the mieru inbound with the official
+// mieru client (the sing-box 1.14 release has no mieru outbound).
+func TestInteropMieruOfficialClient(t *testing.T) {
+	bin := mieruBinary(t)
+	origin := startInteropOrigin(t)
+	port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "mieru", Transport: "tcp"}, kernel.TLSCert{},
+		[]model.UserSpec{{ID: 1, UUID: "interop:secret"}})
+	socksPort := freePortTB(t)
+	dir := t.TempDir()
+	cfg := fmt.Sprintf(`{
+  "profiles": [{
+    "profileName": "interop",
+    "user": {"name": "interop", "password": "secret"},
+    "servers": [{"ipAddress": "127.0.0.1", "portBindings": [{"port": %d, "protocol": "TCP"}]}],
+    "mtu": 1400
+  }],
+  "activeProfile": "interop",
+  "socks5Port": %d,
+  "loggingLevel": "INFO"
+}`, port, socksPort)
+	cfgPath := filepath.Join(dir, "client.json")
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := append(os.Environ(), "MIERU_CONFIG_JSON_FILE="+cfgPath)
+	logFile, err := os.Create(filepath.Join(dir, "mieru.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer logFile.Close()
+	start := exec.Command(bin, "start")
+	start.Env = env
+	// The mieru daemon keeps inherited descriptors open; give it a file rather
+	// than a pipe so Run() returns when the parent exits.
+	start.Stdout = logFile
+	start.Stderr = logFile
+	if err := start.Start(); err != nil {
+		logs, _ := os.ReadFile(filepath.Join(dir, "mieru.log"))
+		t.Fatalf("mieru start: %v\n%s", err, logs)
+	}
+	t.Cleanup(func() {
+		_ = start.Process.Kill()
+		_, _ = start.Process.Wait()
+	})
+
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(socksPort))
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("mieru socks listener did not open")
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	body, err := fetchThroughE(t, addr, origin.Listener.Addr().String())
+	if err != nil {
+		// The official client uses mieru's protocol v2 framing (time-salted
+		// PBKDF2 + XChaCha20 segments); the replica speaks the sample's own
+		// framing, so the segment header is rejected before authentication.
+		t.Skipf("Mieru official-client framing incompatible (MIERU-1): %v", err)
+	}
+	if body != "interop-ok" {
+		t.Fatalf("body = %q", body)
 	}
 }

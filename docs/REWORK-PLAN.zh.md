@@ -579,7 +579,7 @@ tcp / tls / reality / ws / grpc / h2 / httpupgrade / xhttp / shadowtls / obfs-ht
 
 | # | 风险 | 证据 | 对策 |
 |---|---|---|---|
-| R1 | **互通实测结果**：21 条链路通过（含 VLESS Encryption 与 Naive h2）；Mihomo TUIC、Mieru、Snell 仍跳过（编号见 `docs/INTEROP.md`） | Xray 26.3.27 / Mihomo v1.19.32 / sing-box 1.14.3 / curl 8.5 实测 | 按 SNELL-1 → MIERU-1 顺序修；Mihomo TUIC 为客户端差异 |
+| R1 | **互通实测结果**：22 条链路通过（含 VLESS Encryption、Naive h2、Snell v4）；Mieru 官方客户端帧格式不兼容、Mihomo TUIC 客户端差异仍跳过（`docs/INTEROP.md`） | Xray 26.3.27 / Mihomo v1.19.32 / sing-box 1.14.3 / curl 8.5 / mieru 3.38 实测 | 移植 mieru 协议 v2（时间盐 PBKDF2 + XChaCha20 分段）；Mihomo TUIC 视客户端版本 |
 | R2 | **REALITY 已互通**：鉴权与证书按 `xtls/reality` 对齐并改用参考 TLS 栈，Xray/Mihomo 均通过；限制是借用站点握手记录需 ≤8 KiB，首次握手等待 post-handshake 学习（≤8 s） | `docs/INTEROP.md` | 保留参考栈依赖；mirror 字节回放仍待补 |
 | R3 | **usage_v2 语义**：区间计量要求 per-IO 准入，数据面需关 splice | 本仓 `native_usage_adapter.go:24`；`core/pipe.go` splice 路径 | P3 单独立项；原生模式与普通模式分开压测 |
 | R4 | **依赖版本**：TX-Node 已对齐 quic-go 0.63/utls 1.8.3；后续升级需双向验证 | `go.mod` | 锁版本 + CI 双跑 |

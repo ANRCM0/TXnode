@@ -58,6 +58,8 @@ const (
 	cmdConnect = 1
 	// cmdUDP is the UDP command; only valid on version 3.
 	cmdUDP = 3
+	// cmdConnectV2 is the TCP command v4/v5 clients send (SNConnectorV4).
+	cmdConnectV2 = 5
 	// tagLen is the AEAD tag.
 	tagLen = 16
 )
@@ -109,6 +111,7 @@ type Options struct {
 type user struct {
 	name string
 	psk  []byte
+	raw  []byte
 	core core.User
 }
 
@@ -133,8 +136,8 @@ func NewHandler(o Options) (*Handler, error) {
 	if len(o.Users) == 0 {
 		return nil, errors.New("snell: no users configured")
 	}
-	if o.Version != 0 && (o.Version < 1 || o.Version > 3) {
-		return nil, fmt.Errorf("snell: version %d is not 1, 2 or 3", o.Version)
+	if o.Version != 0 && (o.Version < 1 || o.Version > 4) {
+		return nil, fmt.Errorf("snell: version %d is not 1, 2, 3 or 4", o.Version)
 	}
 	log := o.Logger
 	if log == nil {
@@ -175,7 +178,7 @@ func (h *Handler) SetUsers(users []core.User) {
 		if len(psk) == 0 {
 			continue
 		}
-		entry := &user{name: name, psk: normalizePSK(psk), core: u}
+		entry := &user{name: name, psk: normalizePSK(psk), raw: psk, core: u}
 		next = append(next, *entry)
 		byName[name] = &next[len(next)-1]
 	}
@@ -257,6 +260,9 @@ func (h *Handler) deriveKey(version int, psk, salt []byte) []byte {
 
 // Handle runs the handshake and returns the session.
 func (h *Handler) Handle(ctx context.Context, conn net.Conn) (*core.Session, error) {
+	if h.opts.Version >= 4 {
+		return h.handleV4(ctx, conn)
+	}
 	timeout := h.opts.AuthTimeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
