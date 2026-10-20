@@ -9,8 +9,11 @@
 | 范围 | 测试入口 | 已编写的断言 | 不能据此推出 |
 |---|---|---|---|
 | Service 的 usage_v2 生命周期 | `internal/service/native_usage_linux_test.go` 的 `TestNativeBillingRefreshResetAndEmptyRevocationPreserveOriginalSessions`、`TestNativeBillingRotationAndShutdownSealPriorCredentialEvidence`、`TestNativeCutoffClosesAffectedAdmissionAndHigherRevisionRecoversWithoutReposting` | 刷新、轮换、撤销、关闭和 cutoff 保留原授权会话证据 | 该文件使用 `nativeBillingKernel` / `stubNativeMeter`；不是完整真实内核 I/O 链路 |
-| 原生启动回执门禁 | `internal/service/native_startup_recovery_linux_test.go` | 真实 kernel 在固定旧 Session/Submission 得到匹配 persisted receipt 后才监听；跨页、lost ACK 不重发、未封口完成意图、cutoff、取消/超时、错误回执及 257 条 pending 拒绝；有效已 ACK 历史不占网络预算 | 新增源码待精确候选 Actions；回执不等于结算。spool 完整枚举仍不具备绝对磁盘时间/内存上限 |
-| 原租约 WS 端口更新 | `internal/service/native_config_reload_linux_test.go` | 真实认证 WS 帧及 bounded VLESS；REST 503 下无拉取地变更端口，保留 collector/meter/session/digest/deadline、兄弟流；绑定失败保留旧监听、过期/撤权拒绝、旧 full poll 不回滚 | 新增源码待精确候选 Actions；只覆盖端口变化，不证明普通授权续期连接连续或完整 Machine 已通过 |
+| 原生启动回执门禁 | `internal/service/native_startup_recovery_linux_test.go` | 真实 kernel 在固定旧 Session/Submission 得到匹配 persisted receipt 后才监听；跨页、lost ACK 不重发、未封口完成意图、cutoff、取消/超时、错误回执及 257 条 pending 拒绝；有效已 ACK 历史不占网络预算 | `454607f4` Go/race 通过，新运行时仍须新提交 Actions；回执不等于结算。spool 完整枚举仍不具备绝对磁盘时间/内存上限 |
+| 原租约 WS 端口更新 | `internal/service/native_config_reload_linux_test.go` | 真实认证 WS 帧及 bounded VLESS；REST 503 下无拉取地变更端口，保留 collector/meter/session/digest/deadline、兄弟流；绑定失败保留旧监听、过期/撤权拒绝、旧 full poll 不回滚 | `454607f4` Go/race 通过，新运行时仍须新提交 Actions；只覆盖端口变化，不证明普通授权续期连接连续或完整 Machine 已通过 |
+| 普通授权续期的 Service owner | `internal/service/native_usage_renewal_linux_test.go` | 真实 bounded VLESS 同流三次续期、稳定 hook/四个原 grant 批次、非重叠区间和双向精确字节；当前 cutoff 不恢复 paused owner；unsupported 保持原重建；凭据/权限/period/terms/revocation/Provider 身份及缩短租约不进入保活续期 | 新增源码待新提交 Actions；不是 TLS/REALITY/全部协议或完整 Machine 连续性证明 |
+| 续期 meter 与严格封口 | `internal/kernel/txnode/native_renewal_linux_test.go`、`internal/usageinterval/native_strict_retire_linux_test.go` | Begin/Complete 在原 meter/collector 完成；foreign/duplicate token 拒绝、停止不可恢复、Commit 后仍暂停、整秒边界、不同 store/用户拒绝、未静止封口拒绝 | OS fsync 不可取消；包级断言不替代 Service 到协议的真实链路 |
+| 协议安全读取暂停 | `internal/dataplane/core/read_pause_test.go`、`internal/dataplane/proto/vless/read_pause_test.go`、`internal/dataplane/proto/vmess/read_pause_test.go` | 裸 TCP 暂停/恢复及原 deadline；未知承载拒绝能力；VMess 完整帧起点保留 nonce/XOF，部分长度/body/padding 不跨窗口重试；VLESS/VMess 部分写保留实际计数及错误 | 不支持以 TLS 读取超时模拟安全暂停；不是完整 Service VMess 或所有加密承载续期验收 |
 | 原生流量授权与关闭 | `internal/service/native_authority_denial_test.go`、`authorization_adapter_test.go`、`membership_withdrawal_test.go` | 真实监听和已建立流在拒绝、到期、撤销时关闭，并检查尾部或重放 | 不能替代所有 observer、事件存储和 packet 计量路径 |
 | 内核本地事件连接 | `internal/kernel/txnode/e2e_smoke_test.go` 的 `TestKernelLocalEventMeterAccountsRelay` | 真实 SOCKS5 TCP 流量经原生内核连接到 `usagebucket.Coordinator`，出现事件或持久化桶 | 当前成功条件不要求双向精确字节、Service 安装/退役 consumer、完整持久化恢复或 observer 输出 |
 | 内核原生计量接线 | `internal/kernel/txnode/native_meter_test.go`、`native_generation_linux_test.go` | 原生计量事件、未知 collector 拒绝、授权代际 | 不能覆盖 Service 到 Coordinator / observer 的完整组合及所有 UDP packet 路径 |
@@ -23,7 +26,7 @@
 | 原生 packet 周期 | 同文件的 `TestNativePacketPeriodKeepsUnsampledOldTailAndFreshBytesSeparate` | 真实 UDP 原周期 13 已采样 + 7 未采样尾部，切换后 57 字节；旧控制连接关闭，旧20/新57分段 | 不是任意 packet 承载协议的互通证明 |
 | 原生 I/O 错误边界 | `internal/dataplane/core/download_accounting_test.go`、`udp_accounting_test.go`、`chunk_hook_test.go` | 实际 relay copy 对短写、正字节伴错误、零成功写、取消限速及 packet 关闭完成 I/O 的计数 | 不恢复已移除内核的内部 wrapper；功能结果以候选 CI 为准 |
 | Mieru 官方 UDP 网络损伤 | `internal/kernel/txnode/mieru_packet_fault_linux_test.go` 的 `TestInteropMieruOfficialPacketFaults` | 有界代理在双向真实注入丢包、乱序和重复；core 与 NativeMeter 物理计数精确；撤权重放不复活、Reload/监听回滚恢复 | 本地物理观察不是 usage_v2 结算或持久化恢复；真实 UDP socket 绑定失败不承诺原 underlay 无中断 |
-| 固定 Core machine 契约 | `internal/machine/native_core_machine_live_test.go`、`scripts/tests/node-native-machine/`，CI `core-machine` | 已编写真实 Provider mTLS、native 安装/激活、账户/购买/履约及签名授权准备，生产 Orchestrator、双 Node、共享 WS/503/后继心跳、设备事实、隔离、轮换与原使用量重放断言 | 当前固定 Core native admission 缺五项必要能力，正向链路尚未执行；Node 普通续期连续性也未实现，详见 `CORE-MACHINE-COMPATIBILITY.zh.md`。不宣称 native installation machine 或数据库计费已验证 |
+| 固定 Core machine 契约 | `internal/machine/native_core_machine_live_test.go`、`scripts/tests/node-native-machine/`，CI `core-machine` | 已编写真实 Provider mTLS、native 安装/激活、账户/购买/履约及签名授权准备，生产 Orchestrator、双 Node、共享 WS/503/后继心跳、设备事实、隔离、轮换与原使用量重放断言 | 当前固定 Core native admission 缺五项必要能力，正向链路尚未执行；Node 普通续期仅有窄路径源码和待执行回归，详见 `CORE-MACHINE-COMPATIBILITY.zh.md`。不宣称 native installation machine 或数据库计费已验证 |
 
 ## SIGKILL 夹具约束
 

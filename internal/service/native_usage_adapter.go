@@ -203,9 +203,9 @@ func (s *Service) recoverNativeStartup(parent context.Context) error {
 	return nil
 }
 
-func (s *Service) installNativeCollector(ctx context.Context, snapshot *authorization.Snapshot) error {
+func (s *Service) newNativeCollector(ctx context.Context, snapshot *authorization.Snapshot) (*usageinterval.NativeCollector, error) {
 	if snapshot == nil || snapshot.Payload.UsageV2 == nil || s.nativeUsage.failed.Load() {
-		return errNativeUsage
+		return nil, errNativeUsage
 	}
 	users := make(map[string]int, len(snapshot.Users))
 	for _, user := range snapshot.Users {
@@ -215,21 +215,37 @@ func (s *Service) installNativeCollector(ctx context.Context, snapshot *authoriz
 		usageinterval.NativeWindow{Revision: snapshot.Payload.Revision, Digest: snapshot.Digest,
 			IssuedAt: snapshot.Payload.IssuedAt, ExpiresAt: snapshot.Payload.ExpiresAt}, users)
 	if err != nil {
-		return errNativeUsage
+		return nil, errNativeUsage
 	}
 	if wait := time.Until(collector.ReadyAt()); wait > 0 {
 		if wait > 30*time.Second {
 			collector.Fail()
-			return errNativeUsage
+			return nil, errNativeUsage
 		}
 		timer := time.NewTimer(wait)
 		defer timer.Stop()
 		select {
 		case <-ctx.Done():
 			collector.Fail()
-			return ctx.Err()
+			return nil, ctx.Err()
 		case <-timer.C:
 		}
+	}
+	if ctx.Err() != nil || collector.CheckCurrent() != nil {
+		collector.Fail()
+		return nil, errNativeUsage
+	}
+	return collector, nil
+}
+
+func (s *Service) installNativeCollector(ctx context.Context, snapshot *authorization.Snapshot) error {
+	collector, err := s.newNativeCollector(ctx, snapshot)
+	if err != nil {
+		return err
+	}
+	users := make(map[string]int, len(snapshot.Users))
+	for _, user := range snapshot.Users {
+		users[user.UUID] = user.ID
 	}
 	nk, ok := s.kernel.(nativeUsageKernel)
 	if !ok {
@@ -356,6 +372,13 @@ func (s *Service) applyNativeAuthorization(ctx context.Context, result controlpl
 			return errNativeUsage
 		}
 		return nil
+	}
+	if _, supported := s.kernel.(nativeRenewalKernel); supported && !certChanged && !s.pendingCertRenewal &&
+		s.kernel.IsRunning() && computeConfigHash(node) == s.appliedConfigHash &&
+		computeConfigHash(node) == s.lastConfigHash && nativeRenewalEquivalent(current, verified) {
+		if err := s.renewNativeAuthorization(ctx, verified, result.Users, node); !errors.Is(err, usageinterval.ErrNativeRenewalUnsupported) {
+			return err
+		}
 	}
 	if err := s.drainNativeUsage(ctx); err != nil {
 		return err

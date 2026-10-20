@@ -22,12 +22,18 @@ Node `75e1554` 的 Actions run `39463019286`，Core machine job `118770492079` �
 | 保留的原业务断言 | 当前原生实现及缺口 |
 | --- | --- |
 | 恢复旧使用量并取得 Core 持久化回执后才开放监听 | 新增启动恢复源码：`OpenNativeStore` 导出旧意图后，在新 collector 和 listener 之前验证固定恢复集合的真实持久化 receipt。每页最多 16 个、最多 16 页未获回执的记录，整体 30 秒、每页 2 秒；已确认历史本地验证且不占网络预算。原 session、payload、period 和 digest 保持，matching 当前 cutoff 阻止准入。真实内核回归已编写，须取得当前提交 Actions 结果才算验收。 |
-| 兄弟节点已建流跨授权刷新继续存活 | `applyNativeAuthorization` 在接受新签名修订前停止旧 kernel、排空计量并创建新 collector；现有 `TestNativeBillingRefreshResetAndEmptyRevocationPreserveOriginalSessions` 明确要求重新启动。持续连接的原断言尚未满足。 |
+| 兄弟节点已建流跨授权刷新继续存活 | 新增普通续期源码：凭据、权限、period、terms、tariff、revocation 和会话身份相同且租约不缩短时，稳定 meter 暂停新 Begin，等待原 token 完成，严格封口后切换 collector，再恢复读取。新增真实 VLESS 同流三次续期、原批次精确计量、cutoff 及 unsupported 回退回归，待新提交 Actions。不能安全暂停的承载和身份/策略变化仍重建；完整 Machine 断言未验收。 |
 | 所有 config/users REST 请求阻断时仍由 WS 完成配置更新 | 新增端口变化的窄路径：当前签名用户、协议、安全参数、路由及原有限租约保持，使用既有 Kernel.Reload 复用原 meter/collector，并阻止旧在途 full REST 结果回滚新端口。失败保留旧已应用监听，过期/撤权照常关闭。其他配置变化仍获取完整签名 REST snapshot；新增真实 WS/VLESS 回归待当前 Actions 验收。 |
 
 这些是 Node 的兼容与验收缺口，不能归入 Core admission 缺失，也不证明当前原生计量已经丢失。夹具保留相应严格断言；即使后续 Core inventory 通过，也不能据此宣称完整 Machine 已通过。
 
-启动恢复的时间预算覆盖可取消的递交和阶段检查；本地 spool 枚举仍使用既有完整读取，不能把页数预算解释成磁盘 I/O 或内存的绝对上限。持久化回执只证明 Core 接收保管，`pending` 不等于财务已结算。普通授权续期的连接连续性仍未实现：server hook、不可变 collector 窗口、原 token completion 和不重叠的封口边界需要协调设计，不能以替换 meter 指针绕过。
+启动恢复的时间预算覆盖可取消的递交和阶段检查；本地 spool 枚举仍使用既有完整读取，不能把页数预算解释成磁盘 I/O 或内存的绝对上限。持久化回执只证明 Core 接收保管，`pending` 不等于财务已结算。启动恢复与 WS 端口更新在 `454607f4` 的 Actions `39489699245` Go/race 中通过；新增续期源码改变了运行时，必须重新取得新提交证据。
+
+普通续期的 owner 链为 `Service.applyNativeAuthorization -> renewNativeAuthorization -> Kernel.PauseNativeRenewal -> nativeMeter renewal ticket -> protocol ReadPauseConn -> NativeCollector.RetireQuiescent -> NativeStore`。稳定 hook 保留原 token 的 issuing meter/collector；暂停时不把 token 迁移到后继窗口。旧 grant 以整秒边界封口，新 collector 的 ReadyAt 必须不早于该边界；新 authority high-water 经原 manager 持久化后，在 watchdog/quarantine 的原锁下发布并 Resume。
+
+续期成功窗口最多两秒，且不超过旧授权和候选租约的剩余时间。锁等待和阶段检查可取消，OS fsync 本身不可取消；磁盘操作不持 meter/kernel gate 锁，旧 watchdog 仍能终止 I/O，迟到返回不能恢复失效 owner。任何进入暂停后发生的错误均 Abort，不恢复已封口旧窗口，也不回滚授权 high-water。只有暂停前无副作用的 unsupported 结果能走原重建路径。
+
+当前读取暂停仅识别握手后的裸 TCP，以及协议明确保留的完整帧起点。VMess 半个长度、body 或 padding 均不能重试；TLS、REALITY、Vision 和其他不透明承载不声明可暂停，使用原重建路径。Service 联合回归目前是普通 VLESS，VMess codec 有独立边界回归；两者不能推导完整 Machine 或全部承载连接连续性。
 
 ## 固定 Core 调用链
 

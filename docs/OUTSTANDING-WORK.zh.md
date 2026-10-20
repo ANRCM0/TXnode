@@ -7,12 +7,21 @@
 ## 当前候选状态
 
 2026-10-21：分支 `feat/interop-acceptance-gates` 已编写以下 S0-S4 实现与验收入口。
-最近已取得功能结果的候选为 `8f41aacb0796f7f3d1cc491e64cfb53665505a89`，
-Actions `39483928584` 的 Go/race、quick/full、runtime stability、七项故障、
-固定 Core C2 和镜像冒烟均通过。完整互通为 36 个顶层、24 个子项通过和两项不适用。
-该提交的正式五组 A/B 与 30 分钟负载仍在执行；四份独立 profile 的物理字节核对通过，
-但不能代替正式 120 份样本。新补齐的启动恢复、WS 端口更新和 CPU v2 测量切片须另取
-同 SHA 的 Actions 证据，不能沿用此提交通过状态。
+最近已取得功能结果的候选为 `454607f4ca999431bcb0af6b2bcf4a5def0eddaf`，
+Actions `39489699245` 的 Go/race、quick/full、runtime stability、七项故障、
+固定 Core C2 和镜像冒烟均通过，包含启动恢复、WS 端口更新及对应回归。
+完整互通为 36 个顶层、24 个子项通过和两项不适用。该提交的正式五组 CPU v2 A/B
+已通过：120/120 份样本与原始 CPU 证明核对有效，12/12 组比较在原阈值内；
+30 分钟负载待最终产物。新增普通授权
+续期改变了 meter、协议读取与 Service 发布路径，须取得新提交的完整 Actions，
+不得沿用 `454607f4` 的通过状态。
+
+历史 `8f41aacb0796f7f3d1cc491e64cfb53665505a89` 的完整 S3 v1 验收已通过：
+120 份样本、12 组比较均在原阈值内，持续负载 1809.908 秒、38 轮。后继
+`08191208` 的 CPU v2 正式测量取得 118/120 份有效样本，旧基线 long/short 各有
+一份 EOF，整轮失败；候选侧 60 份完整，通过的 10 组比较不能替代整轮结果。
+该提交持续负载 1812.130 秒、40 轮通过，但新增启动夹具的 race 使 Go job 失败，
+此夹具竞争已在 `454607f4` 修正并通过 Go/race。保留旧失败和原测量阈值。
 
 上一候选 `71abaa9` 的 30 分钟负载通过：1810.439 秒、39 轮承载生命周期、最高
 1000 会话，业务错误为零且原资源预算通过。正式 A/B 的 120/120 样本完整、字节核对
@@ -26,8 +35,10 @@ Node 自己的 Machine 夹具已补齐真实 Provider mTLS、安装初始化/激
 Python AST 和格式检查通过，完整运行未验收。原业务断言继续保留；固定 Core 的
 五项 admission 缺失以及 Node 自身的回执先于监听、授权刷新连接连续性、WS-only
 配置三项行为要求详见 `CORE-MACHINE-COMPATIBILITY.zh.md`。启动回执与仅端口变化的
-WS 更新已补源码及真实内核回归，静态编译通过、功能待 Actions；普通租约续期的
-连接连续性仍未实现。不能将这些全部归因于 Core，
+WS 更新已在 `454607f4` Go/race 通过。普通续期新增稳定 meter、原 token owner、
+严格封口与窄范围安全读取暂停源码；真实 VLESS 同流续期、cutoff、unsupported
+回退和资格负向回归已编写，静态检查通过，待新提交 Actions。TLS/REALITY 等
+不透明承载继续重建，不能声称所有传输的连接连续性。不能将这些全部归因于 Core，
 也不能把源码准备或 inventory 检查当作完整 Machine 通过。
 
 中间候选 `6f8ae3c54eaf2466915781b7bee676920e318281` 的 Actions `39470031165`
@@ -78,9 +89,9 @@ events/download 的 coordinator 返回 evidence 错误，账量未确认。测�
 | S1 REALITY / Naive / TUIC | REALITY 自生成匹配密钥；Naive 信任根/SAN、协商填充帧和 h2 半关闭；TUIC TCP、UDP native/quic 对照和分片，UDP echo 保留 4096 字节断言 | 三类路径在中间候选通过；全部客户端仍须最终候选严格互通 |
 | S2-A smux/yamux UDP | 依固定 sing-mux 客户端版本对齐 packet 格式，复用 core 策略、限速、计量及撤权 | 新候选双向大包、父子关闭、实例隔离和精确计量的 Actions 结果 |
 | S2-B Mieru UDP / TCP 复用 | 有界 UDP 状态机、确认/重传/重组、nonce 与重放历史；TCP underlay 多 session、丢包缺口恢复及认证 FIN 尾部；新增官方客户端网络损伤/精确计量入口 | 普通官方 UDP、失败目标复用和显式整形在中间候选通过；丢包、乱序、重复、撤权密文重放及同端口 Reload/回滚须最终候选执行 |
-| S3 原生覆盖 | Service+Coordinator+observer、真实 UDP 周期、I/O 短写/失败；固定 Core machine 独立入口、真实授权夹具；启动回执先于监听与原租约 WS 端口 Reload | Service 的精确 TCP/UDP、存储失败隔离与周期断言已有历史通过；新增启动/WS 回归待精确候选 Actions。Machine 仍有固定 Core admission 和普通续期连续性缺口 |
+| S3 原生覆盖 | Service+Coordinator+observer、真实 UDP 周期、I/O 短写/失败；固定 Core machine 独立入口、真实授权夹具；启动回执与原租约 WS 端口 Reload；普通续期稳定 meter 与严格窗口交接 | 启动/WS 在 `454607f4` Go/race 通过；新续期须新提交 Actions，Service 联合回归限普通 VLESS。Machine 仍被固定 Core admission 阻塞，完整断言未执行 |
 | S3 持续负载/故障 | 30 分钟 100/250/500/1000 会话工具；真实承载节点撤权/轮换/换证 Reload、限速取消、报告阻塞、慢盘和 SIGKILL 恢复；FD/heap/goroutine 诊断 | `f1451d5` 持续负载在原资源预算内通过；`6f8ae3c` 七项 race 故障通过。最终候选仍须取得同 SHA 的完整窗口和故障证据 |
-| S3 新旧 A/B | 固定旧 `a1ad269` 与候选、同 runner/toolchain、三种模式、五组交替、上传/下载/短/长连接、分配窗口及相同 runtime 实际镜像构建；CPU v2 原始进程快照与独立 profile | `71abaa9` 的 120 份样本完整且精确持久化字节核对通过，events/long CPU 仍越过原阈值；v2 测量及拒绝无效证据的测试待新候选完整 Actions，旧失败保留且阈值不变 |
+| S3 新旧 A/B | 固定旧 `a1ad269` 与候选、同 runner/toolchain、三种模式、五组交替、上传/下载/短/长连接、分配窗口及相同 runtime 实际镜像构建；CPU v2 原始进程快照与独立 profile | `8f41aacb` v1 完整验收通过，`08191208` v2 因旧侧两份 EOF 失败；`454607f4` v2 job 成功、待原始证据核对。续期新源码须重跑完整测量，不混用历史结果，阈值不变 |
 | S4 可选/运维 | Mieru 显式整形及低熵编码、严格未知配置拒绝；节点/进程范围连接 ID、受限诊断、迁移说明 | 官方客户端所有显式组合、跨重载关闭与诊断隐私须由新候选验收 |
 
 ## 支持范围与保留的不适用组合

@@ -36,6 +36,23 @@ ID 使用进程随机代号和全局递增的 session 序号。关闭请求只�
 `Session.Close` 取消限速等待并关闭 TCP/packet 传输；原代际的 meter 仍接收 I/O 完成和尾部。
 这里提供内核能力，现有面板协议没有新增连接列表或关闭消息。
 
+## 普通授权续期
+
+只有用户凭据、权限、Provider/会话身份和原计量策略不变、有限租约不缩短，且运行配置
+相同的签名快照续期，才可进入连接保活路径。meter 暂停新的 I/O intent，原 token
+在原 collector 完成并封口；新窗口从不早于旧整秒封口边界的位置开始。原 grant、
+period、批次及 digest 不重标，成功续期不重启 kernel。
+
+该能力要求协议能够在未读取任何下一帧字节的位置安全暂停。当前裸 TCP 路径提供
+此能力；TLS、REALITY、Vision 等不透明承载使用原有重建路径。VMess 已读取部分
+长度/body/padding 时不能把下一次读取迁移到新窗口；相关错误终止原流。
+
+暂停到恢复的成功预算为两秒，同时受旧授权与候选租约限制。旧 watchdog 和 cutoff
+在此期间保持生效；超时或封口后失败终止 owner，不能恢复旧 collector。OS fsync
+不承诺可取消。凭据轮换、撤权、计量周期或策略变化仍按原生命周期重建。
+新增 Service VLESS、meter、collector 和协议边界回归须取得新提交的 Actions 结果，
+不能据此宣称完整 Machine 或所有传输已支持连接连续性。
+
 ## 受限诊断
 
 在本地配置显式设置：
