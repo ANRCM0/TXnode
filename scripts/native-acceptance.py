@@ -230,10 +230,14 @@ def build_runtime_images(output, report):
             target.unlink()
 
 
-def sample(binary, state, mode, workload, args, origin):
+def sample(binary, state, mode, workload, args, origin, cpu_profile=None):
     state.mkdir(parents=True)
     log = (state / "server.log").open("w")
-    process = subprocess.Popen([str(binary), "-mode", mode, "-state", str(state)], stdout=log, stderr=log, text=True)
+    environment = os.environ.copy()
+    environment.pop("TXNODE_NATIVE_AB_CPU_PROFILE", None)
+    if cpu_profile is not None:
+        environment["TXNODE_NATIVE_AB_CPU_PROFILE"] = str(cpu_profile)
+    process = subprocess.Popen([str(binary), "-mode", mode, "-state", str(state)], stdout=log, stderr=log, text=True, env=environment)
     measurements = {"mode": mode, "workload": workload, "status": "incomplete"}
     rss_samples = []
     stop = threading.Event()
@@ -259,12 +263,14 @@ def sample(binary, state, mode, workload, args, origin):
             time.sleep(0.05)
         if port is None:
             raise RuntimeError("server readiness missing; see server.log")
+        measurements["stage"] = "warmup"
         warmup = transfer(port, origin.port, workload, args.warmup, args.concurrency)
         memory_start = runtime_snapshot(process, state, 1)
         cpu_start, rss = process_resources(process.pid)
         rss_samples.append(rss)
         watcher = threading.Thread(target=monitor, daemon=True)
         watcher.start()
+        measurements["stage"] = "measurement"
         measurements.update(transfer(port, origin.port, workload, args.seconds, args.concurrency))
         cpu_end, rss = process_resources(process.pid)
         memory_end = runtime_snapshot(process, state, 2)
@@ -273,6 +279,7 @@ def sample(binary, state, mode, workload, args, origin):
         measurements["rss_peak_bytes"] = max(rss_samples)
         measurements["allocated_bytes_per_business_byte"] = (memory_end["total_alloc_bytes"] - memory_start["total_alloc_bytes"]) / measurements["bytes"]
         measurements["allocations_per_business_byte"] = (memory_end["mallocs"] - memory_start["mallocs"]) / measurements["bytes"]
+        measurements["stage"] = "shutdown-accounting"
         process.send_signal(signal.SIGTERM)
         if process.wait(timeout=30) != 0:
             raise RuntimeError("server shutdown/accounting failed; see server.log")
@@ -295,18 +302,57 @@ def sample(binary, state, mode, workload, args, origin):
             measurements["semantic_contract"] = "physical-byte-observation-v1"
         measurements["accounting_evidence"] = proof
         measurements["status"] = "measured"
+        measurements["stage"] = "complete"
     except Exception as error:
         measurements["error"] = str(error)
+        measurements["error_type"] = type(error).__name__
+        measurements["server_exit_at_error"] = process.poll()
     finally:
         stop.set()
         if watcher is not None:
             watcher.join(timeout=1)
         if process.poll() is None:
-            process.kill()
-            process.wait()
+            if cpu_profile is not None:
+                process.send_signal(signal.SIGTERM)
+                try:
+                    process.wait(timeout=15)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait()
+            else:
+                process.kill()
+                process.wait()
         log.close()
     (state / "sample.json").write_text(json.dumps(measurements, indent=2) + "\n")
     return measurements
+
+
+def diagnostics(output, report, args, origin):
+    # Profiled samples are separate from all acceptance samples and ratios.
+    cases = [("ordinary", "download")]
+    if any(s["mode"] == "usage_v2" and s["workload"] == "short" and s["status"] != "measured" for s in report["samples"]):
+        cases.append(("usage_v2", "short"))
+    results = []
+    report["diagnostics"] = results
+    for mode, workload in cases:
+        for side in ("legacy", "candidate"):
+            state = output / ("diagnostic-%s-%s-%s" % (mode, workload, side))
+            profile = state / "cpu.pprof"
+            binary = output / ("server-" + side)
+            result = {"side": side, "mode": mode, "workload": workload, "acceptance_sample": False,
+                      "profile_scope": "startup, warmup, measurement, graceful shutdown", "binary_sha256": digest(binary)}
+            try:
+                result["sample"] = sample(binary, state, mode, workload, args, origin, cpu_profile=profile)
+                result["profile_bytes"] = profile.stat().st_size
+                result["profile_sha256"] = digest(profile)
+                top = command(["go", "tool", "pprof", "-top", "-nodecount=40", str(binary), str(profile)])
+                (state / "cpu-top.txt").write_text(top + "\n")
+                print("diagnostic %s/%s/%s\n%s" % (side, mode, workload, top), flush=True)
+            except Exception as error:
+                result["diagnostic_error"] = str(error)
+            results.append(result)
+            (state / "metadata.json").write_text(json.dumps(result, indent=2) + "\n")
+            (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
 
 
 def cv(values):
@@ -403,6 +449,11 @@ def run(args):
                 report["builds"][side] = {"status": "incomplete", "error": error.output}
         if any(report["builds"][side]["status"] != "built" for side in ("legacy", "candidate")):
             return report
+        if args.diagnostics_only:
+            origin = Origin()
+            diagnostics(output, report, args, origin)
+            report["status"] = "diagnostics-only"
+            return report
         build_runtime_images(output, report)
         origin = Origin()
         for group in range(args.groups):
@@ -419,6 +470,7 @@ def run(args):
         report["comparisons"] = compare(report["samples"], args.groups)
         report["status"] = "measured-with-limitations" if all(s["status"] == "measured" for s in report["samples"]) else "incomplete"
         report["accepted"] = report["status"] == "measured-with-limitations" and len(report["comparisons"]) == len(MODES)*len(WORKLOADS) and all(item["status"] == "within-initial-thresholds" for item in report["comparisons"])
+        diagnostics(output, report, args, origin)
         return report
     finally:
         if origin is not None:
@@ -432,6 +484,12 @@ def run(args):
         lines = ["# Native / legacy performance", "", "Candidate: `%s`; baseline: `%s`." % (candidate, BASELINE), "", "Status: **%s**. Scoped A/B accepted: **%s**." % (report["status"], report["accepted"]), "", "| Mode | Workload | Status | Candidate / legacy throughput | Candidate / legacy CPU |", "|---|---|---|---:|---:|"]
         for item in report["comparisons"]:
             lines.append("| %s | %s | %s | %.4f | %.4f |" % (item["mode"], item["workload"], item["status"], item.get("throughput_candidate_over_legacy", 0), item.get("cpu_candidate_over_legacy", 0)))
+        if report.get("diagnostics"):
+            lines.extend(["", "Separate CPU profile diagnostics (excluded from acceptance samples and ratios):"])
+            for item in report["diagnostics"]:
+                lines.append("- %s/%s/%s: %s; profile bytes=%d; error=%s" % (
+                    item["side"], item["mode"], item["workload"], item.get("sample", {}).get("status", "incomplete"),
+                    item.get("profile_bytes", 0), item.get("diagnostic_error", item.get("sample", {}).get("error", "none"))))
         lines.extend(["", "Not measured: " + ", ".join(report["not_measured"]) + ".", "", "Loopback evidence does not establish production or cross-region performance."])
         (output / "report.md").write_text("\n".join(lines) + "\n")
 
@@ -444,8 +502,14 @@ def main():
     parser.add_argument("--seconds", type=int, default=10)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument("--diagnostics-only", action="store_true", help="separate two-side CPU profiles; never satisfies the performance gate")
     args = parser.parse_args()
     report = run(args)
+    if args.diagnostics_only:
+        complete = report["status"] == "diagnostics-only" and len(report.get("diagnostics", [])) == 2 and all(
+            item.get("profile_bytes", 0) > 0 and not item.get("diagnostic_error") and item.get("sample", {}).get("status") == "measured"
+            for item in report["diagnostics"])
+        return 0 if complete else 1
     # Semantic-equivalence gaps and unsupported measurements are explicit, and
     # an incomplete or noisy measurement never satisfies a performance gate.
     return 0 if report["accepted"] else 1

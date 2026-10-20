@@ -174,6 +174,38 @@ jobs:
           path: artifacts/native-faults/
           if-no-files-found: error
 
+  performance-diagnostics:
+    name: Independent native legacy CPU profiles
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+          cache-dependency-path: go.sum
+      - name: Profile identical download paths outside the acceptance matrix
+        env:
+          CANDIDATE_SHA: ${{ needs.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --output artifacts/native-performance-diagnostics --diagnostics-only
+      - name: Retain independent CPU profiles even on diagnostic failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-performance-diagnostics-${{ needs.source.outputs.sha }}
+          path: |
+            artifacts/native-performance-diagnostics/report.json
+            artifacts/native-performance-diagnostics/report.md
+            artifacts/native-performance-diagnostics/diagnostic-*/
+          if-no-files-found: error
+
   performance:
     name: Same runner legacy candidate A B
     needs: source

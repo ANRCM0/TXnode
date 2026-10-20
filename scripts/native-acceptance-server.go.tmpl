@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"strconv"
 	"strings"
 	"syscall"
@@ -28,6 +29,17 @@ func main() {
 	flag.Parse()
 	if *root == "" {
 		panic("state directory required")
+	}
+	if path := os.Getenv("TXNODE_NATIVE_AB_CPU_PROFILE"); path != "" {
+		profile, err := os.Create(path)
+		if err != nil {
+			panic(err)
+		}
+		if err := pprof.StartCPUProfile(profile); err != nil {
+			_ = profile.Close()
+			panic(err)
+		}
+		defer func() { pprof.StopCPUProfile(); _ = profile.Close() }()
 	}
 	node := makeKernel()
 	var coordinator *usagebucket.Coordinator
