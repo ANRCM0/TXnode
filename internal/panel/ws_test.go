@@ -194,20 +194,18 @@ func TestWSClient_ReconnectOnDisconnect(t *testing.T) {
 
 	go ws.Run(ctx)
 
-	// Wait for reconnection
+	// A second server upgrade precedes the client's authenticated state.
 	deadline := time.After(4 * time.Second)
 	for {
 		mu.Lock()
 		n := connectCount
 		mu.Unlock()
-		if n >= 2 {
+		if n >= 2 && ws.IsConnected() {
 			break
 		}
 		select {
 		case <-deadline:
-			mu.Lock()
-			t.Fatalf("expected at least 2 connections, got %d", connectCount)
-			mu.Unlock()
+			t.Fatalf("expected an authenticated reconnect, connections=%d connected=%v", n, ws.IsConnected())
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
