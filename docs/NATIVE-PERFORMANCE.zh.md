@@ -99,6 +99,13 @@ splice。上传在 socket-to-pipe 前执行原 `Begin(copyBuf)`，按实际读�
 watcher 退出后再释放子 context。带 `NativeCollector` 的 `usage_v2` 不允许此优化，
 继续使用原用户态复制和强制准入路径；TLS、缓冲包装、有效限速及未显式允许的 hook
 也继续使用原复制路径。事件分块和数量可能不同，仍须通过原物理字节和 owner 断言。
+
+原 `usage_v2` 失败样本中的部分完成记录符合时钟顺序拒绝，不能单凭聚合 journal
+确定具体根因。源码中 `CompleteIO` 在 collector 锁外采样、`BeginIO` 在锁内采样；
+双时钟观察可与并发操作交错。完成采样现与 Begin/Complete 共用 collector 锁，
+不修改原 wall 回退、单调 deadline、grant、退休或原 token 拒绝条件。锁后观察是
+完成上界，等待锁时越过租约的字节仍保留为不 eligible；不会因此延长授权。
+私有时钟注入只用于确定性测试，不改变公开调用、持久化格式或既有保护历史。
 profile 支持定位开销，不证明修复后的性能结果，新候选仍按
 上述五组、原 5% 阈值和原资源预算执行。
 
