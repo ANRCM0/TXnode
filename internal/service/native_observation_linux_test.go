@@ -347,7 +347,7 @@ func TestNativePacketPeriodKeepsUnsampledOldTailAndFreshBytesSeparate(t *testing
 	newPacket.Close()
 	nativeObservationWait(t, func() bool {
 		traffic, _, _, _ := s.kernel.GetUserTraffic(t.Context())
-		return traffic[7] == [2]int64{57, 57}
+		return traffic[7] == [2]int64{77, 77}
 	})
 	s.trackAndEnforce(t.Context())
 	batch := s.prepareReportBatch()

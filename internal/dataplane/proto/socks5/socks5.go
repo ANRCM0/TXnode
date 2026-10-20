@@ -336,6 +336,13 @@ func (h *Handler) associate(conn net.Conn, userID int) (*core.Session, error) {
 		_ = a.Close()
 		return nil, err
 	}
+	// The control channel carries no application data. Its EOF ends the UDP
+	// lease even while core is waiting in ReadPacket rather than Conn.Read.
+	go func() {
+		var unexpected [1]byte
+		_, _ = conn.Read(unexpected[:])
+		_ = a.Close()
+	}()
 	// core gets the control connection (the association dies with it — the binary
 	// keeps one goroutine per association in PacketServer.loop @0xb2ef00) plus the
 	// datagram stream.

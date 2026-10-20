@@ -192,6 +192,12 @@ func inheritSecurityState(next, previous core.Handler) {
 
 func (h *liveHandler) Handle(ctx context.Context, conn net.Conn) (*core.Session, error) {
 	state := h.state.Load()
+	if mh, ok := state.security.(*mieru.Handler); ok {
+		mh.SetCurrent(func() *mieru.Handler {
+			current, _ := h.Current().(*mieru.Handler)
+			return current
+		})
+	}
 	sess, err := state.handler.Handle(ctx, conn)
 	if err != nil {
 		return sess, err
