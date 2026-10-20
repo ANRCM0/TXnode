@@ -26,8 +26,8 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/dataplane/opt"
 	"github.com/ANRCM0/TX-Node/internal/dataplane/outbound"
 	"github.com/ANRCM0/TX-Node/internal/dataplane/socks"
-	"github.com/ANRCM0/TX-Node/internal/reporting"
 	"github.com/ANRCM0/TX-Node/internal/txboard"
+	"github.com/ANRCM0/TX-Node/internal/usagev2"
 	"github.com/gorilla/websocket"
 )
 
@@ -49,17 +49,19 @@ type machineCoreLiveFixture struct {
 	ForeignToken     string                `json:"foreign_token"`
 }
 type machineCoreLiveSpool struct {
-	Path    string           `json:"-"`
-	NodeID  int              `json:"node_id"`
-	BatchID string           `json:"batch_id"`
-	SHA256  string           `json:"sha256"`
-	Traffic map[int][2]int64 `json:"traffic"`
+	Path          string          `json:"-"`
+	NodeID        int             `json:"node_id"`
+	BatchID       string          `json:"batch_id"`
+	SHA256        string          `json:"sha256"`
+	SourceEpoch   string          `json:"source_epoch"`
+	PayloadDigest string          `json:"payload_digest"`
+	PeriodIDs     []string        `json:"period_ids"`
+	Payload       usagev2.Payload `json:"payload"`
 }
 
-// Real production Orchestrator, native HTTP/WSS, Workerman, Redis and decoded
-// TCP protocol bytes. The fixed Core runs its existing legacy installation
-// machine contract; the Node kernel and both protocol clients are native txnode.
-// Only the exclusive external runner supplies Core state.
+// Real production Orchestrator, native installation activation, signed
+// authorization, Provider mTLS delivery and period-bound native usage. The
+// external runner supplies private fixture state, never substituted admission.
 func TestNativeCoreMachineLive(t *testing.T) {
 	directory := os.Getenv("TXBOARD_NATIVE_MACHINE_DIR")
 	endpoint := os.Getenv("TXBOARD_NATIVE_MACHINE_URL")
@@ -135,6 +137,24 @@ func TestNativeCoreMachineLive(t *testing.T) {
 		}
 	}()
 	cfg := &config.Config{InstanceID: "actual-native-machine", Panel: config.PanelConfig{Provider: "txboard", URL: endpoint}, Machine: &config.MachineConfig{MachineID: fixture.MachineID, Token: fixture.Token}, Kernel: config.KernelConfig{Type: "txnode", ConfigDir: root, LogLevel: "error"}, Cert: config.CertConfig{CertMode: "none"}, Node: config.NodeConfig{TrackInterval: 1, PushInterval: 60, PullInterval: 1, DeviceReportInterval: 60}, WS: config.WSConfig{DiscoveryInterval: 60, HandshakeTimeout: 5, BackoffInitial: 1, BackoffMax: 3}}
+	var trust struct {
+		CoreInstanceID string `json:"core_instance_id"`
+		KeyID          string `json:"key_id"`
+		KeyEpoch       string `json:"key_epoch"`
+		PublicKey      string `json:"public_key"`
+	}
+	machineCoreDecode(t, filepath.Join(directory, "trust.json"), &trust)
+	provider := os.Getenv("NATIVE_MACHINE_PROVIDER")
+	if provider == "" {
+		t.Fatal("real private Provider endpoint required")
+	}
+	cfg.Authorization = config.AuthorizationConfig{Enabled: true, StateDir: filepath.Join(directory, "authorization"),
+		CoreInstanceID: trust.CoreInstanceID, KeyID: trust.KeyID, KeyEpoch: trust.KeyEpoch, PublicKey: trust.PublicKey,
+		PolicyVersion: config.NativeProviderUsagePolicyVersion, RefreshInterval: 1, MaxClockSkew: 1,
+		Provider: config.AuthorizationProviderConfig{Endpoint: provider, ProviderID: "primary-provider", ProviderInstanceEpoch: "1",
+			CAFile: filepath.Join(directory, "ca.pem"), ClientCert: filepath.Join(directory, "node.pem"), ClientKey: filepath.Join(directory, "node.key")}}
+	cfg.UsageV2 = config.UsageV2Config{Enabled: true, Directory: filepath.Join(directory, "usage"), CAFile: filepath.Join(directory, "ca.pem")}
+	usageRoot := cfg.UsageV2.Directory
 	start := func(cfg *config.Config) (*Orchestrator, context.CancelFunc, chan error) {
 		o, e := NewChecked(cfg)
 		if e != nil {
@@ -206,19 +226,16 @@ func TestNativeCoreMachineLive(t *testing.T) {
 	machineCoreWait(t, done, 8*time.Second, func() bool { return !machineCoreListening(fixture.NewPort) })
 	machineCoreEcho(t, stream2, []byte("sibling-unchanged-after-disable"))
 	machineCoreWait(t, done, 3*time.Second, func() bool {
-		paths, _ := filepath.Glob(filepath.Join(root, fmt.Sprintf("node-%d", fixture.Nodes[0].ID), "*.pending.json.terminal.json"))
-		return len(paths) == 1
+		return len(machineCoreSpools(t, usageRoot, fixture.Nodes[0].ID)) > 0
 	})
-	removed := machineCoreSpools(t, root, fixture.Nodes[0].ID)
+	removed := machineCoreSpools(t, usageRoot, fixture.Nodes[0].ID)
 	if len(removed) == 0 {
 		t.Fatal("withdrawn member traffic did not reach durable terminal storage")
 	}
 	machineCoreBarrier(t, directory, "disabled", map[string]any{"spools": removed, "target_stopped": true, "sibling_stream_continued": true})
 	machineCoreWait(t, done, 12*time.Second, func() bool { return machineCoreListening(fixture.NewPort) })
 	for _, spool := range removed {
-		if _, e := os.Stat(spool.Path); !os.IsNotExist(e) {
-			t.Fatal("restored member opened before old terminal slot was replayed")
-		}
+		machineCoreReplayed(t, spool, "restored member opened before original native submission was acknowledged")
 	}
 	stream1 = machineCoreDial(t, fixture.Nodes[0], destination)
 	defer stream1.Close()
@@ -243,7 +260,7 @@ func TestNativeCoreMachineLive(t *testing.T) {
 	if machineCoreListening(fixture.NewPort) || machineCoreListening(fixture.Nodes[1].Port) {
 		t.Fatal("listener remained after machine credential rejection")
 	}
-	tails := append(machineCoreSpools(t, root, fixture.Nodes[0].ID), machineCoreSpools(t, root, fixture.Nodes[1].ID)...)
+	tails := append(machineCoreSpools(t, usageRoot, fixture.Nodes[0].ID), machineCoreSpools(t, usageRoot, fixture.Nodes[1].ID)...)
 	for _, node := range fixture.Nodes {
 		found := false
 		for _, tail := range tails {
@@ -303,9 +320,7 @@ func TestNativeCoreMachineLive(t *testing.T) {
 		return machineCoreListening(fixture.NewPort) && machineCoreListening(fixture.Nodes[1].Port)
 	})
 	for _, tail := range tails {
-		if _, e := os.Stat(tail.Path); !os.IsNotExist(e) {
-			t.Fatal("current token listeners opened with an unreplayed terminal slot")
-		}
+		machineCoreReplayed(t, tail, "current token listeners opened before original native submission was acknowledged")
 	}
 	new1 := machineCoreDial(t, fixture.Nodes[0], destination)
 	defer new1.Close()
@@ -313,7 +328,7 @@ func TestNativeCoreMachineLive(t *testing.T) {
 	defer new2.Close()
 	machineCoreEcho(t, new1, []byte("current-vless"))
 	machineCoreEcho(t, new2, []byte("current-vmess"))
-	machineCoreWrite(t, filepath.Join(directory, "machine-live-result.json"), map[string]any{"core_installation_mode": "legacy", "node_kernel": "txnode", "native_core_installation_admission": false, "actual_orchestrator": true, "actual_shared_workerman": true, "actual_ws_only_config_delivery": true, "transient_transport_retry": true, "successor_session_ready": true, "foreign_machine_scope": true, "device_facts_from_socket_peer": true, "actual_vless_vmess": true, "scope_safe_config_disable": true, "membership_tail_recovered": removed, "machine_denial_tails_recovered": tails, "old_restart_denied": true, "fresh_restart_authenticated": true, "real_database_billing_verified": false})
+	machineCoreWrite(t, filepath.Join(directory, "machine-live-result.json"), map[string]any{"core_installation_mode": "native", "node_kernel": "txnode", "native_core_installation_admission": true, "actual_orchestrator": true, "actual_shared_workerman": true, "actual_ws_only_config_delivery": true, "transient_transport_retry": true, "successor_session_ready": true, "foreign_machine_scope": true, "device_facts_from_socket_peer": true, "actual_vless_vmess": true, "scope_safe_config_disable": true, "membership_tail_recovered": removed, "machine_denial_tails_recovered": tails, "old_restart_denied": true, "fresh_restart_authenticated": true, "real_database_billing_verified": false})
 	machineCoreBarrier(t, directory, "recovered", map[string]any{"tails": tails, "actual_protocol_recovery": true})
 }
 
@@ -462,22 +477,60 @@ func machineCoreHash(t *testing.T, path string) string {
 	hash := sha256.Sum256(body)
 	return hex.EncodeToString(hash[:])
 }
+
+// The legacy terminal-slot invariant maps to native durable unacknowledged
+// submissions. Receipts are retained beside original payloads after replay.
 func machineCoreSpools(t *testing.T, root string, nodeID int) []machineCoreLiveSpool {
 	t.Helper()
-	paths, e := filepath.Glob(filepath.Join(root, fmt.Sprintf("node-%d", nodeID), "*.pending.json.terminal.json"))
+	paths, e := filepath.Glob(filepath.Join(root, fmt.Sprintf("node-%d", nodeID), "spool", "*.usage.json"))
 	if e != nil {
 		t.Fatal(e)
 	}
 	result := []machineCoreLiveSpool{}
 	for _, path := range paths {
-		var batch reporting.Batch
-		machineCoreDecode(t, path, &batch)
-		if batch.Payload.BatchID == "" || len(batch.Payload.Traffic) == 0 {
-			t.Fatal("empty terminal spool")
+		var record usagev2.Record
+		machineCoreDecode(t, path, &record)
+		if err := record.Validate(); err != nil {
+			t.Fatal("invalid native usage record", err)
 		}
-		result = append(result, machineCoreLiveSpool{Path: path, NodeID: nodeID, BatchID: batch.Payload.BatchID, SHA256: machineCoreHash(t, path), Traffic: batch.Payload.Traffic})
+		// Only unacknowledged tail work participates in restart ordering. Existing
+		// acknowledged traffic remains durably retained under the receipt policy.
+		if record.Receipt != nil {
+			continue
+		}
+		payload := record.Submission.Payload
+		if payload.NodeID != strconv.Itoa(nodeID) || len(payload.Entries) == 0 {
+			t.Fatal("empty or foreign native tail")
+		}
+		periods := make([]string, 0, len(payload.Entries))
+		for _, entry := range payload.Entries {
+			periods = append(periods, entry.UsagePeriodID)
+		}
+		result = append(result, machineCoreLiveSpool{Path: path, NodeID: nodeID, BatchID: payload.BatchID, SHA256: machineCoreHash(t, path),
+			SourceEpoch: payload.SourceEpoch, PayloadDigest: record.Submission.PayloadDigest, PeriodIDs: periods, Payload: payload})
 	}
 	return result
+}
+
+func machineCoreReplayed(t *testing.T, original machineCoreLiveSpool, failure string) {
+	t.Helper()
+	var record usagev2.Record
+	machineCoreDecode(t, original.Path, &record)
+	if err := record.Validate(); err != nil {
+		t.Fatal(failure, err)
+	}
+	before, err := json.Marshal(original.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err := json.Marshal(record.Submission.Payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) || record.Submission.PayloadDigest != original.PayloadDigest ||
+		record.Receipt == nil || record.Receipt.ReceiptStatus != "persisted" {
+		t.Fatal(failure)
+	}
 }
 
 // Device facts are a separate alive-only native report. No traffic/counters are

@@ -16,6 +16,7 @@ import urllib.error
 import urllib.request
 from tls_proxy import NativeTLSProxy
 from preflight import inspect as compatibility_preflight
+from native_setup import prepare as prepare_native, render_credentials
 
 if len(sys.argv)!=4:raise SystemExit('usage: run.py API NODE NEW_EVIDENCE')
 api,node,evidence=(Path(p).resolve() for p in sys.argv[1:]);scripts=Path(__file__).resolve().parent
@@ -35,7 +36,7 @@ expected={'APP_ENV':'testing','DB_CONNECTION':'mysql','DB_HOST':'127.0.0.1','DB_
 if any(os.environ.get(k)!=v for k,v in expected.items()):raise SystemExit('NATIVE_MACHINE_EXCLUSIVE_FIXTURE_REQUIRED')
 if evidence.exists() or not os.environ.get('DB_PASSWORD') or not(api/'artisan').is_file() or not(node/'go.mod').is_file():raise SystemExit('NATIVE_MACHINE_INPUT_REFUSED')
 php=shutil.which('php84')or shutil.which('php');mysql=shutil.which('mariadb')or shutil.which('mysql')
-if not php or not mysql or not shutil.which('go')or not shutil.which('openssl'):raise SystemExit('NATIVE_MACHINE_TOOLS_REQUIRED')
+if not php or not mysql or not shutil.which('go')or not shutil.which('openssl')or not shutil.which('node'):raise SystemExit('NATIVE_MACHINE_TOOLS_REQUIRED')
 go=json.loads(subprocess.check_output(['go','env','-json','GOPATH','GOMODCACHE','GOCACHE','CGO_ENABLED'],text=True))
 if any(not isinstance(go.get(k),str)or not go[k] for k in ('GOPATH','GOMODCACHE','GOCACHE'))or go.get('CGO_ENABLED')!='1':raise SystemExit('NATIVE_MACHINE_GO_RACE_ENV_REQUIRED')
 env={k:os.environ[k]for k in ('PATH','LANG','LC_ALL','TMPDIR','GOTOOLCHAIN')if k in os.environ};env.update(go)
@@ -56,7 +57,7 @@ def artifact(name,value):
 artifact('sources.json',{'schema':'txnode-core-machine-sources/v1',
     'core_repository':baseline['repository'],'core_revision':actual,'core_tree':core_tree,
     'node_repository':'ANRCM0/txnode','node_revision':node_revision,'node_tree':node_tree,
-    'core_installation_mode':'legacy','node_kernel':'txnode',
+    'core_installation_mode':'not_started','requested_core_installation_mode':'native','node_kernel':'txnode',
     'fixture_ancestor':'TXBoard 52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645 scripts/tests/node-native-machine',
     'native_core_installation_admission':False})
 compatibility = compatibility_preflight(api, baseline)
@@ -65,7 +66,7 @@ if compatibility['gaps']:
     result = {'schema': 'txnode-core-machine-result/v1', 'status': 'failed',
               'failed_stage': 'compatibility_preflight', 'core_revision': actual,
               'node_revision': node_revision, 'core_tree': core_tree, 'node_tree': node_tree,
-              'core_installation_mode': 'legacy', 'node_kernel': 'txnode',
+              'core_installation_mode': 'not_started', 'requested_core_installation_mode': 'native', 'node_kernel': 'txnode',
               'native_core_installation_admission': False,
               'diagnostics': {'category': 'core_contract_gap', 'gaps': compatibility['gaps']}}
     artifact('result.json', result)
@@ -73,6 +74,7 @@ if compatibility['gaps']:
     raise SystemExit('NATIVE_MACHINE_CORE_COMPATIBILITY_BLOCKED')
 
 active_stage = 'setup'
+native_activated = False
 
 def failure_summary(category):
     # Private logs can contain fixture credentials. Publish only fixed labels,
@@ -109,7 +111,7 @@ def failure_summary(category):
     result = {'schema': 'txnode-core-machine-result/v1', 'status': 'failed',
               'failed_stage': active_stage, 'core_revision': actual,
               'node_revision': node_revision, 'core_tree': core_tree, 'node_tree': node_tree,
-              'core_installation_mode': 'legacy', 'node_kernel': 'txnode',
+              'core_installation_mode': 'native' if native_activated else 'not_started', 'node_kernel': 'txnode',
               'native_core_installation_admission': False, 'diagnostics': diagnostics}
     if not (evidence / 'result.json').exists():
         artifact('result.json', result)
@@ -125,26 +127,28 @@ def command(name,args,cwd,timeout=180):
 def freeport():
     with socket.socket()as connection:connection.bind(('127.0.0.1',0));return connection.getsockname()[1]
 ports=set()
-while len(ports)<8:ports.add(freeport())
-http_port,ws_port,tls_port,port0,port1,new_port,origin_port,foreign_port=sorted(ports)
+while len(ports)<10:ports.add(freeport())
+http_port,ws_port,tls_port,port0,port1,new_port,origin_port,foreign_port,provider_port,render_port=sorted(ports)
 env.update(NATIVE_MACHINE_NODE_PORT_0=str(port0),NATIVE_MACHINE_NODE_PORT_1=str(port1),NATIVE_MACHINE_NEW_PORT=str(new_port),NATIVE_MACHINE_ORIGIN_PORT=str(origin_port),NATIVE_MACHINE_FOREIGN_PORT=str(foreign_port))
 query="SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='txboard_native_machine_test'"
 probe=subprocess.check_output([mysql,'--protocol=tcp','-h127.0.0.1','-P'+env['DB_PORT'],'-u'+env['DB_USERNAME'],'-N','-e',query],env=env|{'MYSQL_PWD':env['DB_PASSWORD']},text=True).strip()
 if probe!='0':raise SystemExit('NATIVE_MACHINE_NONEMPTY_DATABASE_REFUSED')
 command('migrate',[php,'artisan','migrate','--force','--no-interaction'],api)
 command('build',['go','test','-c','-race','-o',str(evidence/'native-machine-test'),'./internal/machine'],node,600)
-fixture=json.loads(command('seed',[php,str(scripts/'fixture.php'),'seed'],api));artifact('fixture.json',fixture)
-command('certificate',['openssl','req','-x509','-newkey','rsa:2048','-nodes','-days','1','-keyout',str(evidence/'key.pem'),'-out',str(evidence/'cert.pem'),'-subj','/CN=localhost','-addext','subjectAltName=DNS:localhost,IP:127.0.0.1'],evidence)
-os.chmod(evidence/'key.pem',0o600);os.chmod(evidence/'cert.pem',0o600)
-endpoint='https://127.0.0.1:'+str(tls_port);env.update(TXBOARD_NATIVE_MACHINE_DIR=str(evidence),TXBOARD_NATIVE_MACHINE_URL=endpoint,SSL_CERT_FILE=str(evidence/'cert.pem'),APP_URL=endpoint)
+env['CORE_INSTALLATION_MODE']='native'
+provider_args=prepare_native(evidence,node,env,command,provider_port,render_port)
+trust=json.loads(command('trust',[php,str(scripts/'fixture.php'),'trust'],api))
+endpoint='https://127.0.0.1:'+str(tls_port)
+env.update(TXBOARD_NATIVE_MACHINE_DIR=str(evidence),TXBOARD_NATIVE_MACHINE_URL=endpoint,
+           SSL_CERT_FILE=str(evidence/'ca.pem'),APP_URL=endpoint)
 observation=evidence/'native-observations.jsonl';observation.touch(mode=0o600)
-proxy=NativeTLSProxy(tls_port,http_port,ws_port,str(evidence/'cert.pem'),str(evidence/'key.pem'),str(observation))
+proxy=NativeTLSProxy(tls_port,http_port,ws_port,str(evidence/'server.pem'),str(evidence/'server.key'),str(observation))
 processes=[];logs=[];test=None
 
 def start(name,args,cwd):
     path=evidence/(name+'.log');out=path.open('xb');os.chmod(path,0o600);logs.append(out)
     process=subprocess.Popen(args,cwd=cwd,env=env,stdout=out,stderr=subprocess.STDOUT,start_new_session=True);processes.append(process);return process
-context=ssl.create_default_context(cafile=str(evidence/'cert.pem'))
+context=ssl.create_default_context(cafile=str(evidence/'ca.pem'))
 def request(path,method,payload,headers):
     body=None if payload is None else json.dumps(payload).encode()
     req=urllib.request.Request(endpoint+path,data=body,method=method,headers={'Content-Type':'application/json'}|headers)
@@ -172,6 +176,20 @@ def mutation(node_id,fields):
     return status
 
 try:
+    provider=start('credential-provider',provider_args,node)
+    deadline=time.monotonic()+10
+    while True:
+        if provider.poll() is not None:raise RuntimeError('NATIVE_MACHINE_PROVIDER_START_FAILED')
+        try:
+            with socket.create_connection(('127.0.0.1',provider_port),timeout=.2):break
+        except OSError:pass
+        if time.monotonic()>deadline:raise RuntimeError('NATIVE_MACHINE_PROVIDER_READY_TIMEOUT')
+        time.sleep(.1)
+    fixture=json.loads(command('seed',[php,str(scripts/'fixture.php'),'seed'],api))
+    if fixture.get('activation')!={'phase':'open','authority_epoch':'2'}:raise RuntimeError('NATIVE_MACHINE_REAL_ACTIVATION_REQUIRED')
+    native_activated=True
+    artifact('fixture.json',fixture)
+    env['CORE_INSTALLATION_EPOCH']='2'
     http=start('core-http',[php,'-S','127.0.0.1:'+str(http_port),'-t','public','public/index.php'],api)
     worker=start('core-workerman',[php,'artisan','ws-server','start','--host=127.0.0.1','--port='+str(ws_port)],api)
     proxy.start()
@@ -185,6 +203,11 @@ try:
         except (OSError,urllib.error.URLError,ValueError):pass
         if time.monotonic()>deadline:raise RuntimeError('NATIVE_MACHINE_CORE_READY_TIMEOUT')
         time.sleep(.1)
+    fixture=json.loads(command('account',[php,str(scripts/'fixture.php'),'account'],api))
+    fixture=render_credentials(evidence,core,env,fixture,command)
+    # Replace the private seed metadata only after real Provider-issued material
+    # is recipient-rendered; public artifacts never include credentials.
+    (evidence/'fixture.json').write_text(json.dumps(fixture));os.chmod(evidence/'fixture.json',0o600)
     status,login=request('/txapi/auth/admin/login','POST',{'email':'native-machine-admin@example.test','password':'SyntheticMachineAdmin2026'},{} )
     bearer=login.get('data',{}).get('auth_data','')
     if status!=200 or not bearer.startswith('Bearer ')or login.get('data',{}).get('is_admin')is not True:raise RuntimeError('NATIVE_MACHINE_ADMIN_LOGIN_FAILED')
@@ -279,16 +302,24 @@ try:
     rows=stage_states['recovered']['batches'];required=disabled_evidence['spools']+old['tails']
     events=[json.loads(l)for l in observation.read_text().splitlines()]
     for spool in required:
-        matching=[r for r in rows if r['server_id']==spool['node_id']and r['batch_id']==spool['batch_id']]
-        reports=[r for r in events if r['kind']=='http'and r['path']=='/txapi/node/v1/report'and r.get('batch_id')==spool['batch_id']and r['status']==202]
-        if len(matching)!=1 or not reports:raise RuntimeError('NATIVE_MACHINE_ORIGINAL_BATCH_REPLAY_REQUIRED')
-        normalized={str(k):v for k,v in spool['traffic'].items()}
-        if any(r.get('traffic')!=normalized for r in reports):raise RuntimeError('NATIVE_MACHINE_REPLAY_PAYLOAD_CHANGED')
+        matching=[r for r in rows if str(r['node_id'])==str(spool['node_id']) and str(r['source_epoch'])==spool['source_epoch'] and r['batch_id']==spool['batch_id']]
+        if len(matching)!=1 or matching[0]['payload_digest']!=spool['payload_digest'] or matching[0]['status']!='settled':
+            raise RuntimeError('NATIVE_MACHINE_ORIGINAL_BATCH_REPLAY_REQUIRED')
+        payload=json.loads(matching[0]['canonical_payload'])
+        if payload!=spool['payload'] or [e['usage_period_id'] for e in payload['entries']]!=spool['period_ids']:
+            raise RuntimeError('NATIVE_MACHINE_REPLAY_ORIGINAL_PERIOD_PAYLOAD_CHANGED')
+        frozen=json.loads(matching[0]['frozen_entries'])
+        if [e['usage_period_id'] for e in frozen]!=spool['period_ids']:
+            raise RuntimeError('NATIVE_MACHINE_REPLAY_FROZEN_PERIOD_CHANGED')
+        if any(period!=next(n['initial_period_id'] for n in fixture['nodes'] if n['id']==spool['node_id']) for period in spool['period_ids']):
+            raise RuntimeError('NATIVE_MACHINE_REPLAY_ORIGINAL_PERIOD_REQUIRED')
     denials=[e for e in events if e['kind']=='http'and e['status']==401 and e.get('error_code')=='NODE_UNAUTHORIZED'and e.get('machine_id')==str(fixture['machine_id']) and e['monotonic_ns']>=rotation['completed_monotonic_ns']]
     if not denials:raise RuntimeError('NATIVE_MACHINE_COMPLETED_HTTP_DENIAL_REQUIRED')
     if any(e['kind']=='http'and e['path']=='/txapi/node/v1/report'and e['status']==401 for e in events):raise RuntimeError('NATIVE_MACHINE_DENIED_REPORT_ATTEMPT')
     goresult=json.loads((evidence/'machine-live-result.json').read_text())
-    artifact('result.json',{'actual_core_workerman_machine':True,'core_revision':actual,'node_revision':node_revision,'core_tree':core_tree,'node_tree':node_tree,'core_installation_mode':'legacy','node_kernel':'txnode','actual_transparent_trusted_tls':True,'actual_protocols':['vless','vmess'],'database':'txboard_native_machine_test','shared_machine_upgrade_count':sum(e['kind']=='ws-upgrade'and e['status']==101 for e in events),'ws_only_configuration_delivery':True,'native_core_installation_admission':False,'transient_disconnect_503_recovery':True,'successor_socket_device_facts':True,'foreign_machine_scope_matrix':True,'membership_withdrawal_proved':True,'machine_token_denial_proved':True,'original_batches_replayed':required,'actual_sql_unique_batch_rows':len(required),'independent_full_billing_reconciliation':False,'production_pki_attested':False,'go_result':goresult,'stage_states':stage_states,'observations_sha256':hashlib.sha256(observation.read_bytes()).hexdigest()})
+    # Runtime payloads and SQL snapshots stay private. Public evidence exposes
+    # fixed assertion labels, aggregate counts and content/source hashes only.
+    artifact('result.json',{'actual_core_workerman_machine':True,'core_revision':actual,'node_revision':node_revision,'core_tree':core_tree,'node_tree':node_tree,'core_installation_mode':'native','node_kernel':'txnode','actual_transparent_trusted_tls':True,'actual_protocols':['vless','vmess'],'shared_machine_upgrade_count':sum(e['kind']=='ws-upgrade'and e['status']==101 for e in events),'ws_only_configuration_delivery':True,'native_core_installation_admission':True,'transient_disconnect_503_recovery':True,'successor_socket_device_facts':True,'foreign_machine_scope_matrix':True,'membership_withdrawal_proved':True,'machine_token_denial_proved':True,'original_batches_replayed':len(required),'actual_sql_unique_batch_rows':len(required),'independent_full_billing_reconciliation':False,'production_pki_attested':False,'private_go_result_sha256':hashlib.sha256((evidence/'machine-live-result.json').read_bytes()).hexdigest(),'observations_sha256':hashlib.sha256(observation.read_bytes()).hexdigest()})
     print('Native actual Core/Workerman two-node Machine gate passed; public result contains no credentials.')
 except Exception:
     failure_summary('runner_failure')

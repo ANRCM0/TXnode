@@ -7,6 +7,19 @@
 ## 当前候选状态
 
 2026-10-21：分支 `feat/interop-acceptance-gates` 已编写以下 S0-S4 实现与验收入口。
+最近已取得功能结果的候选为 `71abaa94e50102c8b81a6f86e7c09dcb24765e10`，
+Actions `39480354676` 的 Go/race、quick/full、runtime stability、七项故障、
+固定 Core C2 和镜像冒烟均通过。完整互通为 36 个顶层、24 个子项通过和两项不适用。
+正式五组 A/B 与 30 分钟负载仍在执行；四份独立 profile 的物理字节核对通过，
+但不能代替正式 120 份样本。下列中间提交保留各自的历史证据。
+
+Node 自己的 Machine 夹具已补齐真实 Provider mTLS、安装初始化/激活、HTTP 账户/
+购买/履约、recipient-render、签名授权与 UsageV2 的源码准备；Linux 静态编译、
+Python AST 和格式检查通过，完整运行未验收。原业务断言继续保留；固定 Core 的
+五项 admission 缺失以及 Node 自身的回执先于监听、授权刷新连接连续性、WS-only
+配置三项行为缺口详见 `CORE-MACHINE-COMPATIBILITY.zh.md`。不能将这些全部归因于 Core，
+也不能把源码准备或 inventory 检查当作完整 Machine 通过。
+
 中间候选 `6f8ae3c54eaf2466915781b7bee676920e318281` 的 Actions `39470031165`
 已通过 Go/race、固定 mux 依赖的 race 回归、quick/full 严格互通、七项负载故障、
 镜像冒烟与固定 Core C2。完整互通为 36 个顶层用例和 24 个子用例通过、两项不适用，
@@ -55,7 +68,7 @@ events/download 的 coordinator 返回 evidence 错误，账量未确认。测�
 | S1 REALITY / Naive / TUIC | REALITY 自生成匹配密钥；Naive 信任根/SAN、协商填充帧和 h2 半关闭；TUIC TCP、UDP native/quic 对照和分片，UDP echo 保留 4096 字节断言 | 三类路径在中间候选通过；全部客户端仍须最终候选严格互通 |
 | S2-A smux/yamux UDP | 依固定 sing-mux 客户端版本对齐 packet 格式，复用 core 策略、限速、计量及撤权 | 新候选双向大包、父子关闭、实例隔离和精确计量的 Actions 结果 |
 | S2-B Mieru UDP / TCP 复用 | 有界 UDP 状态机、确认/重传/重组、nonce 与重放历史；TCP underlay 多 session、丢包缺口恢复及认证 FIN 尾部；新增官方客户端网络损伤/精确计量入口 | 普通官方 UDP、失败目标复用和显式整形在中间候选通过；丢包、乱序、重复、撤权密文重放及同端口 Reload/回滚须最终候选执行 |
-| S3 原生覆盖 | Service+Coordinator+observer、真实 UDP 周期、I/O 短写/失败；固定 Core machine 独立入口和受限失败诊断 | Service 的精确 TCP/UDP、存储失败隔离与周期断言在中间候选通过；Core machine 被固定基线的授权/准入合约阻塞，不以 mock、Skip 或更长超时关闭该缺口 |
+| S3 原生覆盖 | Service+Coordinator+observer、真实 UDP 周期、I/O 短写/失败；固定 Core machine 独立入口、真实授权夹具源码准备与受限失败诊断 | Service 的精确 TCP/UDP、存储失败隔离与周期断言通过；Machine 仍有固定 Core admission 和 Node 三项行为缺口，不以 mock、Skip 或更长超时关闭 |
 | S3 持续负载/故障 | 30 分钟 100/250/500/1000 会话工具；真实承载节点撤权/轮换/换证 Reload、限速取消、报告阻塞、慢盘和 SIGKILL 恢复；FD/heap/goroutine 诊断 | `f1451d5` 持续负载在原资源预算内通过；`6f8ae3c` 七项 race 故障通过。最终候选仍须取得同 SHA 的完整窗口和故障证据 |
 | S3 新旧 A/B | 固定旧 `a1ad269` 与候选、同 runner/toolchain、三种模式、五组交替、上传/下载/短/长连接、分配窗口及相同 runtime 实际镜像构建；独立 CPU profile | `f1451d5` 的 120 份样本完整且精确持久化字节核对通过；普通及事件模式 CPU 越过原调查阈值，不能算通过。已定位重复 Fd/SetBlocking 热点，最终性能修复须重跑，噪声或越界继续保留未决与原因 |
 | S4 可选/运维 | Mieru 显式整形及低熵编码、严格未知配置拒绝；节点/进程范围连接 ID、受限诊断、迁移说明 | 官方客户端所有显式组合、跨重载关闭与诊断隐私须由新候选验收 |
