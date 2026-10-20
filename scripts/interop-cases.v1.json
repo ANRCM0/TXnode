@@ -73,6 +73,21 @@
       "owner": "native data plane protocol compatibility"
     },
     {
+      "test": "TestInteropXrayVMessNativeOutbound",
+      "client": "xray",
+      "profiles": [
+        "quick",
+        "full"
+      ],
+      "expected": "pass",
+      "subtests": [
+        "aes-128-gcm",
+        "chacha20-poly1305",
+        "none"
+      ],
+      "owner": "native VMess outbound against pinned Xray inbound"
+    },
+    {
       "test": "TestInteropXrayTrojanTLS",
       "client": "xray",
       "profiles": [

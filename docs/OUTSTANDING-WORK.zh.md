@@ -17,6 +17,15 @@ Actions `39489699245` 的 Go/race、quick/full、runtime stability、七项故�
 续期改变了 meter、协议读取与 Service 发布路径，须取得新提交的完整 Actions，
 不得沿用 `454607f4` 的通过状态。
 
+`edd07db` 的 Go/race、严格 quick/full、七项故障、runtime stability、Core C2 与
+镜像冒烟已通过；`c2823dd` 补强逐 grant 字节断言和真实 Service VMess 后，
+Go job 在 VMess 首次 echo 失败，完整续期未执行。源码已修复本仓库 VMess outbound
+的 command key salt、长度认证 nonce/密钥、wire tag 和 clear padding，并新增
+真实 TCP 12 种组合及本仓库客户端到固定 Xray 服务端的反向互通门禁。
+严格清单现为 39 个顶层（37 个适用、两项不适用）、27 个子项，quick 为 8 个顶层。
+另修复 panel 重连测试等待点，使其等待客户端收到认证确认后再断言连接状态。
+这些变更仅经本地静态检查，必须由新提交重新完成全部门禁；旧失败记录保留。
+
 历史 `8f41aacb0796f7f3d1cc491e64cfb53665505a89` 的完整 S3 v1 验收已通过：
 120 份样本、12 组比较均在原阈值内，持续负载 1809.908 秒、38 轮。后继
 `08191208` 的 CPU v2 正式测量取得 118/120 份有效样本，旧基线 long/short 各有

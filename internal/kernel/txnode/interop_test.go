@@ -32,6 +32,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ANRCM0/TX-Node/internal/dataplane/opt"
+	nativeoutbound "github.com/ANRCM0/TX-Node/internal/dataplane/outbound"
+	"github.com/ANRCM0/TX-Node/internal/dataplane/socks"
 	"github.com/ANRCM0/TX-Node/internal/kernel"
 	"github.com/ANRCM0/TX-Node/internal/model"
 )
@@ -387,6 +390,74 @@ func TestInteropXrayVMess(t *testing.T) {
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
+	}
+}
+
+func TestInteropXrayVMessNativeOutbound(t *testing.T) {
+	xrayBinary(t)
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		w.Header().Set("Content-Length", strconv.FormatInt(r.ContentLength, 10))
+		if _, err := io.Copy(w, r.Body); err != nil {
+			t.Errorf("echo request: %v", err)
+		}
+	}))
+	t.Cleanup(origin.Close)
+	port := freePortTB(t)
+	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+	startXrayClient(t, map[string]any{
+		"log": map[string]any{"loglevel": "warning"},
+		"inbounds": []any{map[string]any{
+			"listen": "127.0.0.1", "port": port, "protocol": "vmess",
+			"settings":       map[string]any{"clients": []any{map[string]any{"id": interopUUID, "alterId": 0}}},
+			"streamSettings": map[string]any{"network": "tcp"},
+		}},
+		"outbounds": []any{map[string]any{"protocol": "freedom"}},
+		// The existing process helper probes the configured TCP listener.
+		"_socks": addr,
+	})
+	for _, method := range []string{"aes-128-gcm", "chacha20-poly1305", "none"} {
+		t.Run(method, func(t *testing.T) {
+			client, err := nativeoutbound.New("vmess", opt.Opt{
+				"server": "127.0.0.1", "port": port, "uuid": interopUUID,
+				"method": method, "network": "tcp",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+			defer cancel()
+			stream, err := client.DialTCP(ctx, socks.FromNetAddr(origin.Listener.Addr()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stream.Close()
+			reader := bufio.NewReader(stream)
+			// Reuse one authenticated stream through multiple nonce advances and
+			// a body larger than a single 16-bit wire chunk.
+			for _, size := range []int{1024, 32768, 131072} {
+				body := bytes.Repeat([]byte{0x00, 0xa5, 0x7f, 0x42}, size/4)
+				request, err := http.NewRequest(http.MethodPost, origin.URL, bytes.NewReader(body))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := stream.SetDeadline(time.Now().Add(8 * time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				if err := request.Write(stream); err != nil {
+					t.Fatalf("write %d-byte request: %v", size, err)
+				}
+				response, err := http.ReadResponse(reader, request)
+				if err != nil {
+					t.Fatalf("read %d-byte response: %v", size, err)
+				}
+				received, readErr := io.ReadAll(response.Body)
+				response.Body.Close()
+				if readErr != nil || response.StatusCode != http.StatusOK || !bytes.Equal(received, body) {
+					t.Fatalf("VMess %s body mismatch at %d bytes: status=%d bytes=%d err=%v", method, size, response.StatusCode, len(received), readErr)
+				}
+			}
+		})
 	}
 }
 

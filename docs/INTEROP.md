@@ -17,6 +17,15 @@ full 用于 nightly/dispatch/tag；标签发布依赖 full 成功。源码中已
 - 四个下载客户端固定二进制 SHA-256。curl 使用 Ubuntu 24.04 的系统版本，检查版本及 HTTP/2 能力，记录实际二进制摘要；它不具有与下载客户端相同的二进制锁定保证。
 - 每次保留 `events.jsonl`、`stderr.log`、`summary.json`、`summary.md`，记录源码提交/树、清单摘要和客户端来源。已知缺口与不适用组合不计作通过。
 
+清单现有 39 个顶层用例（37 个适用、两项不适用），适用用例共 27 个声明子项；
+quick 选择其中 8 个顶层。新增 `TestInteropXrayVMessNativeOutbound` 使用本仓库
+outbound 连接固定 Xray 服务端，覆盖 AES-GCM、ChaCha20、none 的同流多次消息及
+跨帧请求；它与 Xray 客户端连接本仓库服务端的既有测试分别验收。
+`c2823dd` 的新 Service VMess 测试在首次 echo 即失败，尚未进入续期；随后源码
+修复客户端的 salted command key、独立长度 nonce、双向长度认证和 tag/padding
+编排，并补充真实 TCP 的 12 种 cipher/framing 组合。新增用例及修复须由新提交
+Actions 取得结果，不能将同仓库两端互通当作第三方兼容证明。
+
 以下命令供 GitHub Actions 环境使用，功能和网络验收继续遵守 README 的 Actions-only 约定：
 
 ```bash
