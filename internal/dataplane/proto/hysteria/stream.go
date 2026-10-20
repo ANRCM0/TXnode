@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"time"
 
 	"github.com/apernet/quic-go"
+	"github.com/apernet/quic-go/quicvarint"
 
 	"github.com/ANRCM0/TX-Node/internal/dataplane/core"
 	"github.com/ANRCM0/TX-Node/internal/dataplane/socks"
@@ -45,16 +47,29 @@ const (
 	statusOK    = 0x00
 	statusError = 0x01
 
+	// frameTypeTCPRequest is the QUIC varint prefix of a hysteria2 TCP request
+	// (github.com/apernet/hysteria core/internal/protocol.FrameTypeTCPRequest).
+	frameTypeTCPRequest = 0x401
 	// maxAddrLen bounds the address field so a hostile client cannot make the
 	// server allocate unbounded memory before authentication has paid off.
-	maxAddrLen = 300
+	maxAddrLen = 2048
 	// maxPaddingLen bounds the per-request padding.
 	maxPaddingLen = 4096
 )
 
-// readRequest parses a hysteria request header from a stream.
+// readRequest parses a hysteria2 TCP request from a stream:
+//
+//	[varint 0x401][varint addrLen]["host:port"][varint paddingLen][padding]
 func readRequest(r io.Reader) (socks.Addr, int, error) {
-	addrLen, err := binary.ReadUvarint(byteReader{r})
+	br := quicvarint.NewReader(r)
+	frameType, err := quicvarint.Read(br)
+	if err != nil {
+		return socks.Addr{}, 0, err
+	}
+	if frameType != frameTypeTCPRequest {
+		return socks.Addr{}, 0, fmt.Errorf("hysteria: unexpected frame type %#x", frameType)
+	}
+	addrLen, err := quicvarint.Read(br)
 	if err != nil {
 		return socks.Addr{}, 0, err
 	}
@@ -65,11 +80,15 @@ func readRequest(r io.Reader) (socks.Addr, int, error) {
 	if _, err := io.ReadFull(r, buf); err != nil {
 		return socks.Addr{}, 0, err
 	}
-	dest, err := decodeAddr(buf)
+	host, portStr, err := net.SplitHostPort(string(buf))
 	if err != nil {
-		return socks.Addr{}, 0, err
+		return socks.Addr{}, 0, fmt.Errorf("hysteria: bad address %q: %w", string(buf), err)
 	}
-	padLen, err := binary.ReadUvarint(byteReader{r})
+	port, err := strconv.Atoi(portStr)
+	if err != nil || port <= 0 || port > 65535 {
+		return socks.Addr{}, 0, fmt.Errorf("hysteria: bad port %q", portStr)
+	}
+	padLen, err := quicvarint.Read(br)
 	if err != nil {
 		return socks.Addr{}, 0, err
 	}
@@ -81,40 +100,31 @@ func readRequest(r io.Reader) (socks.Addr, int, error) {
 			return socks.Addr{}, 0, err
 		}
 	}
-	return dest, int(padLen), nil
+	return socks.Addr{Host: host, Port: uint16(port)}, int(padLen), nil
 }
 
 // writeRequest serialises a request header (client side of the pair).
 func writeRequest(w io.Writer, dest socks.Addr, paddingLen int) error {
-	addr := encodeAddr(dest)
-	var hdr [binary.MaxVarintLen64]byte
-	n := binary.PutUvarint(hdr[:], uint64(len(addr)))
-	if _, err := w.Write(hdr[:n]); err != nil {
+	addr := dest.String()
+	buf := make([]byte, 0, 2*quicvarint.Len(frameTypeTCPRequest)+2*quicvarint.Len(uint64(len(addr)))+len(addr)+quicvarint.Len(uint64(paddingLen))+paddingLen)
+	buf = quicvarint.Append(buf, frameTypeTCPRequest)
+	buf = quicvarint.Append(buf, uint64(len(addr)))
+	buf = append(buf, addr...)
+	buf = quicvarint.Append(buf, uint64(paddingLen))
+	buf = append(buf, make([]byte, paddingLen)...)
+	if err := writeAll(w, buf); err != nil {
 		return err
-	}
-	if _, err := w.Write(addr); err != nil {
-		return err
-	}
-	n = binary.PutUvarint(hdr[:], uint64(paddingLen))
-	if err := writeAll(w, hdr[:n]); err != nil {
-		return err
-	}
-	if paddingLen > 0 {
-		// The padding bytes are opaque to the peer; zeros keep the helper
-		// deterministic (the server discards them).
-		return writeAll(w, make([]byte, paddingLen))
 	}
 	return nil
 }
 
 // writeResponse writes the status byte and a length-prefixed message.
 func writeResponse(w io.Writer, status byte, msg string) error {
-	buf := make([]byte, 0, 1+binary.MaxVarintLen64+len(msg))
+	buf := make([]byte, 0, 3+quicvarint.Len(uint64(len(msg)))+len(msg))
 	buf = append(buf, status)
-	var tmp [binary.MaxVarintLen64]byte
-	n := binary.PutUvarint(tmp[:], uint64(len(msg)))
-	buf = append(buf, tmp[:n]...)
+	buf = quicvarint.Append(buf, uint64(len(msg)))
 	buf = append(buf, msg...)
+	buf = quicvarint.Append(buf, 0) // padding length
 	return writeAll(w, buf)
 }
 

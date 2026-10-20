@@ -37,19 +37,26 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 | VLESS + WS（path `/ray`） | Xray | ✅ 通过 | `TestInteropXrayVLESSWebSocket` |
 | Trojan + TLS（自签，证书 pinning） | Xray | ✅ 通过 | `TestInteropXrayTrojanTLS`；Xray 26 已移除 `allowInsecure` |
 | Shadowsocks（aes-128-gcm） | Xray | ✅ 通过 | `TestInteropXrayShadowsocks` |
-| VMess（AEAD） | Xray | ⚠️ 已知缺口 | 服务端 `identify()` 失败：`vmess: unknown user or clock out of sync`；Xray↔Xray 同配置可通 |
+| VMess（AEAD） | Xray | ✅ 通过 | 修复了三处：cmdKey = MD5(uuid‖`c48619fe-…`)、SHAKE128 掩码以 body IV 为种子、length 块计入 AEAD tag 且 padding 明文置于密文后 |
 | VLESS + REALITY | Xray / Mihomo | ✅ 通过 | 鉴权线格式已按参考实现对齐（HKDF salt=random[:20]、GCM nonce=random[20:]、AAD=零化 sessionID 的 ClientHello、version/time/shortId 布局、优先纯 X25519），TLS 终止改用 `xtls/reality` 参考栈。注意：借用站点的握手记录需 ≤8 KiB（参考实现的 8 KiB 捕获窗口），默认用例改用 `www.cloudflare.com`；首次握手会等后台 post-handshake 记录学习完成（最长 8 s，之后为 0） |
-| Hysteria2 | Mihomo | ⚠️ 已知缺口 | SOCKS 请求被接受后关闭，服务端没有任何 QUIC 会话日志；握手未到达服务端 |
+| Hysteria2 | Mihomo | ✅ 通过 | TCP 请求帧对齐上游：`varint 0x401` + 地址字符串 + padding，响应补 padding 长度字段 |
 
-## 已知缺口的下一步
+## 尚未覆盖的互通项
 
-1. **VMess（VMESS-1）**：用 `dyn/` 抓 Xray 首包，逐字段比对 authID（AES-ECB 解出的
-   时间戳/CRC）、KDF 标签与 AEAD 长度块；当前实现只在自互通下通过。
-2. **REALITY（REALITY-1，已修复）**：sessionID 布局、HKDF salt、GCM nonce、AAD、
-   shortId 位置与证书 HMAC 已按 `xtls/reality` 对齐，TLS 终止切换为参考栈；Xray 与
-   Mihomo 两个客户端均通过。剩余注意点只有借用站点的 8 KiB 握手记录上限。
-3. **Hysteria2（HY2-1）**：在服务端 UDP socket 上加包计数/握手日志，确认是 QUIC/TLS
-   （ALPN、证书、`h3`）还是 auth HTTP/3 流的问题；kaze 报告只到函数级证据。
+当前用例集覆盖 7 条链路，全部通过。以下协议/能力还没有真实客户端用例，发布前建议补齐：
 
-修复顺序建议：HY2（最可能是配置/ALPN 层）→ VMess（协议头）→ REALITY（只剩握手收尾）。
-三项都修完后，把对应 `t.Skipf` 改回 `t.Fatalf`，互通矩阵才可标为全绿。
+1. **Mieru / Snell / TUIC / AnyTLS / Naive / SS2022**：Mihomo 或官方客户端可用，但需要额外的服务端参数夹具；
+2. **VLESS Encryption**：样本/复刻只有服务端实现，客户端侧在 Xray 新版本中，需要按其参数生成用例；
+3. **传输矩阵**：目前只测了 tcp/ws；grpc/h2/xhttp/httpupgrade/TLS 组合待补；
+4. **UDP 数据面**：Hysteria2 UDP、TUIC UDP、xudp 的互通需要各自的客户端用例。
+
+修复顺序建议：先补传输组合（同协议、低成本），再补 UDP，最后处理 VLESS Encryption。
+
+## 复现
+
+```bash
+TXNODE_INTEROP_XRAY=$PWD/../.clients/xray/xray \
+TXNODE_INTEROP_MIHOMO=$PWD/../.clients/mihomo/mihomo \
+TXNODE_INTEROP_REALITY_PRIV=... TXNODE_INTEROP_REALITY_PUB=... \
+go test ./internal/kernel/txnode/ -run TestInterop -v
+```

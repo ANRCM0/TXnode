@@ -94,6 +94,10 @@ const (
 // KDF path labels, exactly the rodata strings used by request/response:
 // 0xf69550, 0xf7185d, 0xf74536, 0xf67f5a, 0xf6a9d9, 0xf6be22, 0xf6a9f0,
 // 0xf67d3e(="AEAD Resp Header Key"), 0xf659fa.
+// vmessAEADCmdKeySalt is the constant UUID Xray appends to the user UUID when
+// deriving the VMess AEAD command key (common/protocol.NewID).
+const vmessAEADCmdKeySalt = "c48619fe-8f02-49e0-b9e9-edf763e17e21"
+
 const (
 	kdfAuthID         = "AES Auth ID Encryption"
 	kdfHeaderKeyLen   = "VMess Header AEAD Key_Length"
@@ -216,7 +220,8 @@ func (h *Handler) SetUsers(users []core.User) {
 		}
 		user := users[i]
 		u[id] = &user
-		sum := md5.Sum(id[:])
+		// Xray's protocol.NewID: cmdKey = MD5(uuid || vmessAEADCmdKeySalt).
+		sum := md5.Sum(append(append([]byte(nil), id[:]...), []byte(vmessAEADCmdKeySalt)...))
 		k[id] = sum[:]
 	}
 	h.users = u
@@ -292,10 +297,12 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) (*core.Session, err
 		rIV:  req.BodyIV,
 	}
 	if req.Option&OptionChunkStream != 0 {
-		if vc.wr, err = newCodec(req.Security, vc.wKey, vc.wIV, req.Option); err != nil {
+		// Both directions authenticate the length with the request body key/IV
+		// (Xray's lengthAuth NonceGenerator uses requestBodyKey/IV in both).
+		if vc.wr, err = newCodec(req.Security, vc.wKey, vc.wIV, req.Option, vc.rKey, vc.rIV); err != nil {
 			return nil, err
 		}
-		if vc.rd, err = newCodec(req.Security, vc.rKey, vc.rIV, req.Option); err != nil {
+		if vc.rd, err = newCodec(req.Security, vc.rKey, vc.rIV, req.Option, vc.rKey, vc.rIV); err != nil {
 			return nil, err
 		}
 	}
@@ -353,7 +360,8 @@ func (h *Handler) identify(authID, head []byte) (int, []byte, error) {
 			continue
 		}
 		block.Decrypt(plain[:], authID)
-		if crc32.ChecksumIEEE(plain[:12]) != binary.BigEndian.Uint32(plain[12:16]) {
+		crcOK := crc32.ChecksumIEEE(plain[:12]) == binary.BigEndian.Uint32(plain[12:16])
+		if !crcOK {
 			continue
 		}
 		ts := int64(binary.BigEndian.Uint64(plain[:8]))

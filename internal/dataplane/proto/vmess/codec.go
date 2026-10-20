@@ -65,10 +65,17 @@ type codec struct {
 	mask bool
 	pad  bool
 	xof  io.Reader
+
+	// Authenticated-length mode has its own nonce sequence seeded from the
+	// request body IV (Xray uses a dedicated NonceGenerator for lengthAuth).
+	lenIV    [12]byte
+	lenNonce [12]byte
+	lenCount uint16
+	lenWraps bool
 }
 
 // newCodec builds one direction (vmess.newCodecLen @0xb45320).
-func newCodec(sec byte, key [16]byte, iv [16]byte, option byte) (*codec, error) {
+func newCodec(sec byte, key [16]byte, iv [16]byte, option byte, authKey, authIV [16]byte) (*codec, error) {
 	c := &codec{}
 	copy(c.iv[:], iv[:12])
 	copy(c.nonce[:], iv[:12])
@@ -78,19 +85,21 @@ func newCodec(sec byte, key [16]byte, iv [16]byte, option byte) (*codec, error) 
 	}
 	c.data = data
 	if option&(OptionChunkMasking|OptionGlobalPadding) != 0 {
+		// Xray seeds the SHAKE128 size/padding parser with the body IV only.
 		sh := sha3.NewShake128()
-		_, _ = sh.Write(key[:])
 		_, _ = sh.Write(iv[:])
 		c.xof = sh
 		c.mask = option&OptionChunkMasking != 0
 		c.pad = option&OptionGlobalPadding != 0
 	}
 	if data != nil && option&OptionAuthLength != 0 {
-		la, err := newAEAD(sec, kdf16(key[:], []byte(kdfAuthLen)))
+		la, err := newAEAD(sec, kdf16(authKey[:], []byte(kdfAuthLen)))
 		if err != nil {
 			return nil, err
 		}
 		c.lenAEAD = la
+		copy(c.lenIV[:], authIV[:12])
+		copy(c.lenNonce[:], authIV[:12])
 	}
 	return c, nil
 }
@@ -108,62 +117,55 @@ func (c *codec) next() ([]byte, error) {
 	return c.nonce[:], nil
 }
 
-// encodeLen applies masking and padding to a payload length. It returns the
-// length to put on the wire and how many zero bytes follow the payload.
-func (c *codec) encodeLen(n int) (wire, pad int, err error) {
-	pad = 0
-	if c.pad {
-		var b [2]byte
-		if _, err := io.ReadFull(c.xof, b[:]); err != nil {
-			return 0, 0, err
-		}
-		pad = int(binary.BigEndian.Uint16(b[:]) & 0x3f)
+// nextLen returns the nonce for one length AEAD operation.
+func (c *codec) nextLen() ([]byte, error) {
+	if c.lenWraps {
+		return nil, ErrChunkLimit
 	}
-	wire = n + pad
-	if c.mask {
-		var b [2]byte
-		if _, err := io.ReadFull(c.xof, b[:]); err != nil {
-			return 0, 0, err
-		}
-		wire ^= int(binary.BigEndian.Uint16(b[:]))
+	binary.BigEndian.PutUint16(c.lenNonce[:2], c.lenCount)
+	if c.lenCount == 0xffff {
+		c.lenWraps = true
 	}
-	return wire, pad, nil
+	c.lenCount++
+	return c.lenNonce[:], nil
 }
 
-// decodeLen reverses encodeLen.
-func (c *codec) decodeLen(wire int) (n, pad int, err error) {
-	// The XOF is shared with the writer, so the draws happen in the writer's
-	// order: padding first, then the length mask.
-	if c.pad {
-		var b [2]byte
-		if _, err := io.ReadFull(c.xof, b[:]); err != nil {
-			return 0, 0, err
-		}
-		pad = int(binary.BigEndian.Uint16(b[:]) & 0x3f)
+// nextPadding returns the clear padding length for this chunk. The SHAKE
+// stream is drawn before the masked size, matching Xray's reader/writer order.
+func (c *codec) nextPadding() (int, error) {
+	if !c.pad {
+		return 0, nil
 	}
-	n = wire
-	if c.mask {
-		var b [2]byte
-		if _, err := io.ReadFull(c.xof, b[:]); err != nil {
-			return 0, 0, err
-		}
-		n ^= int(binary.BigEndian.Uint16(b[:]))
+	var b [2]byte
+	if _, err := io.ReadFull(c.xof, b[:]); err != nil {
+		return 0, err
 	}
-	if n < pad {
-		return 0, 0, ErrCorruptChunk
+	return int(binary.BigEndian.Uint16(b[:]) % 64), nil
+}
+
+// maskSize XORs a wire size with the SHAKE stream. Authenticated-length mode
+// replaces the masking parser entirely (Xray swaps sizeParser for the AEAD
+// one), so masking is skipped there.
+func (c *codec) maskSize(wire int) (int, error) {
+	if !c.mask || c.lenAEAD != nil {
+		return wire, nil
 	}
-	return n - pad, pad, nil
+	var b [2]byte
+	if _, err := io.ReadFull(c.xof, b[:]); err != nil {
+		return 0, err
+	}
+	return wire ^ int(binary.BigEndian.Uint16(b[:])), nil
 }
 
 // sealLen seals the two-byte payload length when the authenticated length
 // option is active.
-func (c *codec) sealLen(n int) ([]byte, error) {
+func (c *codec) sealLen(wire int) ([]byte, error) {
 	var lp [2]byte
-	binary.BigEndian.PutUint16(lp[:], uint16(n))
+	binary.BigEndian.PutUint16(lp[:], uint16(wire))
 	if c.lenAEAD == nil {
 		return lp[:], nil
 	}
-	nonce, err := c.next()
+	nonce, err := c.nextLen()
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +189,7 @@ func (c *codec) openLen(b []byte) (int, error) {
 	if c.lenAEAD == nil {
 		return int(binary.BigEndian.Uint16(b)), nil
 	}
-	nonce, err := c.next()
+	nonce, err := c.nextLen()
 	if err != nil {
 		return 0, err
 	}
@@ -272,7 +274,13 @@ func (v *vmessConn) Write(p []byte) (int, error) {
 		if n > 0xffff {
 			n = 0xffff
 		}
-		wire, pad, err := v.wr.encodeLen(n)
+		pad, err := v.wr.nextPadding()
+		if err != nil {
+			return written, err
+		}
+		// The wire size covers the AEAD tag and the clear padding
+		// (Xray: encryptedSize + paddingSize).
+		wire, err := v.wr.maskSize(n + v.wr.overhead() + pad)
 		if err != nil {
 			return written, err
 		}
@@ -280,17 +288,17 @@ func (v *vmessConn) Write(p []byte) (int, error) {
 		if err != nil {
 			return written, err
 		}
-		payload := p[:n]
-		if pad > 0 {
-			payload = append(append([]byte(nil), payload...), make([]byte, pad)...)
-		}
-		body, err := v.wr.sealChunk(payload)
+		body, err := v.wr.sealChunk(p[:n])
 		if err != nil {
 			return written, err
 		}
-		buf := make([]byte, 0, len(lp)+len(body))
+		buf := make([]byte, 0, len(lp)+len(body)+pad)
 		buf = append(buf, lp...)
 		buf = append(buf, body...)
+		if pad > 0 {
+			// Padding is sent in clear after the sealed payload.
+			buf = append(buf, make([]byte, pad)...)
+		}
 		if _, err := v.conn.Write(buf); err != nil {
 			return written, err
 		}
@@ -357,30 +365,42 @@ func (v *vmessConn) readChunk() error {
 	if _, err := io.ReadFull(v.conn, lb); err != nil {
 		return err
 	}
-	wire, err := v.rd.openLen(lb)
+	pad, err := v.rd.nextPadding()
 	if err != nil {
 		return err
 	}
-	if wire == 0 {
+	var wire int
+	if v.rd.lenAEAD != nil {
+		wire, err = v.rd.openLen(lb)
+		if err != nil {
+			return err
+		}
+	} else {
+		wire = int(binary.BigEndian.Uint16(lb))
+		wire, err = v.rd.maskSize(wire)
+		if err != nil {
+			return err
+		}
+	}
+	if wire == v.rd.overhead()+pad {
 		return io.EOF
 	}
-	n, pad, err := v.rd.decodeLen(wire)
-	if err != nil {
-		return err
-	}
-	if n < 0 || n+pad > 0xffff {
+	if wire < pad+v.rd.overhead() {
 		return ErrCorruptChunk
 	}
-	buf := make([]byte, n+pad+v.rd.overhead())
-	if _, err := io.ReadFull(v.conn, buf); err != nil {
+	n := wire - pad
+	sealed := make([]byte, n)
+	if _, err := io.ReadFull(v.conn, sealed); err != nil {
 		return err
 	}
-	plain, err := v.rd.openChunk(buf)
+	if pad > 0 {
+		if _, err := io.CopyN(io.Discard, v.conn, int64(pad)); err != nil {
+			return err
+		}
+	}
+	plain, err := v.rd.openChunk(sealed)
 	if err != nil {
 		return err
-	}
-	if pad > 0 && len(plain) >= pad {
-		plain = plain[:len(plain)-pad]
 	}
 	v.rbuf = plain
 	return nil

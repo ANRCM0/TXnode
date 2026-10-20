@@ -343,10 +343,7 @@ func TestInteropXrayVMess(t *testing.T) {
 	startXrayClient(t, cfg)
 	body, err := fetchThroughE(t, socks, origin.Listener.Addr().String())
 	if err != nil {
-		// Xray 26 always speaks VMess AEAD. The replica accepts Xray-to-Xray and
-		// its own header, but rejects this client at identify(); recorded as the
-		// known interop gap R1/VMESS-1 in docs/REWORK-PLAN.zh.md.
-		t.Skipf("known VMess interop gap with Xray 26 AEAD: %v", err)
+		t.Fatalf("VMess handshake with Xray failed: %v", err)
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
@@ -509,7 +506,7 @@ func startMihomo(t *testing.T, proxyBlock string) string {
 		t.Fatalf("start mihomo: %v", err)
 	}
 	t.Cleanup(func() {
-		if t.Failed() {
+		if t.Failed() || t.Skipped() {
 			t.Logf("mihomo output:\n%s", output.String())
 		}
 		_ = cmd.Process.Kill()
