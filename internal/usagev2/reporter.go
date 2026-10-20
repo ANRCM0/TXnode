@@ -158,17 +158,24 @@ func (r *Reporter) NativeQuarantinedCount() int64 { return r.quarantined.Load() 
 // DeliverPage bounds recovery work while advancing through retained records.
 // A slow first batch cannot starve newer durable batches on every retry.
 func (r *Reporter) DeliverPage(ctx context.Context, limit int) error {
-	return r.deliverPage(ctx, limit, false, nil)
+	return r.deliverPage(ctx, limit, false, false, nil)
 }
 
 // DeliverNativePage preserves original authorization evidence and durable Core
 // quarantine receipts. Older 422 refusals retain their local marker until a
 // query discovers a real receipt; neither capture is rewritten or resubmitted.
 func (r *Reporter) DeliverNativePage(ctx context.Context, limit int, refused func(Record)) error {
-	return r.deliverPage(ctx, limit, true, refused)
+	return r.deliverPage(ctx, limit, true, false, refused)
 }
 
-func (r *Reporter) deliverPage(ctx context.Context, limit int, native bool, refused func(Record)) error {
+// DeliverNativeUnacknowledgedPage uses the native query-before-replay path for
+// records lacking a durable Core receipt. Startup validates acknowledged history
+// locally; the normal worker still refreshes settlement using DeliverNativePage.
+func (r *Reporter) DeliverNativeUnacknowledgedPage(ctx context.Context, limit int, refused func(Record)) error {
+	return r.deliverPage(ctx, limit, true, true, refused)
+}
+
+func (r *Reporter) deliverPage(ctx context.Context, limit int, native, unacknowledged bool, refused func(Record)) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if limit < 1 || limit > 128 || r.unconfirmed != nil {
@@ -177,6 +184,15 @@ func (r *Reporter) deliverPage(ctx context.Context, limit int, native bool, refu
 	records, err := r.spool.Records()
 	if err != nil {
 		return err
+	}
+	if unacknowledged {
+		pending := records[:0]
+		for _, record := range records {
+			if record.Receipt == nil {
+				pending = append(pending, record)
+			}
+		}
+		records = pending
 	}
 	start := 0
 	for i, record := range records {

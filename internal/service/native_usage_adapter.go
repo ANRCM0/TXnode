@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,6 +20,13 @@ import (
 )
 
 var errNativeUsage = errors.New("NATIVE_USAGE_SESSION_STOPPED")
+
+const (
+	nativeStartupRecoveryPageSize = 16
+	nativeStartupRecoveryPages    = 16
+	nativeStartupRecoveryTimeout  = 30 * time.Second
+	nativeStartupRecoveryPageWait = 2 * time.Second
+)
 
 // nativeUsageKernel is the kernel half of usage_v2: it builds a meter over the
 // collector and admits per-IO charges through it. Defined structurally so the
@@ -100,12 +108,97 @@ func (s *Service) initNativeUsage(ctx context.Context, bootstrap controlplane.Bo
 	}
 	runtime := &nativeUsageRuntime{store: store, spool: spool, reporter: reporter,
 		failure: make(chan error, 1), refresh: make(chan struct{}, 1), done: make(chan struct{})}
+	runtime.session = *snapshot.Payload.UsageV2
+	runtime.session.Grants = append([]usagev2.Grant{}, snapshot.Payload.UsageV2.Grants...)
+	runtime.revision = snapshot.Payload.Revision
 	s.nativeUsage = runtime
-	if err := s.installNativeCollector(ctx, snapshot); err != nil {
+	cleanup := func() {
 		store.Close()
 		reporter.Close()
 		s.nativeUsage = nil
+	}
+	if err := s.recoverNativeStartup(ctx); err != nil {
+		cleanup()
 		return err
+	}
+	if err := s.installNativeCollector(ctx, snapshot); err != nil {
+		cleanup()
+		return err
+	}
+	return nil
+}
+
+// No collector or worker exists yet: this is one fixed recovery set, not a new
+// ledger. A persisted receipt acknowledges custody; settlement may still pend.
+func (s *Service) recoverNativeStartup(parent context.Context) error {
+	ctx, cancel := context.WithTimeout(parent, nativeStartupRecoveryTimeout)
+	defer cancel()
+	runtime := s.nativeUsage
+	original, err := runtime.spool.Records()
+	if err != nil {
+		return err
+	}
+	pending := 0
+	for _, record := range original {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if record.Receipt == nil {
+			pending++
+			continue
+		}
+		if err := record.Receipt.Validate(record.Session, record.Submission); err != nil {
+			return err
+		}
+		if record.Receipt.SettlementStatus == "quarantined" && record.Receipt.ReasonCode == usagev2.NativeCutoffCode {
+			s.quarantineNativeUsage(record)
+		}
+	}
+	if runtime.refreshNeeded.Load() {
+		return errNativeUsage
+	}
+	if pending > nativeStartupRecoveryPages*nativeStartupRecoveryPageSize {
+		return fmt.Errorf("%w: native startup recovery page budget exceeded", errNativeUsage)
+	}
+	for remaining := pending; remaining > 0; remaining -= nativeStartupRecoveryPageSize {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		page, stop := context.WithTimeout(ctx, nativeStartupRecoveryPageWait)
+		limit := min(remaining, nativeStartupRecoveryPageSize)
+		err := runtime.reporter.DeliverNativeUnacknowledgedPage(page, limit, s.quarantineNativeUsage)
+		if err == nil {
+			err = page.Err()
+		}
+		stop()
+		if err != nil {
+			return err
+		}
+	}
+	acknowledged, err := runtime.spool.Records()
+	if err != nil {
+		return err
+	}
+	if len(acknowledged) != len(original) {
+		return usagev2.ErrRecoveryRequired
+	}
+	for i, record := range acknowledged {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(record.Session, original[i].Session) ||
+			!reflect.DeepEqual(record.Submission, original[i].Submission) || record.Receipt == nil ||
+			record.Receipt.Validate(original[i].Session, original[i].Submission) != nil {
+			return usagev2.ErrRecoveryRequired
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// Historical persisted cutoff receipts remain immutable. The existing callback
+	// blocks only a cutoff affecting the current bootstrap grant and revision.
+	if runtime.refreshNeeded.Load() {
+		return errNativeUsage
 	}
 	return nil
 }
