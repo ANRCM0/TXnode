@@ -496,6 +496,12 @@ func (s *EncServer) Handshake(conn net.Conn) (net.Conn, error) {
 	if s.dec == nil || s.dec.None {
 		return conn, nil
 	}
+	return s.handshakeXray(conn)
+}
+
+// handshakeLegacy is the replica's earlier self-consistent layout, kept for
+// reference while the Xray-compatible path above is validated.
+func (s *EncServer) handshakeLegacy(conn net.Conn) (net.Conn, error) {
 	if len(s.dec.Keys) == 0 || s.dec.Keys[0].X25519 == nil {
 		return nil, fmt.Errorf("vless encryption: the handshake needs an X25519 key (UNVERIFIED)")
 	}

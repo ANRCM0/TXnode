@@ -37,7 +37,7 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 
 ## 结果（Xray 26.3.27 / Mihomo v1.19.32 / sing-box 1.14.3，本机回环）
 
-通过（19）：
+通过（20）：
 
 | 用例 | 客户端 | 备注 |
 |---|---|---|
@@ -53,6 +53,7 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 | TUIC | sing-box | TLS exporter token；address family 0/1/2 |
 | Shadowsocks 2022 | Xray / sing-box | 单 PSK、响应头带 request salt、请求 padding |
 | AnyTLS | sing-box | v2 prologue padding + 流内地址 |
+| VLESS Encryption | Xray | 按 xray-core 26 的 1-RTT 握手与记录层重写（ML-KEM-768 + X25519、blake3 派生、ticket/padding） |
 
 未通过 / 未覆盖（跳过，带原因）：
 
@@ -62,7 +63,6 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 | Mieru | sing-box | 1.14 无 mieru outbound（上车需官方客户端） | MIERU-1 |
 | Snell | sing-box | outbound 要求 v4+，复刻只到 v3 | SNELL-1 |
 | Naive | sing-box | 需要 HTTP/2 CONNECT 与受信证书；当前仅 HTTP/1 实现 | NAIVE-1 |
-| VLESS Encryption | Xray | 服务端报 `vless encryption: malformed record`（hello 原语待对齐） | VLESSENC-1 |
 | VLESS + HTTP/2 | — | Xray 26 已移除独立 h2 传输 | H2-removed |
 
 ## 尚未覆盖的互通项
