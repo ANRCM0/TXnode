@@ -103,11 +103,15 @@ func (p *nativeBillingPlane) snapshot(t *testing.T) controlplane.Snapshot {
 	if p.empty {
 		users, commitments, subjects, session.Grants = []panel.User{}, []panel.User{}, []credentialdelivery.Subject{}, []usagev2.Grant{}
 	}
+	profile := "vless-uuid/v1"
+	if p.bootstrap.Config != nil && p.bootstrap.Config.Protocol == "vmess" {
+		profile = "vmess-uuid/v1"
+	}
 	payload := credentialdelivery.Payload{ProtocolVersion: 1, Audience: credentialdelivery.Audience, PolicyVersion: credentialdelivery.PolicyVersionV2,
 		CoreInstanceID: p.trust.CoreInstanceID, NodeID: 42, Revision: strconv.Itoa(p.revision), KeyID: p.trust.KeyID, KeyEpoch: "1",
 		IssuedAt: now, NotBefore: now - 5, ExpiresAt: now + 60, Complete: true, Users: commitments, UsageV2: &session,
 		Provider: credentialdelivery.ProviderBinding{InstallationID: p.trust.CoreInstanceID, ProviderID: "primary-provider", ProviderInstanceEpoch: "1",
-			RecipientSHA256: strings.Repeat("c", 64), CredentialProfileID: "vless-uuid/v1", Subjects: subjects}}
+			RecipientSHA256: strings.Repeat("c", 64), CredentialProfileID: profile, Subjects: subjects}}
 	raw, _ := json.Marshal(payload)
 	envelope := authorization.Envelope{Payload: base64.RawURLEncoding.EncodeToString(raw), Signature: base64.RawURLEncoding.EncodeToString(ed25519.Sign(p.key, raw))}
 	snapshot, err := p.manager.Verify(envelope, users, time.Now())

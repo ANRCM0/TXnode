@@ -50,7 +50,7 @@ period、批次及 digest 不重标，成功续期不重启 kernel。
 暂停到恢复的成功预算为两秒，同时受旧授权与候选租约限制。旧 watchdog 和 cutoff
 在此期间保持生效；超时或封口后失败终止 owner，不能恢复旧 collector。OS fsync
 不承诺可取消。凭据轮换、撤权、计量周期或策略变化仍按原生命周期重建。
-新增 Service VLESS、meter、collector 和协议边界回归须取得新提交的 Actions 结果，
+新增 Service VLESS/VMess TCP、meter、collector 和协议边界回归须取得新提交的 Actions 结果，
 不能据此宣称完整 Machine 或所有传输已支持连接连续性。
 
 ## 受限诊断

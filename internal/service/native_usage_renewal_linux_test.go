@@ -12,6 +12,9 @@ import (
 	"time"
 
 	"github.com/ANRCM0/TX-Node/internal/authorization"
+	"github.com/ANRCM0/TX-Node/internal/dataplane/opt"
+	"github.com/ANRCM0/TX-Node/internal/dataplane/outbound"
+	"github.com/ANRCM0/TX-Node/internal/dataplane/socks"
 	"github.com/ANRCM0/TX-Node/internal/kernel"
 	"github.com/ANRCM0/TX-Node/internal/usageinterval"
 	"github.com/ANRCM0/TX-Node/internal/usagev2"
@@ -65,16 +68,51 @@ func TestNativeRenewalEligibilityPreservesAuthorityAndAccountingIdentity(t *test
 }
 
 func TestNativeRenewalKeepsIdleEstablishedFlowAndOriginalGrantBatches(t *testing.T) {
+	testNativeRenewalKeepsIdleEstablishedFlowAndOriginalGrantBatches(t, "vless")
+}
+
+func TestNativeVMessRenewalKeepsIdleEstablishedFlowAndOriginalGrantBatches(t *testing.T) {
+	testNativeRenewalKeepsIdleEstablishedFlowAndOriginalGrantBatches(t, "vmess")
+}
+
+func testNativeRenewalKeepsIdleEstablishedFlowAndOriginalGrantBatches(t *testing.T, protocol string) {
+	t.Helper()
 	origin := nativeConfigOrigin(t)
 	_, initial := nativeConfigPanel(t, authorityPort(t), origin)
+	initial.Protocol = protocol
 	s, plane := nativeConfigService(t, initial, "http://127.0.0.1:1")
-	_, stream := nativeC2VLESSDial(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(initial.ServerPort)), plane.uuidOrDefault(), origin.Addr())
+	var stream net.Conn
+	switch protocol {
+	case "vless":
+		_, stream = nativeC2VLESSDial(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(initial.ServerPort)), plane.uuidOrDefault(), origin.Addr())
+	case "vmess":
+		// Match machineCoreDial's same-repository client and plain TCP server.
+		// Independent third-party interoperability remains a separate gate.
+		client, err := outbound.New("vmess", opt.Opt{
+			"server": "127.0.0.1", "port": initial.ServerPort, "uuid": plane.uuidOrDefault(),
+			"method": "aes-128-gcm", "network": "tcp",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		defer cancel()
+		stream, err = client.DialTCP(ctx, socks.FromNetAddr(origin.Addr()))
+		if err != nil {
+			t.Fatal(err)
+		}
+	default:
+		t.Fatal("unsupported renewal test protocol", protocol)
+	}
 	defer stream.Close()
 	meter := s.nativeUsage.active.Load()
 	grants := map[string]string{}
+	expected := map[string]int64{}
+	currentGrant := ""
 	remember := func(snapshot *authorization.Snapshot) {
 		grant := snapshot.Payload.UsageV2.Grants[0]
 		grants[grant.AuthSnapshotID] = grant.UsagePeriodID
+		currentGrant = grant.AuthSnapshotID
 	}
 	remember(s.authorization.Current())
 	var bytes int64
@@ -82,12 +120,13 @@ func TestNativeRenewalKeepsIdleEstablishedFlowAndOriginalGrantBatches(t *testing
 		body := "before-renewal-" + strconv.Itoa(i)
 		nativeConfigEcho(t, stream, body)
 		bytes += int64(len(body))
+		expected[currentGrant] += int64(len(body))
 		old := s.nativeUsage.collector.Load()
 		next := plane.snapshot(t)
 		next.Config = nil
 		remember(next.Authorization)
 		if err := s.applyNativeAuthorization(context.Background(), next, false); err != nil {
-			t.Fatal("ordinary renewal closed a proven plain VLESS flow", err)
+			t.Fatal("ordinary renewal closed a proven plain "+protocol+" flow", err)
 		}
 		if s.nativeUsage.active.Load() != meter || s.nativeUsage.collector.Load() == old || !old.Unknown() ||
 			s.authorization.Current().Digest != next.Authorization.Digest || !s.kernel.IsRunning() {
@@ -96,6 +135,7 @@ func TestNativeRenewalKeepsIdleEstablishedFlowAndOriginalGrantBatches(t *testing
 		body = "after-renewal-" + strconv.Itoa(i)
 		nativeConfigEcho(t, stream, body)
 		bytes += int64(len(body))
+		expected[currentGrant] += int64(len(body))
 	}
 	if err := s.drainNativeUsage(context.Background()); err != nil {
 		t.Fatal(err)
@@ -108,23 +148,34 @@ func TestNativeRenewalKeepsIdleEstablishedFlowAndOriginalGrantBatches(t *testing
 		return records[i].Submission.Payload.StartedAt < records[j].Submission.Payload.StartedAt
 	})
 	var totals [2]int64
+	seen := map[string]bool{}
 	for i, record := range records {
 		payload := record.Submission.Payload
 		if record.Submission.Validate() != nil || i > 0 && payload.StartedAt < records[i-1].Submission.Payload.EndedAt {
 			t.Fatal("renewal produced invalid or overlapping original intervals")
 		}
+		if len(payload.Entries) != 1 {
+			t.Fatal("renewal batch lost its unique original grant")
+		}
 		for _, entry := range payload.Entries {
-			if grants[entry.AuthSnapshotID] != entry.UsagePeriodID || entry.UsagePeriodID != "14" {
+			if seen[entry.AuthSnapshotID] || grants[entry.AuthSnapshotID] != entry.UsagePeriodID || entry.UsagePeriodID != "14" {
 				t.Fatal("renewal relabeled the original snapshot or usage period")
 			}
+			seen[entry.AuthSnapshotID] = true
 			up, upErr := strconv.ParseInt(entry.RawUpBytes, 10, 64)
 			down, downErr := strconv.ParseInt(entry.RawDownBytes, 10, 64)
 			if upErr != nil || downErr != nil {
 				t.Fatal("invalid original byte evidence")
 			}
+			if up != expected[entry.AuthSnapshotID] || down != expected[entry.AuthSnapshotID] {
+				t.Fatalf("renewal moved actual bytes between original grants: snapshot=%s got=%d/%d want=%d each", entry.AuthSnapshotID, up, down, expected[entry.AuthSnapshotID])
+			}
 			totals[0] += up
 			totals[1] += down
 		}
+	}
+	if len(grants) != 4 || len(seen) != len(grants) {
+		t.Fatal("renewal did not preserve all four distinct signed grants")
 	}
 	if totals != [2]int64{bytes, bytes} {
 		t.Fatalf("renewal lost or duplicated actual stream bytes: got=%v want=%d each", totals, bytes)
