@@ -176,6 +176,13 @@ type ChunkHook interface {
 	Close(Chunk)
 }
 
+// SpliceChunkHook explicitly permits the same Begin/Complete contract around
+// Linux socket-to-pipe reads and complete pipe-to-socket drains.
+type SpliceChunkHook interface {
+	ChunkHook
+	AllowSplice() bool
+}
+
 // Handler is one inbound protocol as wired by node.buildHandler. Handle parses
 // the handshake from conn and returns the session to relay. It must not read
 // beyond the protocol handshake.

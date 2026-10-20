@@ -88,6 +88,17 @@ Linux splice 实现将管道描述符保留到本次 relay 结束，避免在每
 取消终止及返回后没有新增 pipe 遗留。
 TCP 两方向的计数闭包按会话创建一次，逐段仍调用原 Tracker/OnTraffic 计数。
 `RawConn` 的等待、EAGAIN、取消和半关闭边界继续保持。
+兼容计数在每次真实 drain 写出之后更新，部分成功后再遇关闭、取消或 syscall 错误时
+仍保留已写字节；零写按本次返回量判定无进展。syscall callback 按方向复用。
+
+纯本地事件观察通过 `SpliceChunkHook` 显式允许无有效限速、透明 bare TCP 的
+splice。上传在 socket-to-pipe 前执行原 `Begin(copyBuf)`，按实际读量和错误完成；
+下载在首次 pipe-to-client 写前 `Begin(n)`，整个 drain 按实际写出总量完成一次。
+所有 hook 和流量计数均在 RawConn 回调外执行，原 token、会话、方向、EOF、取消及
+错误边界保留，单向拒绝或失败须终止另一个方向。正常 EOF 保留半关闭并确认取消
+watcher 退出后再释放子 context。带 `NativeCollector` 的 `usage_v2` 不允许此优化，
+继续使用原用户态复制和强制准入路径；TLS、缓冲包装、有效限速及未显式允许的 hook
+也继续使用原复制路径。事件分块和数量可能不同，仍须通过原物理字节和 owner 断言。
 profile 支持定位开销，不证明修复后的性能结果，新候选仍按
 上述五组、原 5% 阈值和原资源预算执行。
 

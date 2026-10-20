@@ -44,6 +44,12 @@ type chunkTokens struct {
 	bucket  usagebucket.Operation
 }
 
+// AllowSplice keeps authorization-enforcing collectors on their existing copy
+// path. Only the original, active local observation owner opts in.
+func (m *nativeMeter) AllowSplice() bool {
+	return m != nil && m.collector == nil && m.events != nil && !m.stopped.Load()
+}
+
 // replaceNativeMeterLocked leaves all old hooks bound to their own collector.
 // The caller holds k.mu and has stopped the previous runtime.
 func (k *Kernel) replaceNativeMeterLocked(collector *usageinterval.NativeCollector, users map[string]int) (*nativeMeter, bool) {

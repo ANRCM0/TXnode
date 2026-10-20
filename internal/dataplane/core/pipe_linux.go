@@ -5,8 +5,10 @@ package core
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"sync"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -19,11 +21,15 @@ import (
 // using a private pipe. When the syscall is unavailable (ENOSYS/EINVAL) the
 // function reports ok=false so Pipe falls back to io.Copy.
 func splicePipe(ctx context.Context, a, b net.Conn, up, down func(int64)) (bool, error) {
+	return splicePipeWithHook(ctx, a, b, up, down, nil, Chunk{})
+}
+
+func splicePipeWithHook(ctx context.Context, a, b net.Conn, up, down func(int64), hook ChunkHook, meta Chunk) (bool, error) {
 	ta, tb := tcpWriter(a), tcpWriter(b)
 	if ta == nil || tb == nil {
 		return false, nil
 	}
-	err := spliceBoth(ctx, ta, tb, up, down)
+	err := spliceBoth(ctx, ta, tb, up, down, hook, meta)
 	return true, err
 }
 
@@ -36,22 +42,33 @@ func Splice(a, b net.Conn) (bool, error) {
 	return false, Pipe(context.Background(), a, b, nil, nil)
 }
 
-func spliceBoth(ctx context.Context, a, b *net.TCPConn, up, down func(int64)) error {
+func spliceBoth(ctx context.Context, a, b *net.TCPConn, up, down func(int64), hook ChunkHook, meta Chunk) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	var wg sync.WaitGroup
 	wg.Add(2)
 	errCh := make(chan error, 2)
 	go func() {
 		defer wg.Done()
-		errCh <- spliceOne(ctx, b, a, up)
+		err := spliceOne(ctx, b, a, up, hook, meta, DirUpload)
+		errCh <- err
+		if err != nil {
+			cancel()
+		}
 	}()
 	go func() {
 		defer wg.Done()
-		errCh <- spliceOne(ctx, a, b, down)
+		err := spliceOne(ctx, a, b, down, hook, meta, DirDownload)
+		errCh <- err
+		if err != nil {
+			cancel()
+		}
 	}()
 
 	done := make(chan struct{})
-	var once sync.Once
+	watcherExited := make(chan struct{})
 	go func() {
+		defer close(watcherExited)
 		select {
 		case <-ctx.Done():
 			// Closing the sockets makes the blocking splice return.
@@ -61,7 +78,9 @@ func spliceBoth(ctx context.Context, a, b *net.TCPConn, up, down func(int64)) er
 		}
 	}()
 	wg.Wait()
-	once.Do(func() { close(done) })
+	close(done)
+	// Let the watcher observe normal completion before deferred cancellation.
+	<-watcherExited
 	close(errCh)
 
 	var first error
@@ -79,7 +98,7 @@ func spliceBoth(ctx context.Context, a, b *net.TCPConn, up, down func(int64)) er
 var errSpliceUnsupported = errors.New("splice is not supported")
 
 // spliceOne copies src→dst with splice(2), counting copied bytes.
-func spliceOne(ctx context.Context, dst, src *net.TCPConn, count func(int64)) error {
+func spliceOne(ctx context.Context, dst, src *net.TCPConn, count func(int64), hook ChunkHook, meta Chunk, dir ChunkDirection) error {
 	srcRC, err := src.SyscallConn()
 	if err != nil {
 		return err
@@ -97,61 +116,113 @@ func spliceOne(ctx context.Context, dst, src *net.TCPConn, count func(int64)) er
 	prFD, pwFD := pipeFDs[0], pipeFDs[1]
 	defer unix.Close(prFD)
 	defer unix.Close(pwFD)
+	drain := newSplicePipeDrainer(dstRC, prFD, count)
 
-	var pipeBuf [copyBuf]byte
-	_ = pipeBuf
+	var n int64
+	var serr error
+	read := func(fd uintptr) bool {
+		for {
+			n, serr = unix.Splice(int(fd), nil, pwFD, nil, copyBuf, unix.SPLICE_F_MOVE|unix.SPLICE_F_NONBLOCK)
+			if serr != unix.EINTR {
+				return serr != unix.EAGAIN // wait for readability and retry
+			}
+		}
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		// 1. socket -> pipe
-		var n int64
-		var serr error
-		readErr := srcRC.Read(func(fd uintptr) bool {
-			n, serr = unix.Splice(int(fd), nil, pwFD, nil, copyBuf, unix.SPLICE_F_MOVE|unix.SPLICE_F_NONBLOCK)
-			if serr == unix.EAGAIN {
-				return false // wait for readability and retry
+		var token any
+		if hook != nil && dir == DirUpload {
+			c := meta
+			c.Dir, c.N = dir, copyBuf
+			token, err = hook.Begin(c)
+			if err != nil {
+				return err
 			}
-			return true
-		})
-		if readErr != nil {
-			return readErr
 		}
+		// 1. socket -> pipe. Hooks run outside the RawConn callback.
+		n, serr = 0, nil
+		readErr := srcRC.Read(read)
 		if serr != nil {
-			return serr
+			if readErr != nil {
+				readErr = errors.Join(readErr, serr)
+			} else {
+				readErr = serr
+			}
+		}
+		if n < 0 {
+			n = 0
+		}
+		if readErr == nil && n == 0 {
+			readErr = io.EOF
+		}
+		if hook != nil && dir == DirUpload {
+			c := meta
+			c.Dir, c.N, c.Err = dir, n, readErr
+			hook.Complete(c, token)
+		}
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return readErr
 		}
 		if n == 0 {
 			// EOF from the source: propagate the half close.
 			return CloseWrite(dst)
 		}
-		// 2. pipe -> socket, retrying on EAGAIN without losing the offset.
-		var off int64
-		for off < n {
-			var werr error
-			writeErr := dstRC.Write(func(fd uintptr) bool {
-				m, e := unix.Splice(prFD, nil, int(fd), nil, int(n-off), unix.SPLICE_F_MOVE|unix.SPLICE_F_NONBLOCK)
-				if e == unix.EAGAIN {
-					return false // socket buffer full; wait then retry
+		if hook != nil && dir == DirDownload {
+			c := meta
+			c.Dir, c.N = dir, n
+			token, err = hook.Begin(c)
+			if err != nil {
+				return err
+			}
+		}
+		written, err := drain(n)
+		if hook != nil && dir == DirDownload {
+			c := meta
+			c.Dir, c.N, c.Err = dir, written, err
+			hook.Complete(c, token)
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+// newSplicePipeDrainer reuses one callback per direction. Counts run outside
+// RawConn.Write, including partial progress before a subsequent error.
+func newSplicePipeDrainer(dstRC syscall.RawConn, pipeFD int, count func(int64)) func(int64) (int64, error) {
+	var remaining, written int64
+	var werr error
+	write := func(fd uintptr) bool {
+		for {
+			written, werr = unix.Splice(pipeFD, nil, int(fd), nil, int(remaining), unix.SPLICE_F_MOVE|unix.SPLICE_F_NONBLOCK)
+			if werr != unix.EINTR {
+				return werr != unix.EAGAIN // socket buffer full: wait then retry
+			}
+		}
+	}
+	return func(n int64) (int64, error) {
+		remaining = n
+		for remaining > 0 {
+			written, werr = 0, nil
+			writeErr := dstRC.Write(write)
+			if written > 0 {
+				remaining -= written
+				if count != nil {
+					count(written)
 				}
-				if e != nil {
-					werr = e
-					return true
-				}
-				off += m
-				return true
-			})
+			}
 			if writeErr != nil {
-				return writeErr
+				return n - remaining, writeErr
 			}
 			if werr != nil {
-				return werr
+				return n - remaining, werr
 			}
-			if off == 0 {
-				return errSpliceUnsupported
+			if written == 0 {
+				return n - remaining, errSpliceUnsupported
 			}
 		}
-		if count != nil {
-			count(n)
-		}
+		return n - remaining, nil
 	}
 }
