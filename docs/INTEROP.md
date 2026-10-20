@@ -98,11 +98,13 @@ REALITY 需要服务端把 ClientHello 转发到借用站点，默认 `www.micro
 
 ## 尚未覆盖的互通项
 
-当前用例集覆盖 23 条链路（31 个用例，含 2 个 mux 子用例），全部通过。以下能力还没有真实客户端用例，发布前建议补齐：
+当前用例集覆盖 24 条链路（29 个用例，含 2 个 mux 子用例）通过、6 个跳过。
+以下能力还没有真实客户端用例，逐项证据与下一步见 `docs/OUTSTANDING-WORK.zh.md`：
 
 1. **Mieru**：`traffic_pattern` 与低熵编码（type 10/11）未实现；官方客户端默认关闭，需显式夹具才能覆盖；
 2. **地址头 mux 的 UDP**（smux/yamux `FlagUDP` 流）：sing-box 在该流上发自己的 packet 头（`03 | 目标 | 源 | len | 数据`），用 Xray 26.3.27 作参考服务端实测**同样不回应**（抓包只有请求、无回包）。因此这里不做猜测性实现，UDP 流保持明确关闭（`End`），等待 sing-box 侧文档或新版本；VLESS UDP 已由 XUDP 覆盖；
 3. **Mieru v2 UDP 承载**：官方 v3.38 客户端的 `Transport=udp` 需要包会话状态机（open 请求未被 ACK 时会重传、metadata 与 payload 共用同一 nonce）；TCP 承载已互通，UDP 承载未完成；
+4. **测试基建**：`usageinterval` 的 SIGKILL 故障注入用例在慢盘上偶发失败（单跑稳定），需要在整套运行前加环境判定；
 5. **传输剩余**：h2 已被上游移除，其余组合已覆盖。
 
 修复顺序建议：先补 mieru v2 UDP 承载（包会话状态机），再按 sing-box 文档补地址头 mux 的 UDP。

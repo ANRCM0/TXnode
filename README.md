@@ -18,7 +18,9 @@ Run functional, race, network, browser and container acceptance in GitHub Action
 repeats focused lifecycle suites. The third-party interop matrix is not part of the
 default gates: `scripts/fetch-interop-clients.sh` downloads the pinned clients
 (version + SHA-256) and the `interop` workflow job runs
-`go test ./internal/kernel/txnode/ -run TestInterop` nightly, on dispatch and on tags. Keep local kernel replacements, licenses and
+`go test ./internal/kernel/txnode/ -run TestInterop` nightly, on dispatch and on tags.
+Interop results and the remaining protocol gaps are recorded in `docs/INTEROP.md` and
+`docs/OUTSTANDING-WORK.zh.md`. Keep local kernel replacements, licenses and
 `TXNODE-PATCH.md` notes together with their sources under `internal/deps/`.
 
 The independent workflow owns tests, actual image checks and a real native Core
