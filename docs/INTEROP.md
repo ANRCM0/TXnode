@@ -26,6 +26,13 @@ outbound 连接固定 Xray 服务端，覆盖 AES-GCM、ChaCha20、none 的同�
 编排，并补充真实 TCP 的 12 种 cipher/framing 组合。新增用例及修复须由新提交
 Actions 取得结果，不能将同仓库两端互通当作第三方兼容证明。
 
+新反向门禁在 `14c5401` 发现独立问题：Go HTTP/1 echo 夹具必须先读完请求
+body 再写响应；VMess authenticated length 还须在 Seal 前减去长度 AEAD 的
+16 字节开销、Open 后加回。`e9de82c` 修正夹具，`f9d74f2` 同步校准两端 wire
+值、加入独立 raw AEAD 向量与共享 Proxy 并发回归，后者的 PR quick 已通过。
+完整矩阵仍须最终提交重验。反向用例只声明三种 cipher 的普通 chunk framing；
+同仓库 12 组合中的 `none/padded` 和 `zero` 不属于已证明的固定 Xray 兼容范围。
+
 以下命令供 GitHub Actions 环境使用，功能和网络验收继续遵守 README 的 Actions-only 约定：
 
 ```bash
