@@ -26,6 +26,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/ANRCM0/TX-Node/internal/dataplane/core"
 	"github.com/ANRCM0/TX-Node/internal/dataplane/socks"
@@ -217,6 +218,11 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) (*core.Session, err
 		return nil, ErrUnsupportedCommand
 	}
 
+	if req.Cmd == CmdTCP && !vision && h.enc == nil {
+		if reader := core.NewReadPauseConn(conn); reader != nil {
+			conn = reader
+		}
+	}
 	rc := &respConn{Conn: conn}
 	var out net.Conn = rc
 	if vision {
@@ -415,15 +421,39 @@ func (c *respConn) Write(p []byte) (int, error) {
 	copy(buf[2:], p)
 	n, err := c.Conn.Write(buf)
 	c.written = true
+	if err == nil && n != len(buf) {
+		err = io.ErrShortWrite
+	}
 	if err != nil {
 		c.err = err
-		return 0, err
 	}
-	if n < 2 {
-		c.err = io.ErrShortWrite
-		return 0, c.err
+	return max(0, n-2), err
+}
+
+func (c *respConn) ReadPauseSupported() bool {
+	_, ok := c.Conn.(*core.ReadPauseConn)
+	return ok
+}
+
+func (c *respConn) PauseRead() error {
+	if reader, ok := c.Conn.(core.ReadPauser); ok {
+		return reader.PauseRead()
 	}
-	return n - 2, nil
+	return core.ErrReadPauseUnsupported
+}
+
+func (c *respConn) ResumeRead() error {
+	if reader, ok := c.Conn.(core.ReadPauser); ok {
+		return reader.ResumeRead()
+	}
+	return core.ErrReadPauseUnsupported
+}
+
+func (c *respConn) ReadDeadline() time.Time {
+	if reader, ok := c.Conn.(interface{ ReadDeadline() time.Time }); ok {
+		return reader.ReadDeadline()
+	}
+	return time.Time{}
 }
 
 // Pending reports whether the response header is still unsent. core.Splice

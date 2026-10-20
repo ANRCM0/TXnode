@@ -142,7 +142,7 @@ func copyDirection(ctx context.Context, dst, src net.Conn, lims []waiter, count 
 			c := meta
 			c.Dir, c.N = dir, int64(len(buf))
 			var herr error
-			token, herr = hook.Begin(c)
+			token, herr = beginChunk(ctx, hook, c)
 			if herr != nil {
 				return herr
 			}
@@ -151,7 +151,16 @@ func copyDirection(ctx context.Context, dst, src net.Conn, lims []waiter, count 
 		if hook != nil && dir == DirUpload {
 			c := meta
 			c.Dir, c.N, c.Err = dir, int64(n), rerr
+			if n == 0 && errors.Is(rerr, ErrReadPaused) {
+				c.Err = nil
+			}
 			hook.Complete(c, token)
+		}
+		if n == 0 && errors.Is(rerr, ErrReadPaused) {
+			if err := waitReadReady(ctx, hook, rerr); err != nil {
+				return err
+			}
+			continue
 		}
 		if n > 0 {
 			if len(lims) > 0 {
@@ -163,7 +172,7 @@ func copyDirection(ctx context.Context, dst, src net.Conn, lims []waiter, count 
 				c := meta
 				c.Dir, c.N = dir, int64(n)
 				var herr error
-				token, herr = hook.Begin(c)
+				token, herr = beginChunk(ctx, hook, c)
 				if herr != nil {
 					return herr
 				}

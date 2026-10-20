@@ -311,6 +311,9 @@ func (h *Handler) Handle(ctx context.Context, conn net.Conn) (*core.Session, err
 	sess := &core.Session{UserID: req.UserID}
 	switch req.Cmd {
 	case CmdTCP:
+		if reader := core.NewReadPauseConn(conn); reader != nil {
+			vc.conn = reader
+		}
 		sess.Dest = req.Dest
 		sess.Conn = vc
 	case CmdUDP:
