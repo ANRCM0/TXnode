@@ -49,6 +49,9 @@ TCP underlay 使用一个认证密钥、唯一读游标和串行化写游标，�
 underlay，已结束 session 的迟到控制帧也先完整解密以保持游标。每个新 session 重新检查
 当前认证快照并进入 `Server.ServeSession`。逻辑读写截止时间不会设置其他 session 的
 读截止时间；无法完整写出的加密 record 则关闭整个 underlay，禁止以失步游标继续发送。
+完整 record 边界上的 TCP FIN 只结束输入方向：已认证接收队列仍可交付，子 relay 最多
+再用 3 秒完成尾部与回复，随后取消并关闭 underlay。部分 record、AEAD 错误和撤权不
+进入该 drain，避免把不完整输入或旧认证数据当成可继续交付的尾部。
 
 ## 两种 UDP 必须分别验收
 
@@ -78,7 +81,7 @@ underlay，已结束 session 的迟到控制帧也先完整解密以保持游标
 | 同一监听的 peer | 1024，官方 v2 与旧 packet 模式共享总数；超限不建立新 peer |
 | TCP underlay 逻辑 session | 同时至多 64 个，每个接收队列至多 64 个 segment；队列溢出关闭对应 session，不静默丢业务字节继续传输 |
 | v2 未确认发送窗口 | 64 个 segment，同时遵守远端窗口 |
-| v2 接收重排/交付队列 | 合计 64 个 segment、256 KiB；超限保留累计 ACK 游标，等待发送端重试 |
+| v2 接收重排/交付队列 | 合计 64 个 segment、256 KiB；缺失的 nextRecv 到达时可有界淘汰最远乱序包腾出空间，累计 ACK 不确认被淘汰项，等待发送端重试 |
 | v2 数据报发送大小 | 最多 1400 字节，同时尊重更小的显式 MTU；低熵扩展和 padding 计入该限额 |
 | v2 重传 | 初始 250 ms，指数退避至最多 2 s；总发送最多 12 次，耗尽关闭会话，不跳过可靠序号继续交付 |
 | v2 peer 存活 | 默认 5 分钟无接收超时；绝对上限 2 小时；socket/context/认证失效立即终止 |

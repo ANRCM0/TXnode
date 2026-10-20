@@ -1,16 +1,152 @@
 package mieru
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/ANRCM0/TX-Node/internal/dataplane/core"
 )
+
+// A finite input stream models peer FIN without opening a local network socket.
+// Writes remain available until Close, as on a TCP read half-close.
+type v2FiniteTCPConn struct {
+	r          *bytes.Reader
+	allowEOF   <-chan struct{}
+	closedDone chan struct{}
+	closeOnce  sync.Once
+	mu         sync.Mutex
+	written    bytes.Buffer
+	closed     bool
+}
+
+func (c *v2FiniteTCPConn) Read(p []byte) (int, error) {
+	if c.r.Len() == 0 {
+		select {
+		case <-c.allowEOF:
+		case <-c.closedDone:
+			return 0, net.ErrClosed
+		}
+	}
+	return c.r.Read(p)
+}
+func (c *v2FiniteTCPConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return 0, net.ErrClosed
+	}
+	return c.written.Write(p)
+}
+func (c *v2FiniteTCPConn) Close() error {
+	c.closeOnce.Do(func() {
+		c.mu.Lock()
+		c.closed = true
+		c.mu.Unlock()
+		close(c.closedDone)
+	})
+	return nil
+}
+func (*v2FiniteTCPConn) LocalAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 12345}
+}
+func (*v2FiniteTCPConn) RemoteAddr() net.Addr {
+	return &net.TCPAddr{IP: net.IPv4(198, 51, 100, 7), Port: 23456}
+}
+func (*v2FiniteTCPConn) SetDeadline(time.Time) error      { return nil }
+func (*v2FiniteTCPConn) SetReadDeadline(time.Time) error  { return nil }
+func (*v2FiniteTCPConn) SetWriteDeadline(time.Time) error { return nil }
+
+func TestV2TCPFrameBoundaryFINKeepsAuthenticatedTailButPartialRecordDoesNot(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		name := "clean-frame-boundary"
+		if partial {
+			name = "partial-next-metadata"
+		}
+		t.Run(name, func(t *testing.T) {
+			h := nativeUDPTestHandler(t, []core.User{{ID: 7, UUID: "interop:secret"}})
+			key := v2PacketTestKey(t, h)
+			nonce := make([]byte, v2NonceLen)
+			var wire []byte
+			appendRecord := func(meta, payload []byte) {
+				if len(wire) == 0 {
+					wire = append(wire, nonce...)
+				}
+				wire = key.aead.Seal(wire, nonce, meta, nil)
+				v2IncreaseNonce(nonce)
+				if len(payload) > 0 {
+					wire = key.aead.Seal(wire, nonce, payload, nil)
+					v2IncreaseNonce(nonce)
+				}
+			}
+			req := []byte{5, 1, 0, 1, 127, 0, 0, 1, 0x1f, 0x90}
+			appendRecord(v2SessionMeta(v2ProtoOpenReq, 51, 0, 0, len(req), 0), req)
+			for i, payload := range []string{"first", "second"} {
+				appendRecord(v2DataMeta(v2ProtoDataC2S, 51, uint32(i+1), 1, 64, 0, len(payload), 0, 0), []byte(payload))
+			}
+			if partial {
+				wire = append(wire, 0x42)
+			}
+			allowEOF := make(chan struct{})
+			conn := &v2FiniteTCPConn{r: bytes.NewReader(wire), allowEOF: allowEOF, closedDone: make(chan struct{})}
+			observed := make(chan error, 1)
+			h.SetRelay(func(ctx context.Context, sess *core.Session) error {
+				close(allowEOF)
+				c := sess.Conn.(*v2Conn)
+				if partial {
+					<-ctx.Done()
+					var one [1]byte
+					n, err := c.Read(one[:])
+					if n != 0 || !errors.Is(err, net.ErrClosed) {
+						observed <- errors.New("partial metadata EOF released a buffered business tail")
+					} else {
+						observed <- nil
+					}
+					return nil
+				}
+				select {
+				case <-c.transport.readDone:
+				case <-ctx.Done():
+					observed <- errors.New("clean FIN cancelled the relay before tail delivery")
+					return nil
+				}
+				got := make([]byte, len("firstsecond"))
+				if _, err := io.ReadFull(c, got); err != nil || string(got) != "firstsecond" {
+					observed <- errors.New("clean FIN lost or reordered its authenticated queued tail")
+					return nil
+				}
+				var one [1]byte
+				if n, err := c.Read(one[:]); n != 0 || !errors.Is(err, io.EOF) {
+					observed <- errors.New("drained FIN did not end its logical read direction")
+					return nil
+				}
+				if n, err := c.Write([]byte("reply-after-FIN")); n != 15 || err != nil {
+					observed <- errors.New("clean FIN closed the reply direction before relay completion")
+					return nil
+				}
+				observed <- nil
+				return nil
+			})
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			_, _ = h.Handle(ctx, conn)
+			select {
+			case err := <-observed:
+				if err != nil {
+					t.Fatal(err)
+				}
+			default:
+				t.Fatal("underlay did not await the authenticated child relay")
+			}
+		})
+	}
+}
 
 func TestV2TCPUnderlayMultiplexesAfterDialFailureAndSessionClose(t *testing.T) {
 	h, err := NewHandler(Options{Users: []core.User{{ID: 7, UUID: "interop:secret"}}, Heartbeat: -1})

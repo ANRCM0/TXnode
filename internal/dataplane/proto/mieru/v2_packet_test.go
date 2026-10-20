@@ -113,6 +113,42 @@ func TestV2PacketReorderingDuplicatesAndWindowNeverRedeliverBusinessBytes(t *tes
 	}
 }
 
+func TestV2PacketFullFutureByteBudgetStillAdmitsMissingSequence(t *testing.T) {
+	p, _ := v2PacketTestFixture(t)
+	for seq := uint32(2); seq <= 9; seq++ {
+		p.input(v2TestInput(p.id, seq, 0, string(bytes.Repeat([]byte{byte(seq)}, v2MaxPayload))))
+	}
+	if p.buffered != v2ReceiveBudget || len(p.ready) != 0 || len(p.reorder) != 8 || p.nextRecv != 1 {
+		t.Fatal("fixture did not fill only the out-of-order byte budget")
+	}
+	p.input(v2TestInput(p.id, 1, 0, "gap"))
+	if p.nextRecv != 9 || len(p.reorder) != 0 || p.buffered > v2ReceiveBudget {
+		t.Fatalf("missing sequence could not unlock the bounded receive queue: next=%d bytes=%d", p.nextRecv, p.buffered)
+	}
+	if err := p.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	want := []byte("gap")
+	for seq := byte(2); seq <= 8; seq++ {
+		want = append(want, bytes.Repeat([]byte{seq}, v2MaxPayload)...)
+	}
+	got := make([]byte, len(want))
+	if _, err := io.ReadFull(p, got); err != nil || !bytes.Equal(got, want) {
+		t.Fatal("gap recovery reordered or duplicated business bytes", err)
+	}
+	// The farthest sequence was evicted, not acknowledged. Its retransmission
+	// must still be delivered once after the original missing sequence advances.
+	last := bytes.Repeat([]byte{9}, v2MaxPayload)
+	p.input(v2TestInput(p.id, 9, 0, string(last)))
+	got = make([]byte, len(last))
+	if _, err := io.ReadFull(p, got); err != nil || !bytes.Equal(got, last) {
+		t.Fatal("evicted future segment could not recover by retransmission", err)
+	}
+	if p.nextRecv != 10 || p.buffered != 0 || p.handler.PacketDiagnostics()["dropped_packets"] != 1 {
+		t.Fatal("gap recovery changed the byte budget or silently discarded accepted data")
+	}
+}
+
 func TestV2PacketRetransmissionKeepsBusinessSequenceAndAckIsCumulative(t *testing.T) {
 	p, pc := v2PacketTestFixture(t)
 	if n, err := p.Write([]byte("once")); err != nil || n != 4 {

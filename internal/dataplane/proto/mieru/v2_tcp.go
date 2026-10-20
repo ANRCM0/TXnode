@@ -15,6 +15,8 @@ import (
 	"github.com/ANRCM0/TX-Node/internal/dataplane/core"
 )
 
+const v2TCPDrainTimeout = 3 * time.Second
+
 // The implicit cipher cursors belong to the TCP underlay, while sequence
 // numbers and SOCKS requests belong to independently closed logical sessions.
 type v2TCPTransport struct {
@@ -31,6 +33,7 @@ type v2TCPTransport struct {
 	lastRX       time.Time
 	firstTX      bool
 	done         chan struct{}
+	readDone     chan struct{}
 	once         sync.Once
 	ctx          context.Context
 	cancel       context.CancelFunc
@@ -43,7 +46,7 @@ func (h *Handler) v2ServeTCP(parent context.Context, conn net.Conn, br *bufio.Re
 	t := &v2TCPTransport{h: h, key: key, conn: conn, reader: br,
 		rn: append([]byte(nil), nonce...), wn: make([]byte, v2NonceLen),
 		streams: make(map[uint32]*v2Conn), lastRX: time.Now(), firstTX: true,
-		done: make(chan struct{}), ctx: ctx, cancel: cancel}
+		done: make(chan struct{}), readDone: make(chan struct{}), ctx: ctx, cancel: cancel}
 	v2IncreaseNonce(t.rn)
 	defer func() { t.close(); t.wg.Wait() }()
 	stopCancel := context.AfterFunc(ctx, t.close)
@@ -66,7 +69,10 @@ func (h *Handler) v2ServeTCP(parent context.Context, conn net.Conn, br *bufio.Re
 	go t.heartbeat()
 	for {
 		sealed := make([]byte, v2MetaLen+v2TagLen)
-		if _, err := io.ReadFull(br, sealed); err != nil {
+		if n, err := io.ReadFull(br, sealed); err != nil {
+			if n == 0 && errors.Is(err, io.EOF) {
+				t.drainReadEOF()
+			}
 			break
 		}
 		meta, err := key.aead.Open(nil, t.rn, sealed, nil)
@@ -86,6 +92,23 @@ func (h *Handler) v2ServeTCP(parent context.Context, conn net.Conn, br *bufio.Re
 	// Like the HTTP/2 transport, this authenticated connection was consumed
 	// through the configured relay and has no single session to return.
 	return nil, &core.Stranger{Conn: conn, Quiet: true}
+}
+
+// A FIN on a complete record boundary is a read half-close. Already decrypted
+// frames remain readable while child relays finish and can write their replies.
+// Partial records, authentication errors and revoked owners never enter here.
+func (t *v2TCPTransport) drainReadEOF() {
+	close(t.readDone)
+	childrenDone := make(chan struct{})
+	go func() { t.wg.Wait(); close(childrenDone) }()
+	timer := time.NewTimer(v2TCPDrainTimeout)
+	defer timer.Stop()
+	select {
+	case <-childrenDone:
+	case <-timer.C:
+	case <-t.done:
+	case <-t.ctx.Done():
+	}
 }
 
 func (t *v2TCPTransport) valid() bool {
@@ -365,6 +388,8 @@ func (c *v2Conn) readMultiplexed(p []byte) (int, error) {
 		select {
 		case <-c.done:
 			return 0, io.EOF
+		case <-c.transport.readDone:
+			return 0, io.EOF
 		default:
 		}
 		var timeout <-chan time.Time
@@ -381,6 +406,7 @@ func (c *v2Conn) readMultiplexed(p []byte) (int, error) {
 			c.remainder = b
 		case <-c.done:
 		case <-c.transport.done:
+		case <-c.transport.readDone:
 		case <-c.wake:
 		case <-timeout:
 		}

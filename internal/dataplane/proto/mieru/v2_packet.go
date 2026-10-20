@@ -307,7 +307,7 @@ func (p *v2DatagramConn) input(packet v2Datagram) {
 		_ = p.ack()
 		return
 	}
-	if seq-p.nextRecv >= v2PacketWindow || seq == ^uint32(0) || len(p.reorder)+len(p.ready) >= v2PacketWindow || p.buffered+len(packet.payload) > v2ReceiveBudget {
+	if seq-p.nextRecv >= v2PacketWindow || seq == ^uint32(0) {
 		p.mu.Unlock()
 		p.srv.dropped.Add(1)
 		_ = p.ack()
@@ -316,6 +316,26 @@ func (p *v2DatagramConn) input(packet v2Datagram) {
 	if _, duplicate := p.reorder[seq]; duplicate {
 		p.srv.duplicates.Add(1)
 		p.mu.Unlock()
+		_ = p.ack()
+		return
+	}
+	// A full future queue cannot make progress until nextRecv arrives. Evict
+	// its farthest segments to admit that missing packet within the same byte
+	// and segment budgets; the cumulative ACK asks the peer to resend them.
+	if seq == p.nextRecv && len(packet.payload) <= v2ReceiveBudget {
+		for len(p.reorder) > 0 && (len(p.reorder)+len(p.ready) >= v2PacketWindow || p.buffered+len(packet.payload) > v2ReceiveBudget) {
+			var farthest uint32
+			for queued := range p.reorder {
+				farthest = max(farthest, queued)
+			}
+			p.buffered -= len(p.reorder[farthest].payload)
+			delete(p.reorder, farthest)
+			p.srv.dropped.Add(1)
+		}
+	}
+	if len(p.reorder)+len(p.ready) >= v2PacketWindow || p.buffered+len(packet.payload) > v2ReceiveBudget {
+		p.mu.Unlock()
+		p.srv.dropped.Add(1)
 		_ = p.ack()
 		return
 	}
