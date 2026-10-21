@@ -14,6 +14,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+import uuid
 from tls_proxy import NativeTLSProxy
 from preflight import inspect as compatibility_preflight
 from native_setup import prepare as prepare_native, render_credentials
@@ -40,6 +41,7 @@ if not php or not mysql or not shutil.which('go')or not shutil.which('openssl')o
 go=json.loads(subprocess.check_output(['go','env','-json','GOPATH','GOMODCACHE','GOCACHE','CGO_ENABLED'],text=True))
 if any(not isinstance(go.get(k),str)or not go[k] for k in ('GOPATH','GOMODCACHE','GOCACHE'))or go.get('CGO_ENABLED')!='1':raise SystemExit('NATIVE_MACHINE_GO_RACE_ENV_REQUIRED')
 env={k:os.environ[k]for k in ('PATH','LANG','LC_ALL','TMPDIR','GOTOOLCHAIN')if k in os.environ};env.update(go)
+env['CORE_RELEASE_ID'] = actual
 env.update(expected|{'DB_PORT':os.environ.get('DB_PORT','13306'),'DB_PASSWORD':os.environ['DB_PASSWORD'],'APP_DEBUG':'false','CACHE_DRIVER':'redis','SETTING_CACHE_STORE':'redis','SESSION_DRIVER':'array','QUEUE_CONNECTION':'sync','MAIL_MAILER':'array','CORE_INSTALLATION_MODE':'legacy','CORE_INSTALLATION_EPOCH':'1','TXBOARD_NATIVE_NODE_WS_ENABLED':'true','APP_KEY':'base64:ZdD07lazsdQQmdBAJ2tA5WjufeI2hP8xlP6zgmvCMZs=','REDIS_HOST':'127.0.0.1','REDIS_PORT':os.environ.get('REDIS_PORT','16379'),'REDIS_DB':os.environ.get('REDIS_DB','14'),'REDIS_CACHE_DB':os.environ.get('REDIS_CACHE_DB','15'),'REDIS_PREFIX':'native-machine-'+hashlib.sha256(str(evidence).encode()).hexdigest()[:12]+':','NATIVE_MACHINE_API':str(api),'NATIVE_MACHINE_DIR':str(evidence)})
 if not env['REDIS_DB'].isdigit() or not env['REDIS_CACHE_DB'].isdigit() or env['REDIS_DB']==env['REDIS_CACHE_DB']:
     raise SystemExit('NATIVE_MACHINE_DISTINCT_REDIS_DATABASES_REQUIRED')
@@ -55,7 +57,7 @@ def artifact(name,value):
     finally:os.close(directory)
 
 artifact('sources.json',{'schema':'txnode-core-machine-sources/v1',
-    'core_repository':baseline['repository'],'core_revision':actual,'core_tree':core_tree,
+    'core_repository':baseline['repository'],'core_revision':actual,'core_tree':core_tree,'requested_core_release_id':actual,
     'node_repository':'ANRCM0/txnode','node_revision':node_revision,'node_tree':node_tree,
     'core_installation_mode':'not_started','requested_core_installation_mode':'native','node_kernel':'txnode',
     'fixture_ancestor':'TXBoard 52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645 scripts/tests/node-native-machine',
@@ -140,7 +142,8 @@ provider_args=prepare_native(evidence,node,env,command,provider_port,render_port
 trust=json.loads(command('trust',[php,str(scripts/'fixture.php'),'trust'],api))
 endpoint='https://127.0.0.1:'+str(tls_port)
 env.update(TXBOARD_NATIVE_MACHINE_DIR=str(evidence),TXBOARD_NATIVE_MACHINE_URL=endpoint,
-           SSL_CERT_FILE=str(evidence/'ca.pem'),APP_URL=endpoint)
+           SSL_CERT_FILE=str(evidence/'ca.pem'),APP_URL=endpoint,
+           CORE_BROWSER_ORIGIN=endpoint,CORE_BROWSER_ENABLED='true',CORE_BROWSER_ADMIN_ENABLED='true')
 observation=evidence/'native-observations.jsonl';observation.touch(mode=0o600)
 proxy=NativeTLSProxy(tls_port,http_port,ws_port,str(evidence/'server.pem'),str(evidence/'server.key'),str(observation))
 processes=[];logs=[];test=None
@@ -170,8 +173,13 @@ def barrier(stage,action):
 
 def state(stage):return json.loads(command(stage+'-state',[php,str(scripts/'fixture.php'),'state'],api))
 
+def admin_operation(operation,fields,key=None):
+    headers={'Authorization':bearer,'Origin':endpoint,'X-Core-Admin-Path':'native_machine_admin'}
+    if key is not None:headers['Idempotency-Key']=key
+    return request('/gateway/v1/core/admin/operations/'+operation,'POST',{'input':fields},headers)
+
 def mutation(node_id,fields):
-    status,body=request('/txapi/admin/native_machine_admin/network-nodes/'+str(node_id),'PATCH',fields,{'Authorization':bearer})
+    status,body=admin_operation('network.nodes.patch',{'node_id':str(node_id)}|fields,str(uuid.uuid4()))
     if status!=200 or body.get('data',{}).get('ok')is not True:raise RuntimeError('NATIVE_MACHINE_ADMIN_MUTATION_FAILED')
     return status
 
@@ -187,6 +195,11 @@ try:
         time.sleep(.1)
     fixture=json.loads(command('seed',[php,str(scripts/'fixture.php'),'seed'],api))
     if fixture.get('activation')!={'phase':'open','authority_epoch':'2'}:raise RuntimeError('NATIVE_MACHINE_REAL_ACTIVATION_REQUIRED')
+    runtime=fixture.get('runtime',{})
+    if (runtime.get('ready') is not True or runtime.get('authority_epoch')!='2'
+            or runtime.get('release_id')!=actual
+            or re.fullmatch('[a-f0-9]{64}',runtime.get('composition_fingerprint','')) is None):
+        raise RuntimeError('NATIVE_MACHINE_APPROVED_CORE_COMPOSITION_REQUIRED')
     native_activated=True
     artifact('fixture.json',fixture)
     env['CORE_INSTALLATION_EPOCH']='2'
@@ -232,14 +245,20 @@ try:
         proxy.hold_rest()
         configuration_gate['started_monotonic_ns']=time.monotonic_ns()
         wait_proxy(lambda events:any(e['kind']=='rest-held' for e in events),'REAL_REST_BARRIER')
-        status, listing=request('/txapi/admin/native_machine_admin/network-nodes','GET',None,{'Authorization':bearer})
-        node_row=next((row for row in listing.get('data',[]) if row.get('id')==fixture['nodes'][0]['id']),None)
-        if status!=200 or node_row is None:raise RuntimeError('NATIVE_MACHINE_CURRENT_NODE_REQUIRED')
-        fields=['type','name','host','port','server_port','rate','show','enabled','group_ids','route_ids','parent_id','machine_id','tags','custom_outbounds','custom_routes','cert_config','protocol_settings']
-        update={key:node_row[key] for key in fields if key in node_row}
+        node_id=str(fixture['nodes'][0]['id'])
+        status,snapshot=admin_operation('network.nodes.configuration.get',{'node_id':node_id})
+        current=snapshot.get('data',{})
+        if status!=200 or current.get('node_id')!=node_id or re.fullmatch('[a-f0-9]{64}',current.get('revision','')) is None:
+            raise RuntimeError('NATIVE_MACHINE_CURRENT_NODE_REQUIRED')
+        update=json.loads(current['configuration_json'])
         update.update(server_port=new_port,port=str(new_port))
-        status,updated=request('/txapi/admin/native_machine_admin/network-nodes/'+str(fixture['nodes'][0]['id']),'PUT',update,{'Authorization':bearer})
-        if status!=200 or updated.get('data',{}).get('ok') is not True:raise RuntimeError('NATIVE_MACHINE_FULL_NODE_CONFIG_MUTATION_FAILED')
+        replace={'node_id':node_id,'expected_revision':current['revision'],'configuration_json':json.dumps(update,separators=(',',':'))}
+        key=str(uuid.uuid4())
+        status,updated=admin_operation('network.nodes.configuration.replace',replace,key)
+        if status!=200 or updated.get('data',{}).get('id')!=node_id:raise RuntimeError('NATIVE_MACHINE_FULL_NODE_CONFIG_MUTATION_FAILED')
+        # A lost-response replay must retain the exact owner input and key.
+        status,replayed=admin_operation('network.nodes.configuration.replace',replace,key)
+        if status!=200 or replayed.get('data')!=updated.get('data'):raise RuntimeError('NATIVE_MACHINE_CONFIG_RECEIPT_REPLAY_FAILED')
         configuration_gate['mutation_completed_monotonic_ns']=time.monotonic_ns()
         return {'ok':True}
     barrier('initial',initial)
@@ -250,7 +269,7 @@ try:
         events=proxy.event_snapshot()
         if any(event['kind']=='http' and event['path'] in {'/txapi/node/v1/config','/txapi/node/v1/users'} and event['monotonic_ns']>=configuration_gate['mutation_completed_monotonic_ns'] for event in events):raise RuntimeError('NATIVE_MACHINE_WS_CONFIGURATION_REST_FALLBACK')
         stage_states['configured']=state('configured')
-        artifact('ws-only-configuration.json',{'actual_ws_delivery':True,'rest_reads_held':True,'actual_admin_put':True})
+        artifact('ws-only-configuration.json',{'actual_ws_delivery':True,'rest_reads_held':True,'actual_admin_configuration_replace':True,'owner_revision_and_receipt':True})
         proxy.release_rest()
         return {'ok':True}
     barrier('configured',configured)
@@ -287,10 +306,20 @@ try:
     disabled_evidence=barrier('disabled',disabled)
     rotation={}
     def reenabled(incoming):
-        stage_states['reenabled']=state('reenabled');status,body=request('/txapi/admin/native_machine_admin/network-machines/'+str(fixture['machine_id'])+'/token/rotate','POST',{}, {'Authorization':bearer})
-        token=body.get('data',{}).get('token','')
+        stage_states['reenabled']=state('reenabled')
+        identity={'machine_id':str(fixture['machine_id'])};key=str(uuid.uuid4())
+        status,body=admin_operation('network.machines.token.rotate',identity,key)
+        if status!=200 or body.get('data')!={'ok':True}:raise RuntimeError('NATIVE_MACHINE_TOKEN_ROTATION_FAILED')
+        rotation['completed_monotonic_ns']=time.monotonic_ns()
+        status,credentials=admin_operation('network.machines.credentials.get',identity)
+        token=credentials.get('data',{}).get('token','')
         if status!=200 or not isinstance(token,str)or not token or token==fixture['token']:raise RuntimeError('NATIVE_MACHINE_TOKEN_ROTATION_FAILED')
-        rotation['completed_monotonic_ns']=time.monotonic_ns();return {'token':token}
+        status,replay=admin_operation('network.machines.token.rotate',identity,key)
+        if status!=200 or replay.get('data')!={'ok':True}:raise RuntimeError('NATIVE_MACHINE_ROTATION_RECEIPT_REPLAY_FAILED')
+        status,recovered_credentials=admin_operation('network.machines.credentials.get',identity)
+        if status!=200 or recovered_credentials.get('data',{}).get('token')!=token:
+            raise RuntimeError('NATIVE_MACHINE_ROTATION_RECEIPT_REPLAY_CHANGED_TOKEN')
+        return {'token':token}
     barrier('reenabled',reenabled)
     old=barrier('old-rejected',lambda incoming:{'ok':True})
     recovered=barrier('recovered',lambda incoming:{'ok':True})
@@ -319,7 +348,7 @@ try:
     goresult=json.loads((evidence/'machine-live-result.json').read_text())
     # Runtime payloads and SQL snapshots stay private. Public evidence exposes
     # fixed assertion labels, aggregate counts and content/source hashes only.
-    artifact('result.json',{'actual_core_workerman_machine':True,'core_revision':actual,'node_revision':node_revision,'core_tree':core_tree,'node_tree':node_tree,'core_installation_mode':'native','node_kernel':'txnode','actual_transparent_trusted_tls':True,'actual_protocols':['vless','vmess'],'shared_machine_upgrade_count':sum(e['kind']=='ws-upgrade'and e['status']==101 for e in events),'ws_only_configuration_delivery':True,'native_core_installation_admission':True,'transient_disconnect_503_recovery':True,'successor_socket_device_facts':True,'foreign_machine_scope_matrix':True,'membership_withdrawal_proved':True,'machine_token_denial_proved':True,'original_batches_replayed':len(required),'actual_sql_unique_batch_rows':len(required),'independent_full_billing_reconciliation':False,'production_pki_attested':False,'private_go_result_sha256':hashlib.sha256((evidence/'machine-live-result.json').read_bytes()).hexdigest(),'observations_sha256':hashlib.sha256(observation.read_bytes()).hexdigest()})
+    artifact('result.json',{'actual_core_workerman_machine':True,'core_revision':actual,'node_revision':node_revision,'core_tree':core_tree,'node_tree':node_tree,'core_installation_mode':'native','core_release_id':runtime['release_id'],'core_composition_fingerprint':runtime['composition_fingerprint'],'canonical_admin_operations':True,'node_kernel':'txnode','actual_transparent_trusted_tls':True,'actual_protocols':['vless','vmess'],'shared_machine_upgrade_count':sum(e['kind']=='ws-upgrade'and e['status']==101 for e in events),'ws_only_configuration_delivery':True,'native_core_installation_admission':True,'transient_disconnect_503_recovery':True,'successor_socket_device_facts':True,'foreign_machine_scope_matrix':True,'membership_withdrawal_proved':True,'machine_token_denial_proved':True,'original_batches_replayed':len(required),'actual_sql_unique_batch_rows':len(required),'independent_full_billing_reconciliation':False,'production_pki_attested':False,'private_go_result_sha256':hashlib.sha256((evidence/'machine-live-result.json').read_bytes()).hexdigest(),'observations_sha256':hashlib.sha256(observation.read_bytes()).hexdigest()})
     print('Native actual Core/Workerman two-node Machine gate passed; public result contains no credentials.')
 except Exception:
     failure_summary('runner_failure')

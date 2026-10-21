@@ -80,13 +80,22 @@ if ($mode === 'seed') {
  $recipients[$foreignNode->id] = ['machine_id'=>(int)$foreignMachine->id,'recipient_sha256'=>getenv('NATIVE_MACHINE_RECIPIENT_SHA256')];
  file_put_contents($directory.'/recipients.json',json_encode((object)$recipients,JSON_THROW_ON_ERROR)); chmod($directory.'/recipients.json',0600);
  config(['native_provider_node.recipients'=>$recipients]);
- User::withoutEvents(fn()=>User::create(['email'=>'native-machine-admin@example.test','password'=>Hash::make('SyntheticMachineAdmin2026'),'uuid'=>'','token'=>'','is_admin'=>true,'banned'=>false,'u'=>0,'d'=>0,'transfer_enable'=>0,'balance'=>0,'commission_balance'=>0]));
+ $admin = User::withoutEvents(fn()=>User::create(['email'=>'native-machine-admin@example.test','password'=>Hash::make('SyntheticMachineAdmin2026'),'uuid'=>'','token'=>'','is_admin'=>true,'banned'=>false,'u'=>0,'d'=>0,'transfer_enable'=>0,'balance'=>0,'commission_balance'=>0]));
  admin_setting(['server_token'=>'native-machine-unused-standalone','secure_path'=>'native_machine_admin','captcha_enable'=>0,'password_limit_enable'=>0,'stop_register'=>0,'email_verify'=>0,'server_pull_interval'=>1,'server_push_interval'=>60]);
  app(NativeCredentialProviderService::class)->register('primary-provider','machine-native-provider');
  $authority = app(InstallationAuthority::class); $ready = $authority->readiness();
  $activation = $authority->activate('machine-native-activate','1',$ready['configuration_digest']);
  if ($activation['phase'] !== 'open' || $activation['authority_epoch'] !== '2') throw new RuntimeException('NATIVE_MACHINE_REAL_ACTIVATION_REQUIRED');
- echo json_encode(['machine_id'=>(int)$machine->id,'token'=>$machine->token,'nodes'=>$nodes,'foreign_machine_id'=>(int)$foreignMachine->id,'foreign_node_id'=>(int)$foreignNode->id,'foreign_token'=>$foreignMachine->token,'origin_port'=>(int)getenv('NATIVE_MACHINE_ORIGIN_PORT'),'new_port'=>(int)getenv('NATIVE_MACHINE_NEW_PORT'),'activation'=>['phase'=>'open','authority_epoch'=>'2']],JSON_THROW_ON_ERROR)."\n"; exit(0);
+ // Inspect the real activation/module receipt under the successor worker epoch.
+ config(['core_installation.worker_epoch'=>'2']);
+ $runtime = $authority->runtimeReport();
+ if (($runtime['ready']??false)!==true || ($runtime['authority_epoch']??null)!=='2'
+  || ($runtime['release_id']??null)!==getenv('CORE_RELEASE_ID')) throw new RuntimeException('NATIVE_MACHINE_APPROVED_CORE_COMPOSITION_REQUIRED');
+ // Fixture authority provisioning matches Core's native browser owner tests.
+ foreach (['network.nodes.manage','network.machines.manage'] as $permission) {
+  DB::table('tx_internal_actor_grant')->insert(['user_id'=>$admin->id,'permission'=>$permission,'created_at'=>time()]);
+ }
+ echo json_encode(['machine_id'=>(int)$machine->id,'token'=>$machine->token,'nodes'=>$nodes,'foreign_machine_id'=>(int)$foreignMachine->id,'foreign_node_id'=>(int)$foreignNode->id,'foreign_token'=>$foreignMachine->token,'origin_port'=>(int)getenv('NATIVE_MACHINE_ORIGIN_PORT'),'new_port'=>(int)getenv('NATIVE_MACHINE_NEW_PORT'),'activation'=>['phase'=>'open','authority_epoch'=>'2'],'runtime'=>$runtime],JSON_THROW_ON_ERROR)."\n"; exit(0);
 }
 $fixture = json_decode(file_get_contents($directory.'/fixture.json'),true,32,JSON_THROW_ON_ERROR);
 if ($mode === 'account') {
@@ -101,7 +110,9 @@ if ($mode === 'account') {
   for ($attempt=0;$attempt<4;$attempt++) { machineWork(); if ((int)Order::where('trade_no',$trade)->value('status')===Order::STATUS_COMPLETED) break; }
   machineWork();
   $replay = machineRequest('orders',['offer_id'=>$row['offer_id']],$bearer,$key,[201]);
-  if (($replay['data']['trade_no']??null)!==$trade || (int)Order::where('trade_no',$trade)->value('status')!==Order::STATUS_COMPLETED) throw new RuntimeException('NATIVE_MACHINE_REAL_FULFILLMENT_REQUIRED');
+  $orderId = Order::where('trade_no',$trade)->value('id');
+  if (($replay['data']['trade_no']??null)!==$trade || (int)Order::where('trade_no',$trade)->value('status')!==Order::STATUS_COMPLETED
+   || DB::table('tx_native_free_checkout')->where('order_id',$orderId)->value('status')!=='completed') throw new RuntimeException('NATIVE_MACHINE_REAL_FULFILLMENT_REQUIRED');
   $user = User::where('email',$email)->firstOrFail();
   $subscription = DB::table('tx_subscription_slot')->where('user_id',$user->id)->value('subscription_id');
   $subject = DB::table('tx_access_subject')->where('subscription_id',$subscription)->where('credential_profile_id',$row['protocol'].'-uuid/v1')->where('status','active')->first();

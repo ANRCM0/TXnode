@@ -41,21 +41,31 @@ through `Authorization`, together with `UsageV2`; no authority is mocked.
 | Original traffic batch and SQL uniqueness | Exactly one `tx_usage_batch` row for node/source epoch/batch ID, matching payload digest, canonical payload and original period IDs; real worker settlement must reach `settled` |
 | Config update while all REST config/users reads are held | Existing real Workerman WS-only assertion remains required; signatures and REST barriers are not bypassed |
 
-The pinned Core still lacks the native runtime inventory entries for
-`ws-server`, GET/PUT/PATCH `network-nodes` and POST machine token rotation.
-Preflight continues to fail before any database or process work. No Core source,
-pin, runtime admission rule or gate success criterion is changed by this fixture.
+The pinned Core still lacks command admission for `ws-server`. The former four
+raw admin HTTP paths are replaced by the existing canonical Core browser
+operations: `network.nodes.configuration.get`, `.configuration.replace`, `.patch`,
+`network.machines.token.rotate` and `.credentials.get`. Each uses the original
+admin Bearer, same-origin HTTPS, `X-Core-Admin-Path`, an explicit current actor
+grant and the compiled schema. Writes use UUID idempotency keys; full replacement
+retains the current expected revision. Rotation receipts contain only `ok`;
+credentials are read separately and rotation replay must not rotate twice.
+Preflight checks command and HTTP inventory plus the actual compiled operation,
+owner binding, permission, idempotency mode and browser surface. It records their
+Git blobs and each required contract. Missing admission still fails before any
+database or process work. No Core source, pin or runtime admission rule is changed
+by this fixture.
 
-Three Node-owned source gaps also remain pending runtime acceptance. Native signed
-WS refresh currently polls config/users REST, conflicting with the preserved
-all-REST-held WS-only configuration requirement. Native usage currently starts
-the kernel before its asynchronous first replay, conflicting with the preserved
-receipt-before-listener requirement. These assertions intentionally remain
-strict and can fail after the external Core contract is repaired; this fixture
-does not establish that these production gaps are fixed. Native authorization
-refresh also drains/stops the kernel and recreates its meter on every changed
-signed revision; the preserved sibling established-stream continuity requirement
-therefore remains unaccepted across that refresh.
+Node now has source implementations and regressions for recovery receipts before
+listener admission, safe equivalent native renewal, and a narrow WS-only port
+update path preserving current signed authority. The full gate retains the strict
+original assertions; these implementations still need current-candidate Actions
+acceptance. Local syntax or compile checks do not establish their behavior.
+
+The fixture also pins `CORE_RELEASE_ID` to the exact Core revision and inspects
+`InstallationAuthority.runtimeReport()` after actual activation under worker epoch
+2. The approved module composition comes from the real activation receipt, without
+replacing Core module readiness. Free checkout requires the durable owner row to
+be `completed`, in addition to order completion and idempotent replay.
 
 ## Intended Coverage (Not Yet Accepted)
 
@@ -111,6 +121,12 @@ failures instead contain fixed contract gap codes and public route/command
 names; `compatibility-preflight.json` explicitly records `runtime_verified=false`.
 Keep fixture tokens, private keys, `fixture.json`, stage acknowledgement files,
 spools and process logs private; they are not public CI artifacts.
+
+Run the static contract regression suite in Actions before the live runner:
+
+```sh
+python3 -m unittest discover -s scripts/tests/node-native-machine -p 'test_preflight.py' -v
+```
 
 The runner requires the exact `TestNativeCoreMachineLive` test to pass and
 rejects a skipped or missing test. Local static syntax checking and Linux
