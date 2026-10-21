@@ -77,11 +77,14 @@ if compatibility['gaps']:
 
 active_stage = 'setup'
 native_activated = False
+command_diagnostics = {}
 
 def failure_summary(category):
     # Private logs can contain fixture credentials. Publish only fixed labels,
     # source line numbers, and process status, never log text or exception text.
     diagnostics = {'category': category, 'assertions': [], 'signals': []}
+    if command_diagnostics:
+        diagnostics['command'] = dict(command_diagnostics)
     log = evidence / 'node-live.log'
     if log.is_file():
         text = log.read_text(errors='replace')
@@ -120,11 +123,37 @@ def failure_summary(category):
     print(json.dumps(result, sort_keys=True), flush=True)
 
 def command(name,args,cwd,timeout=180):
+    global active_stage
+    active_stage=name
     path=evidence/(name+'.log')
     with path.open('xb')as out:
         os.chmod(path,0o600);result=subprocess.run(args,cwd=cwd,env=env,stdout=out,stderr=subprocess.STDOUT,timeout=timeout)
-    if result.returncode:raise RuntimeError('NATIVE_MACHINE_'+name.upper()+'_FAILED')
-    return path.read_text()
+    text=path.read_text()
+    command_diagnostics.clear()
+    command_diagnostics.update(name=name,exit_code=result.returncode)
+    for line in text.splitlines():
+        if not line.startswith('NATIVE_MACHINE_FIXTURE_FAILURE '):continue
+        try:failure=json.loads(line.split(' ',1)[1])
+        except (ValueError,TypeError):continue
+        if (isinstance(failure,dict) and set(failure)=={'code','kind','stage'}
+                and failure.get('kind') in {'database','json','fixture'}
+                and isinstance(failure.get('code'),str)
+                and re.fullmatch('[A-Z][A-Z0-9_]{0,180}',failure['code'])
+                and isinstance(failure.get('stage'),str)
+                and re.fullmatch('(?:bootstrap|trust|seed|account|work|state|unknown|account_(?:vless|vmess)_(?:register|purchase|checkout|work|subject))',failure['stage'])):
+            command_diagnostics['fixture']=failure
+    if result.returncode or 'fixture' in command_diagnostics:raise RuntimeError('NATIVE_MACHINE_'+name.upper()+'_FAILED')
+    return text
+
+def command_json(name,args,cwd):
+    text=command(name,args,cwd)
+    try:
+        value=json.loads(text)
+        if not isinstance(value,dict):raise ValueError('object required')
+        return value
+    except (ValueError,TypeError):
+        command_diagnostics['failure_code']='NATIVE_MACHINE_COMMAND_INVALID_JSON'
+        raise RuntimeError('NATIVE_MACHINE_COMMAND_INVALID_JSON') from None
 
 def freeport():
     with socket.socket()as connection:connection.bind(('127.0.0.1',0));return connection.getsockname()[1]
@@ -139,7 +168,7 @@ command('migrate',[php,'artisan','migrate','--force','--no-interaction'],api)
 command('build',['go','test','-c','-race','-o',str(evidence/'native-machine-test'),'./internal/machine'],node,600)
 env['CORE_INSTALLATION_MODE']='native'
 provider_args=prepare_native(evidence,node,env,command,provider_port,render_port)
-trust=json.loads(command('trust',[php,str(scripts/'fixture.php'),'trust'],api))
+trust=command_json('trust',[php,str(scripts/'fixture.php'),'trust'],api)
 endpoint='https://127.0.0.1:'+str(tls_port)
 env.update(TXBOARD_NATIVE_MACHINE_DIR=str(evidence),TXBOARD_NATIVE_MACHINE_URL=endpoint,
            SSL_CERT_FILE=str(evidence/'ca.pem'),APP_URL=endpoint,
@@ -171,7 +200,7 @@ def barrier(stage,action):
     artifact(stage+'.ack.json',result or {'ok':True})
     return incoming
 
-def state(stage):return json.loads(command(stage+'-state',[php,str(scripts/'fixture.php'),'state'],api))
+def state(stage):return command_json(stage+'-state',[php,str(scripts/'fixture.php'),'state'],api)
 
 def admin_operation(operation,fields,key=None):
     headers={'Authorization':bearer,'Origin':endpoint,'X-Core-Admin-Path':'native_machine_admin'}
@@ -193,7 +222,7 @@ try:
         except OSError:pass
         if time.monotonic()>deadline:raise RuntimeError('NATIVE_MACHINE_PROVIDER_READY_TIMEOUT')
         time.sleep(.1)
-    fixture=json.loads(command('seed',[php,str(scripts/'fixture.php'),'seed'],api))
+    fixture=command_json('seed',[php,str(scripts/'fixture.php'),'seed'],api)
     if fixture.get('activation')!={'phase':'open','authority_epoch':'2'}:raise RuntimeError('NATIVE_MACHINE_REAL_ACTIVATION_REQUIRED')
     runtime=fixture.get('runtime',{})
     if (runtime.get('ready') is not True or runtime.get('authority_epoch')!='2'
@@ -216,7 +245,7 @@ try:
         except (OSError,urllib.error.URLError,ValueError):pass
         if time.monotonic()>deadline:raise RuntimeError('NATIVE_MACHINE_CORE_READY_TIMEOUT')
         time.sleep(.1)
-    fixture=json.loads(command('account',[php,str(scripts/'fixture.php'),'account'],api))
+    fixture=command_json('account',[php,str(scripts/'fixture.php'),'account'],api)
     fixture=render_credentials(evidence,core,env,fixture,command)
     # Replace the private seed metadata only after real Provider-issued material
     # is recipient-rendered; public artifacts never include credentials.
