@@ -159,7 +159,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	o.runCancel = cancel
 	o.terminal = make(chan error, 1)
 	o.mu.Unlock()
-	nodesResp, err := o.client.GetMachineNodes()
+	nodesResp, err := machineNodesContext(ctx, o.client)
 	if err != nil {
 		return fmt.Errorf("initial node discovery: %w", err)
 	}
@@ -217,7 +217,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			o.tryStartWS(ctx)
 
 		case <-statusTicker.C:
-			o.reportMachineStatus()
+			o.reportMachineStatusContext(ctx)
 		}
 	}
 }
@@ -261,7 +261,7 @@ func (o *Orchestrator) startNode(ctx context.Context, mn machineNode) {
 	// Pre-fetch node config to detect transport-based kernel requirements.
 	// If the transport (e.g. xhttp) is incompatible with the configured kernel
 	// (e.g. singbox), auto-switch to the required kernel for this node.
-	cfgSnapshot, prefetchErr := perNodeClient.GetConfig()
+	cfgSnapshot, prefetchErr := machineConfigContext(nodeCtx, perNodeClient)
 	if _, ok := controlerror.AsAuthorityDenial(prefetchErr); ok {
 		o.signalAuthorityDenial(prefetchErr)
 		cancel()
@@ -460,7 +460,7 @@ func (o *Orchestrator) stopAll() error {
 func (o *Orchestrator) rediscover(ctx context.Context) {
 	o.rediscoverMu.Lock()
 	defer o.rediscoverMu.Unlock()
-	nodesResp, err := o.client.GetMachineNodes()
+	nodesResp, err := machineNodesContext(ctx, o.client)
 	if err != nil {
 		o.signalAuthorityDenial(err)
 		nlog.Core().Warn("machine node discovery failed", "error", err)
@@ -516,6 +516,10 @@ func (o *Orchestrator) rediscover(ctx context.Context) {
 // ─── Machine status reporting ────────────────────────────────────────────
 
 func (o *Orchestrator) reportMachineStatus() {
+	o.reportMachineStatusContext(context.Background())
+}
+
+func (o *Orchestrator) reportMachineStatusContext(ctx context.Context) {
 	s := monitor.Collect()
 	runtimeStatus := &machineRuntimeStatus{
 		Version:    buildinfo.Version,
@@ -539,7 +543,13 @@ func (o *Orchestrator) reportMachineStatus() {
 		}
 	}
 
-	if err := o.client.ReportMachineStatus(
+	send := o.client.ReportMachineStatus
+	if native, ok := o.client.(machineContextControlPlane); ok {
+		send = func(cpu float64, mem, swap, disk [2]uint64, netIn, netOut float64, status *machineRuntimeStatus) error {
+			return native.ReportMachineStatusContext(ctx, cpu, mem, swap, disk, netIn, netOut, status)
+		}
+	}
+	if err := send(
 		s.CPU,
 		[2]uint64{s.MemTotal, s.MemUsed},
 		[2]uint64{s.SwapTotal, s.SwapUsed},
@@ -563,7 +573,7 @@ func (o *Orchestrator) tryStartWS(ctx context.Context) {
 	if ctx.Err() != nil || o.currentWS() != nil {
 		return
 	}
-	hs, err := o.client.Handshake()
+	hs, err := machineHandshakeContext(ctx, o.client)
 	if err != nil {
 		o.signalAuthorityDenial(err)
 		nlog.Core().Warn("machine ws handshake failed, REST only", "error", err)

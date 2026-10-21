@@ -5,9 +5,9 @@
 # vX.Y.Z-rc.N (also beta / preview) => preview + exact prerelease tag
 set -euo pipefail
 
-image="${TXBOARD_IMAGE_REPO:-ghcr.io/anrcm0/txboard-node}"
-# Aliases are opt-in for the Core package transition; Node/Gateway supply only
-# their own repository. Normalize GitHub owners before constructing OCI tags.
+image="${TXBOARD_IMAGE_REPO:-ghcr.io/anrcm0/txnode}"
+# Keep explicit overrides compatible with callers of the extracted helper.
+# The Node workflow supplies only its own repository; aliases remain opt-in.
 aliases="${TXBOARD_IMAGE_ALIASES:-}"
 read -r -a images <<< "${image,,} ${aliases,,}"
 for repository in "${images[@]}"; do

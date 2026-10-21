@@ -4,16 +4,38 @@
 静态检查通过、历史 CI 通过均不能证明当前提交已经通过功能验收；功能、race、网络和
 互操作验证应在 GitHub Actions 对应提交运行，并记录实际 SHA、运行链接及结果。
 
+当前运行时候选 `e5e98291ba59c55b514b54793c6d46edcc461be4` 的 Actions
+`39538582760` 已通过 Go/source guards、runtime stability、严格 quick/full、
+七项故障、Core C2、镜像冒烟及完整 Machine。取消回归包含实际阻塞 Core/Provider、
+Machine owner 请求、升级后 WS ready 等待和父 context 活跃时的 Service 自身租约退出。
+完整 Machine 的原 10 秒 join、旧 token 拒绝、新 token 恢复与六批次 SQL 唯一 settled
+行核对通过，artifact `12318529666`。持续负载 1808.52358869 秒、37 次循环、四档
+会话达标且错误全零。正式 A/B 仅 119/120 measured：候选 60/60、旧基线 59/60，
+11 项比较达标，旧基线 events/download 一份账量不完整，最终 S3 仍为 false。
+
+历史运行时候选 `7c9cd91e8ca4b0bb9ecfa571872c83d384480bee` 的 Actions
+`39535513954` 已通过 Go/race、runtime stability、严格 quick/full 和七项故障。
+其同 SHA 的 Actions `39534639986` 已通过完整真实 Machine、Core C2 与镜像冒烟。
+后续完整运行 `39535513954` 的 Machine 在 token 轮换后的 10 秒终止等待失败；
+该失败与前一轮通过一并记录，不能将 Machine 认定为稳定通过。
+本表中的包级及 Service 测试均已纳入当前 `e5e98291` 的 Go/race；
+它们各自的断言边界继续有效，历史 `7c9cd91e` 不接受后加的取消测试。
+正式 S3、合并与注册表发布分别记录在 `OUTSTANDING-WORK.zh.md` 和
+`RELEASE-BLOCKERS.zh.md`，不能由测试源码或单一 job 的通过推导。
+
+历史候选 `235ea2f` 的 Actions `39499950483` 曾通过功能和持续负载，但正式 A/B
+与完整 Machine 未通过，已随 PR #3 合并。该历史结果不作为当前候选的验收证据。
+
 ## 已有测试源码与断言边界
 
 | 范围 | 测试入口 | 已编写的断言 | 不能据此推出 |
 |---|---|---|---|
 | Service 的 usage_v2 生命周期 | `internal/service/native_usage_linux_test.go` 的 `TestNativeBillingRefreshResetAndEmptyRevocationPreserveOriginalSessions`、`TestNativeBillingRotationAndShutdownSealPriorCredentialEvidence`、`TestNativeCutoffClosesAffectedAdmissionAndHigherRevisionRecoversWithoutReposting` | 刷新、轮换、撤销、关闭和 cutoff 保留原授权会话证据 | 该文件使用 `nativeBillingKernel` / `stubNativeMeter`；不是完整真实内核 I/O 链路 |
-| 原生启动回执门禁 | `internal/service/native_startup_recovery_linux_test.go` | 真实 kernel 在固定旧 Session/Submission 得到匹配 persisted receipt 后才监听；跨页、lost ACK 不重发、未封口完成意图、cutoff、取消/超时、错误回执及 257 条 pending 拒绝；有效已 ACK 历史不占网络预算 | `454607f4` Go/race 通过，新运行时仍须新提交 Actions；回执不等于结算。spool 完整枚举仍不具备绝对磁盘时间/内存上限 |
-| 原租约 WS 端口更新 | `internal/service/native_config_reload_linux_test.go` | 真实认证 WS 帧及 bounded VLESS；REST 503 下无拉取地变更端口，保留 collector/meter/session/digest/deadline、兄弟流；绑定失败保留旧监听、过期/撤权拒绝、旧 full poll 不回滚 | `454607f4` Go/race 通过，新运行时仍须新提交 Actions；只覆盖端口变化，不证明普通授权续期连接连续或完整 Machine 已通过 |
-| 普通授权续期的 Service owner | `internal/service/native_usage_renewal_linux_test.go` | 真实 bounded VLESS 与 VMess AES128GCM/TCP 同流三次续期、稳定 hook/四个原 grant 唯一批次、非重叠区间和每 grant 双向精确字节；当前 cutoff 不恢复 paused owner；unsupported 保持原重建；凭据/权限/period/terms/revocation/Provider 身份及缩短租约不进入保活续期 | 新增源码待新提交 Actions；VMess 使用同仓库 outbound 客户端，不代替第三方互通；不是 TLS/REALITY/全部协议或完整 Machine 连续性证明 |
-| VMess 客户端与反向互通 | `internal/dataplane/outbound/vmess_test.go`、`internal/kernel/txnode/interop_test.go` 的 `TestInteropXrayVMessNativeOutbound` | 本仓库 TCP 两端四种 cipher 及三种 framing；固定 Xray inbound 的 AES-GCM/ChaCha20/none，同流多次及跨帧请求 | `c2823dd` 首次 echo 暴露客户端认证和 framing 错配；修复及新门禁待新提交 Actions，不能据源码检查关闭 Service VMess 验收 |
-| 独立 VMess wire 与并发 | 两包 `vmess_length_test.go` | AES/ChaCha 的 wire100 与 raw AEAD plaintext BE16(84) 独立对应，短块/非法 wire 拒绝；共享 Proxy 16 并发真实 TCP | `f9d74f2` PR quick 反向通过，完整 Go/race、矩阵及续期须最终提交；同仓库 none/padded、zero 不等于固定 Xray 能力 |
+| 原生启动回执门禁 | `internal/service/native_startup_recovery_linux_test.go` | 真实 kernel 在固定旧 Session/Submission 得到匹配 persisted receipt 后才监听；跨页、lost ACK 不重发、未封口完成意图、cutoff、取消/超时、错误回执及 257 条 pending 拒绝；有效已 ACK 历史不占网络预算 | 当前候选 Go/race 已通过；回执不等于结算。spool 完整枚举仍不具备绝对磁盘时间/内存上限 |
+| 原租约 WS 端口更新 | `internal/service/native_config_reload_linux_test.go` | 真实认证 WS 帧及 bounded VLESS；REST 503 下无拉取地变更端口，保留 collector/meter/session/digest/deadline、兄弟流；绑定失败保留旧监听、过期/撤权拒绝、旧 full poll 不回滚 | 当前候选 Go/race 已通过；只覆盖端口变化，不证明所有承载续期连续或完整 Machine 稳定通过 |
+| 普通授权续期的 Service owner | `internal/service/native_usage_renewal_linux_test.go` | 真实 bounded VLESS 与 VMess AES128GCM/TCP 同流三次续期、稳定 hook/四个原 grant 唯一批次、非重叠区间和每 grant 双向精确字节；当前 cutoff 不恢复 paused owner；unsupported 保持原重建；凭据/权限/period/terms/revocation/Provider 身份及缩短租约不进入保活续期 | 当前候选 Go/race 已通过；VMess 使用同仓库 outbound 客户端，不代替第三方互通；不是 TLS/REALITY/全部协议或完整 Machine 连续性证明 |
+| VMess 客户端与反向互通 | `internal/dataplane/outbound/vmess_test.go`、`internal/kernel/txnode/interop_test.go` 的 `TestInteropXrayVMessNativeOutbound` | 本仓库 TCP 两端四种 cipher 及三种 framing；固定 Xray inbound 的 AES-GCM/ChaCha20/none，同流多次及跨帧请求 | 当前候选 Go/race 和严格 full 已通过；同仓 framing 的额外组合不能推导为固定 Xray 兼容能力 |
+| 独立 VMess wire 与并发 | 两包 `vmess_length_test.go` | AES/ChaCha 的 wire100 与 raw AEAD plaintext BE16(84) 独立对应，短块/非法 wire 拒绝；共享 Proxy 16 并发真实 TCP | 当前候选 Go/race、严格矩阵及续期回归通过；同仓库 none/padded、zero 不等于固定 Xray 能力 |
 | 事件 consumer 唤醒 | `internal/usagebucket/consumer_wakeup_test.go` | 无 worker/store、持 coordinator 锁时封桶仍返回；空闲或已有通知均保留原字节及未 ACK 状态 | 消除封桶后等待定时扫描，不增加容量或忽略 CAPACITY_REACHED；不是所有旧 A/B 失败的因果证明 |
 | 续期 meter 与严格封口 | `internal/kernel/txnode/native_renewal_linux_test.go`、`internal/usageinterval/native_strict_retire_linux_test.go` | Begin/Complete 在原 meter/collector 完成；foreign/duplicate token 拒绝、停止不可恢复、Commit 后仍暂停、整秒边界、不同 store/用户拒绝、未静止封口拒绝 | OS fsync 不可取消；包级断言不替代 Service 到协议的真实链路 |
 | 协议安全读取暂停 | `internal/dataplane/core/read_pause_test.go`、`internal/dataplane/proto/vless/read_pause_test.go`、`internal/dataplane/proto/vmess/read_pause_test.go` | 裸 TCP 暂停/恢复及原 deadline；未知承载拒绝能力；VMess 完整帧起点保留 nonce/XOF，部分长度/body/padding 不跨窗口重试；VLESS/VMess 部分写保留实际计数及错误 | 不支持以 TLS 读取超时模拟安全暂停；不是完整 Service VMess 或所有加密承载续期验收 |
@@ -29,7 +51,11 @@
 | 原生 packet 周期 | 同文件的 `TestNativePacketPeriodKeepsUnsampledOldTailAndFreshBytesSeparate` | 真实 UDP 原周期 13 已采样 + 7 未采样尾部，切换后 57 字节；旧控制连接关闭，旧20/新57分段 | 不是任意 packet 承载协议的互通证明 |
 | 原生 I/O 错误边界 | `internal/dataplane/core/download_accounting_test.go`、`udp_accounting_test.go`、`chunk_hook_test.go` | 实际 relay copy 对短写、正字节伴错误、零成功写、取消限速及 packet 关闭完成 I/O 的计数 | 不恢复已移除内核的内部 wrapper；功能结果以候选 CI 为准 |
 | Mieru 官方 UDP 网络损伤 | `internal/kernel/txnode/mieru_packet_fault_linux_test.go` 的 `TestInteropMieruOfficialPacketFaults` | 有界代理在双向真实注入丢包、乱序和重复；core 与 NativeMeter 物理计数精确；撤权重放不复活、Reload/监听回滚恢复 | 本地物理观察不是 usage_v2 结算或持久化恢复；真实 UDP socket 绑定失败不承诺原 underlay 无中断 |
-| 固定 Core machine 契约 | `internal/machine/native_core_machine_live_test.go`、`scripts/tests/node-native-machine/`，CI `core-machine` | 已编写真实 Provider mTLS、native 安装/激活、账户/购买/履约及签名授权准备，生产 Orchestrator、双 Node、共享 WS/503/后继心跳、设备事实、隔离、轮换与原使用量重放断言 | 当前固定 Core native admission 缺五项必要能力，正向链路尚未执行；Node 普通续期仅有窄路径源码和待执行回归，详见 `CORE-MACHINE-COMPATIBILITY.zh.md`。不宣称 native installation machine 或数据库计费已验证 |
+| Machine mailbox 配置表示 | `internal/controlplane/mailbox_test.go`、`internal/service/native_config_reload_linux_test.go` | nil/空/非空配置在 Seed、Apply/Drain 后保留 JSON 表示；真实 Machine mailbox 交付端口更新，保持原签名 collector、兄弟流和 REST 阻断 | 当前候选 Go/race 已通过；未放宽仅端口变化的配置等价条件 |
+| relay 取消与 HTTP 生命周期 | `internal/dataplane/core/pipe_lifecycle_test.go`、严格 Naive h2 互通 | channel 控制 deadline watcher，copyPipe 返回前等待取消清理，禁止 handler 退役后的 deadline/close；第三方完整 Naive 链 | 当前候选 Go/race 和严格 full 已通过；不推导所有 net.Conn 实现的 deadline 都有有界耗时 |
+| 日志 canonical envelope | `internal/usagebucket/store_envelope_test.go` | BUCKET、全部控制类型、null 和转义字符的 envelope 与原 json.Marshal 逐字节相同，输入不变且 canonical decoder/digest 通过 | 当前候选 Go/race 已通过；编码优化不证明固定容量下全部事件性能样本无损 |
+| native 请求取消与 worker join | `internal/txboard/request_context_test.go`、`socket_test.go`、`internal/machine/context_test.go`、`internal/service/authorization_cancellation_linux_test.go` | 阻塞 Core/Provider 实际请求服从父 context、Service 自身租约终止取消刷新后 join、Machine 五种 owner 请求取消、升级后 WS ready 等待取消；原完成拒绝类型保留 | `e5e98291` Go/source guards 和完整 Machine 已通过；不能解释全部旧超时或证明磁盘同步可取消 |
+| 固定 Core machine 契约 | `internal/machine/native_core_machine_live_test.go`、`scripts/tests/node-native-machine/`，CI `core-machine` | 真实 Provider mTLS、native 安装/激活、账户/购买/履约、生产 Orchestrator、双 Node、共享 WS/503/后继心跳、设备事实、隔离、轮换与原使用量重放 | Node `e5e98291` 与 Core `5536410` 已在 Actions `39538582760` 完整通过，详见 `CORE-MACHINE-COMPATIBILITY.zh.md`；不证明独立完整财务对账、生产 PKI 或物理主机部署 |
 
 ## SIGKILL 夹具约束
 
@@ -47,12 +73,12 @@
 
 | 挂起文件 | 原生恢复验收应覆盖 |
 |---|---|
-| `docs/removed-tests/usage_event_store_adapter_test.go.txt` | 原生 Service 测试已编写真实 TCP/UDP、关闭、持久化恢复、失败隔离和进程归属断言；待候选 Actions |
+| `docs/removed-tests/usage_event_store_adapter_test.go.txt` | 原生 Service 测试覆盖真实 TCP/UDP、关闭、持久化恢复、失败隔离和进程归属，已进入 `e5e98291` Go/race；只接受现行明确断言 |
 | `docs/removed-tests/usage_observer_adapter_test.go.txt` | 原生 Service 测试已编写真实 I/O、身份、关闭、错误隔离、禁用和恢复断言；用户 delta/Reload 失败的细分边界仍由各自生命周期测试承担 |
 | `docs/removed-tests/store_io_test.go.txt` | 原生 core relay 测试覆盖短写/正字节伴错/失败写和取消；使用当前物理方向口径，不恢复旧 wrapper |
-| `docs/removed-tests/traffic_period_packet_test.go.txt` | 已编写真实 SOCKS UDP 周期切换、原周期尾部和精确分段断言；待候选 Actions |
-| `docs/removed-tests/native_core_machine_live_test.go.txt` | 已编写固定 Core、生产 Orchestrator、真实原生 VLESS/VMess 和 machine 契约的独立入口；固定基线的 installation/Provider/Machine 合约冲突仍阻塞执行，不能以静态编译或单独 Core C2 通过关闭缺口 |
+| `docs/removed-tests/traffic_period_packet_test.go.txt` | 真实 SOCKS UDP 周期切换、原周期尾部和精确分段断言已进入 `e5e98291` Go/race；不外推其他协议的周期行为 |
+| `docs/removed-tests/native_core_machine_live_test.go.txt` | 现行独立入口已在 Node `e5e98291` / Core `5536410` 的真实 Machine gate 通过；仅覆盖现行明确断言，不恢复旧内核 wrapper，也不推导独立完整财务对账 |
 
 恢复时应逐项写出实际 owner 调用链和精确断言，再将替代测试纳入 Actions。只把旧文件
 改成可编译、改用 mock，或引用现有单层测试，都不足以关闭这些缺口。
-本轮新增测试的实际功能结果仍待对应提交 Actions；不按文件数量宣告旧套件全部恢复。
+当前候选实际结果以开头记录的 SHA 和各 job 为准；不按文件数量宣告旧套件全部恢复。

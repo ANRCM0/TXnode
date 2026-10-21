@@ -103,9 +103,9 @@ func copyPipe(ctx context.Context, a, b net.Conn, upLim, downLim []waiter, up, d
 	}()
 
 	done := make(chan struct{})
-	var once sync.Once
-	stop := func() { once.Do(func() { close(done) }) }
+	watcherExited := make(chan struct{})
 	go func() {
+		defer close(watcherExited)
 		select {
 		case <-ctx.Done():
 			// Unblock both copy loops.
@@ -117,7 +117,10 @@ func copyPipe(ctx context.Context, a, b net.Conn, upLim, downLim []waiter, up, d
 		}
 	}()
 	wg.Wait()
-	stop()
+	close(done)
+	// HTTP response streams retire when their handler returns. No deadline or
+	// close operation may outlive this relay, including cancellation cleanup.
+	<-watcherExited
 	close(errCh)
 
 	var first error

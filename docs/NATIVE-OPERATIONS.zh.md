@@ -12,7 +12,8 @@
 面板的结构化 routes/outbounds 继续进入现有 `model.NodeSpec`、renderer、
 `kernel/txnode` router 和 `core.Server` 拨号链。它们的支持范围以已有 renderer 和
 路由校验为准；不增加将任意 sing-box/Xray 原生配置透传到 Node 的入口。本轮不改变
-renderer 源码、兼容指纹或固定 Core revision。
+renderer 源码和兼容指纹。固定 Core revision 以 `compatibility/core.v1.json` 为准，
+采纳记录及实际 Machine 验收见 `CORE-MACHINE-COMPATIBILITY.zh.md`。
 
 Mieru `traffic_pattern` 的受支持字段、严格拒绝项和官方客户端夹具见
 `docs/MIERU-TRANSPORT.zh.md`。
@@ -53,6 +54,24 @@ period、批次及 digest 不重标，成功续期不重启 kernel。
 新增 Service VLESS/VMess TCP、meter、collector 和协议边界回归须取得新提交的 Actions 结果，
 不能据此宣称完整 Machine 或所有传输已支持连接连续性。
 
+## 请求取消与终止归属
+
+Service 使用所属请求 context，沿 `Initial/Poll/RefreshAuthorization/Discover ->
+TXBoardControlPlane -> Client.*Context -> requestContext -> NewRequestWithContext`
+传到 Core HTTP，并将同一 context 交给 Provider `Resolve`。Service 自身因租约或
+权威终止而返回时，先取消请求 scope 再等待授权 worker；原生尾部清理继续使用原有
+独立有限 context，原授权期、批次、回执与同步边界不变。
+
+Machine 的 discovery、per-node prefetch、handshake 和 status 沿 native Context
+扩展传递所属 context；Xboard/旧 adapter 的接口保持兼容。原无 context 方法保留为
+委托 Background 的兼容入口，生产 TXBoard owner 使用 Context 方法。共享 WS 在
+HTTP 升级后继续由同一 context 关闭私有连接，覆盖等待 session.ready 及阻塞写入。
+取消本身不构造 AuthorityDenial；完成的原生 401/404 仍按原内容、身份及 scope 规则识别。
+
+这些取消传播修复已由 `e5e98291` 的 Actions `39538582760` 通过 Go/source guards
+及完整 Machine 验证；不能借此把 `7c9cd91e` 的 Machine 终止超时追认为已通过，
+也不承诺 OS fsync 能取消。
+
 ## 受限诊断
 
 在本地配置显式设置：
@@ -75,6 +94,18 @@ Service 的既有 metrics 输出增加 `native_dataplane`。默认关闭该附�
 ## 交付与回滚
 
 源码、静态检查、候选 Actions、合并、镜像发布和 Core 采用分别记录。
-当前 GHCR 授权问题及已有失败证据见 `docs/RELEASE-BLOCKERS.zh.md`。
+独立镜像 `ghcr.io/anrcm0/txnode` 的发布结果与历史包失败证据见
+`docs/RELEASE-BLOCKERS.zh.md`。
 部署前记录不可变镜像摘要、Node/Core SHA 和配置差异；未验证旧版读取新持久化状态前，
 不得用旧版直接接管同一状态目录。保留原始 usage journal、spool 和回执证据。
+
+受控试运行由有实际部署权限的 owner 在选定环境执行，使用已验收的精确组合：
+
+1. 记录当前及候选的 index/目标架构摘要、Node/Core SHA、renderer 指纹、配置和状态目录归属。先核对发布 artifact 中实际执行的两个架构与离线 capabilities，不把源码分支名或 `dev` 浮动标签当作部署锁。
+2. 选择单个受控 Machine/Node，沿现有 Core 授权与 Provider mTLS 安装配置；同一状态目录保持单一进程 owner。先验证原 pending 批次得到匹配持久化回执后才开放新监听，不绕过启动恢复门禁。
+3. 在有限流量下检查真实 VLESS/VMess 及所用 packet/mux 组合、双向字节、授权到期、凭据撤销、WS 端口更新和报告恢复。只能记录实际选择的协议/承载，不将回环矩阵扩大为生产全协议证明。
+4. 按原有资源及业务预算检查断连、报告积压、FirstGap、未知尾部和拒绝原因。出现证据缺口或授权停止时保留原状态与回执，由 owner 处理；不清空 journal/spool 或换用无计量模式继续接受流量。
+5. 回滚先停止候选的准入和进程，保存最后回执、待处理批次及状态版本，再按已验证的兼容路径恢复记录的镜像和配置。若旧版读取新状态尚未验证，保留新状态，使用能读取它的已验证版本恢复；不让旧进程覆盖新证据。
+
+仓库 Actions 和镜像验证不代表这套试运行已经发生。实际环境、时间、流量范围、
+旧/新摘要及回滚结果由部署 owner 另行记账；本轮不自动创建正式版本标签或生产部署。

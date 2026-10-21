@@ -305,17 +305,31 @@ def build_runtime_images(output, report):
             target.unlink()
 
 
-def sample(binary, state, mode, workload, args, origin, cpu_profile=None):
-    state.mkdir(parents=True)
-    log = (state / "server.log").open("w")
+def sample_environment(nonce, cpu_profile=None, persistence_diagnostics=False, persistence_diagnostics_only=False):
     environment = os.environ.copy()
-    nonce = secrets.token_hex(32)
     environment["TXNODE_NATIVE_AB_CPU_NONCE"] = nonce
     environment.pop("TXNODE_NATIVE_AB_CPU_PROFILE", None)
+    environment.pop("TXNODE_NATIVE_AB_EVENT_DIAGNOSTICS", None)
+    if persistence_diagnostics_only and cpu_profile is not None:
+        raise ValueError("paired persistence diagnostics forbid CPU profiles")
     if cpu_profile is not None:
         environment["TXNODE_NATIVE_AB_CPU_PROFILE"] = str(cpu_profile)
+    if persistence_diagnostics:
+        if cpu_profile is None and not persistence_diagnostics_only:
+            raise ValueError("persistence observer requires an explicit diagnostic mode")
+        environment["TXNODE_NATIVE_AB_EVENT_DIAGNOSTICS"] = "1"
+    return environment
+
+
+def sample(binary, state, mode, workload, args, origin, cpu_profile=None, persistence_diagnostics=False,
+           persistence_diagnostics_only=False):
+    nonce = secrets.token_hex(32)
+    environment = sample_environment(nonce, cpu_profile, persistence_diagnostics, persistence_diagnostics_only)
+    state.mkdir(parents=True)
+    log = (state / "server.log").open("w")
     process = subprocess.Popen([str(binary), "-mode", mode, "-state", str(state)], stdout=log, stderr=log, text=True, env=environment)
-    measurements = {"mode": mode, "workload": workload, "status": "incomplete"}
+    measurements = {"mode": mode, "workload": workload, "status": "incomplete",
+                    "persistence_diagnostics": persistence_diagnostics}
     rss_samples = []
     stop = threading.Event()
     def monitor():
@@ -406,7 +420,7 @@ def sample(binary, state, mode, workload, args, origin, cpu_profile=None):
         if watcher is not None:
             watcher.join(timeout=1)
         if process.poll() is None:
-            if cpu_profile is not None:
+            if cpu_profile is not None or persistence_diagnostics_only:
                 process.send_signal(signal.SIGTERM)
                 try:
                     process.wait(timeout=15)
@@ -433,10 +447,13 @@ def diagnostics(output, report, args, origin):
             state = output / ("diagnostic-%s-%s-%s" % (mode, workload, side))
             profile = state / "cpu.pprof"
             binary = output / ("server-" + side)
+            persistence_diagnostics = args.diagnostics_only and mode == "events"
             result = {"side": side, "mode": mode, "workload": workload, "acceptance_sample": False,
-                      "profile_scope": "startup, warmup, measurement, graceful shutdown", "binary_sha256": digest(binary)}
+                      "profile_scope": "startup, warmup, measurement, graceful shutdown", "binary_sha256": digest(binary),
+                      "persistence_diagnostics": persistence_diagnostics}
             try:
-                result["sample"] = sample(binary, state, mode, workload, args, origin, cpu_profile=profile)
+                result["sample"] = sample(binary, state, mode, workload, args, origin, cpu_profile=profile,
+                                          persistence_diagnostics=persistence_diagnostics)
                 result["profile_bytes"] = profile.stat().st_size
                 result["profile_sha256"] = digest(profile)
                 top = command(["go", "tool", "pprof", "-top", "-nodecount=40", str(binary), str(profile)])
@@ -447,6 +464,98 @@ def diagnostics(output, report, args, origin):
             results.append(result)
             (state / "metadata.json").write_text(json.dumps(result, indent=2) + "\n")
             (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+
+
+def persistence_plan(groups):
+    cases = (("legacy", False), ("legacy", True), ("candidate", False), ("candidate", True))
+    return [(group + 1, side, enabled)
+            for group in range(groups)
+            for side, enabled in (cases if group % 2 == 0 else tuple(reversed(cases)))]
+
+
+def persistence_observation(state, enabled):
+    evidence = state / "bucket-after-coordinator-close.json"
+    if not evidence.exists():
+        evidence = state / "bucket-after-node-stop.json"
+    snapshot = json.loads(evidence.read_text())
+    if ("persistence_stages" in snapshot) != enabled:
+        raise ValueError("observer snapshot does not match the explicit on/off case")
+    return {"file": evidence.name, "observer_evidence_present": enabled,
+            "coordinator": snapshot["coordinator"], "store": snapshot["store"],
+            "meters": snapshot["meters"]}
+
+
+def persistence_collection_complete(report, groups):
+    expected = set(persistence_plan(groups))
+    results = report.get("persistence_samples", [])
+    observed = {(item["group"], item["side"], item["observer_enabled"]) for item in results}
+    return (report.get("schema") == "txnode-native-persistence-diagnostics/v1"
+            and report.get("status") == "persistence-diagnostics-only"
+            and report.get("accepted") is False and not report.get("samples") and not report.get("comparisons")
+            and len(results) == len(expected) and observed == expected
+            and all(item.get("acceptance_sample") is False and item.get("cpu_profile_enabled") is False
+                    and item.get("mode") == "events" and item.get("workload") == "download"
+                    and item.get("sample", {}).get("persistence_diagnostics") is item["observer_enabled"]
+                    and item.get("event_observation", {}).get("observer_evidence_present") is item["observer_enabled"]
+                    and not item.get("collection_error") for item in results))
+
+
+def persistence_pairs(results, groups):
+    pairs = []
+    by_case = {(item["group"], item["side"], item["observer_enabled"]): item for item in results}
+    for group in range(1, groups + 1):
+        for side in ("legacy", "candidate"):
+            off, on = (by_case[(group, side, enabled)] for enabled in (False, True))
+            valid = all(item["sample"]["status"] == "measured" for item in (off, on))
+            pair = {"group": group, "side": side, "observer_off_status": off["sample"]["status"],
+                    "observer_on_status": on["sample"]["status"], "paired_metrics_available": valid}
+            if valid:
+                pair["observer_on_over_off_throughput"] = on["sample"]["mib_per_second"] / off["sample"]["mib_per_second"]
+                pair["observer_on_over_off_cpu"] = on["sample"]["cpu_seconds_per_gib"] / off["sample"]["cpu_seconds_per_gib"]
+            pairs.append(pair)
+    return pairs
+
+
+def persistence_diagnostics(output, report, args, origin):
+    results = report["persistence_samples"] = []
+    for group, side, enabled in persistence_plan(args.groups):
+        label = "persistence-g%d-%s-observer-%s" % (group, side, "on" if enabled else "off")
+        state = output / label
+        measured = sample(output / ("server-" + side), state, "events", "download", args, origin,
+                          persistence_diagnostics=enabled, persistence_diagnostics_only=True)
+        result = {"group": group, "side": side, "observer_enabled": enabled, "mode": "events",
+                  "workload": "download", "acceptance_sample": False, "cpu_profile_enabled": False,
+                  "state": label, "sample": measured}
+        try:
+            if (state / "cpu.pprof").exists():
+                raise ValueError("paired persistence case unexpectedly created a CPU profile")
+            result["event_observation"] = persistence_observation(state, enabled)
+        except (OSError, ValueError, KeyError) as error:
+            result["collection_error"] = str(error)
+        results.append(result)
+        (state / "metadata.json").write_text(json.dumps(result, indent=2) + "\n")
+        (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+        print("persistence group=%d side=%s observer=%s accounting=%s" %
+              (group, side, enabled, measured["status"]), flush=True)
+    report["observer_pairs"] = persistence_pairs(results, args.groups)
+    report["status"] = "persistence-diagnostics-only"
+    report["collection_complete"] = persistence_collection_complete(report, args.groups)
+
+
+def persistence_markdown(report):
+    lines = ["# Independent persistence diagnostics", "",
+             "Candidate: `%s`; baseline: `%s`." % (report["candidate"], report["baseline"]), "",
+             "Collection complete: **%s**. Accepted: **False**. No S3 acceptance or threshold verdict." % report.get("collection_complete", False),
+             "", "Observer off/on cases use the same runner and binaries without CPU profiles; case order reverses each group.",
+             "Failures remain diagnostic observations. Hook wall timing includes scheduling and observer overhead.", "",
+             "| Group | Side | Observer | Accounting | Dropped events at snapshot | Collection error |",
+             "|---|---|---|---|---:|---|"]
+    for item in report.get("persistence_samples", []):
+        dropped = sum(meter["DroppedEvents"] for meter in item.get("event_observation", {}).get("meters", []))
+        lines.append("| %d | %s | %s | %s | %d | %s |" %
+                     (item["group"], item["side"], "on" if item["observer_enabled"] else "off",
+                      item["sample"]["status"], dropped, item.get("collection_error", "none")))
+    return "\n".join(lines) + "\n"
 
 
 def cv(values):
@@ -504,6 +613,8 @@ def run(args):
         raise ValueError("acceptance requires >=5 groups, >=10s samples, >=2s warmup and positive concurrency")
     if args.seconds + args.warmup > 60:
         raise ValueError("sample plus warmup must fit the explicit 90 second bounded authorization lease")
+    if args.persistence_diagnostics_only and (args.seconds, args.warmup, args.concurrency) != (10, 2, 4):
+        raise ValueError("paired persistence diagnostics require 10s samples, 2s warmup and concurrency 4")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     candidate = command(["git", "rev-parse", args.candidate + "^{commit}"])
@@ -523,10 +634,19 @@ def run(args):
                            "build_flags": FLAGS, "protocol": "SOCKS5 RFC1929 IPv4 loopback", "tls": "none on both sides",
                            "legacy_kernel": "sing-box", "loopback_route": "127.0.0.1/32 direct, identical structured rule on both sides",
                            "event_store_max_bytes": 1 << 30, "usage_lease_seconds": 90,
+                           "persistence_diagnostics": "separate diagnostics-only event profiles" if args.diagnostics_only else "disabled",
                            "throughput_floor": 0.95, "cpu_ceiling": 1.05, "noise_cv_ceiling": 0.10},
               "scope": "same runner SOCKS forwarding; ordinary/events/usage_v2 configured identically; local durability, no Core receipts",
               "not_measured": ["cross-region-network", "xray-legacy-kernel", "protocols-other-than-SOCKS", "internal-event-path-and-timestamp-equivalence"],
               "accepted": False, "builds": {}, "samples": [], "comparisons": [], "status": "incomplete"}
+    if args.persistence_diagnostics_only:
+        report.update(schema="txnode-native-persistence-diagnostics/v1", collection_complete=False,
+                      persistence_samples=[], observer_pairs=[],
+                      scope="independent same-runner observer off/on evidence; events/download only; no CPU profiles, S3 comparison or acceptance")
+        report["settings"]["persistence_diagnostics"] = "independent unprofiled observer off/on pairs"
+        report["settings"]["cpu_profiles"] = False
+        for threshold in ("throughput_floor", "cpu_ceiling", "noise_cv_ceiling"):
+            report["settings"].pop(threshold)
     workspace = Path(tempfile.mkdtemp(prefix="txnode-native-ab-"))
     checkouts = []
     origin = None
@@ -563,6 +683,10 @@ def run(args):
                 build["error"] = error.output
         if any(report["builds"][side]["status"] != "built" for side in ("legacy", "candidate")):
             return report
+        if args.persistence_diagnostics_only:
+            origin = Origin()
+            persistence_diagnostics(output, report, args, origin)
+            return report
         if args.diagnostics_only:
             origin = Origin()
             diagnostics(output, report, args, origin)
@@ -595,18 +719,21 @@ def run(args):
             command(["git", "worktree", "remove", "--force", str(checkout)])
         shutil.rmtree(workspace, ignore_errors=True)
         (output / "report.json").write_text(json.dumps(report, indent=2) + "\n")
-        lines = ["# Native / legacy performance", "", "Candidate: `%s`; baseline: `%s`." % (candidate, BASELINE), "", "Status: **%s**. Scoped A/B accepted: **%s**." % (report["status"], report["accepted"]), "", "| Mode | Workload | Status | Candidate / legacy throughput | Candidate / legacy CPU |", "|---|---|---|---:|---:|"]
-        lines[6:6] = ["CPU method: `%s`; schema: `%s`. /proc CLK_TCK is secondary only." % (CPU_METHOD, report["schema"]), ""]
-        for item in report["comparisons"]:
-            lines.append("| %s | %s | %s | %.4f | %.4f |" % (item["mode"], item["workload"], item["status"], item.get("throughput_candidate_over_legacy", 0), item.get("cpu_candidate_over_legacy", 0)))
-        if report.get("diagnostics"):
-            lines.extend(["", "Separate CPU profile diagnostics (excluded from acceptance samples and ratios):"])
-            for item in report["diagnostics"]:
-                lines.append("- %s/%s/%s: %s; profile bytes=%d; error=%s" % (
-                    item["side"], item["mode"], item["workload"], item.get("sample", {}).get("status", "incomplete"),
-                    item.get("profile_bytes", 0), item.get("diagnostic_error", item.get("sample", {}).get("error", "none"))))
-        lines.extend(["", "Not measured: " + ", ".join(report["not_measured"]) + ".", "", "Loopback evidence does not establish production or cross-region performance."])
-        (output / "report.md").write_text("\n".join(lines) + "\n")
+        if args.persistence_diagnostics_only:
+            (output / "report.md").write_text(persistence_markdown(report))
+        else:
+            lines = ["# Native / legacy performance", "", "Candidate: `%s`; baseline: `%s`." % (candidate, BASELINE), "", "Status: **%s**. Scoped A/B accepted: **%s**." % (report["status"], report["accepted"]), "", "| Mode | Workload | Status | Candidate / legacy throughput | Candidate / legacy CPU |", "|---|---|---|---:|---:|"]
+            lines[6:6] = ["CPU method: `%s`; schema: `%s`. /proc CLK_TCK is secondary only." % (CPU_METHOD, report["schema"]), ""]
+            for item in report["comparisons"]:
+                lines.append("| %s | %s | %s | %.4f | %.4f |" % (item["mode"], item["workload"], item["status"], item.get("throughput_candidate_over_legacy", 0), item.get("cpu_candidate_over_legacy", 0)))
+            if report.get("diagnostics"):
+                lines.extend(["", "Separate CPU profile diagnostics (excluded from acceptance samples and ratios):"])
+                for item in report["diagnostics"]:
+                    lines.append("- %s/%s/%s: %s; profile bytes=%d; error=%s" % (
+                        item["side"], item["mode"], item["workload"], item.get("sample", {}).get("status", "incomplete"),
+                        item.get("profile_bytes", 0), item.get("diagnostic_error", item.get("sample", {}).get("error", "none"))))
+            lines.extend(["", "Not measured: " + ", ".join(report["not_measured"]) + ".", "", "Loopback evidence does not establish production or cross-region performance."])
+            (output / "report.md").write_text("\n".join(lines) + "\n")
 
 
 def main():
@@ -617,9 +744,14 @@ def main():
     parser.add_argument("--seconds", type=int, default=10)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument("--concurrency", type=int, default=4)
-    parser.add_argument("--diagnostics-only", action="store_true", help="separate two-side CPU profiles; never satisfies the performance gate")
+    diagnostic_modes = parser.add_mutually_exclusive_group()
+    diagnostic_modes.add_argument("--diagnostics-only", action="store_true", help="separate two-side CPU profiles; never satisfies the performance gate")
+    diagnostic_modes.add_argument("--persistence-diagnostics-only", action="store_true",
+                                  help="independent observer off/on event pairs without CPU profiles or S3 acceptance")
     args = parser.parse_args()
     report = run(args)
+    if args.persistence_diagnostics_only:
+        return 0 if report.get("collection_complete") is True and report["accepted"] is False else 1
     if args.diagnostics_only:
         expected = {(mode, "download", side) for mode in ("ordinary", "events") for side in ("legacy", "candidate")}
         observed = {(item["mode"], item["workload"], item["side"]) for item in report.get("diagnostics", [])}

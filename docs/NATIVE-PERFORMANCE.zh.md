@@ -1,12 +1,53 @@
 # 原生持续负载与新旧性能证据
 
-日期：2026-10-21（Asia/Shanghai）。本文描述源码工具，不代表已经取得 Actions 或生产验收。
+日期：2026-10-21（Asia/Shanghai）。本文区分工具约定与具体 Actions 结果；源码实现
+本身不构成功能或生产验收。
 
 ## 入口与证据绑定
 
 工作流 `Native stability and performance evidence`（`.github/workflows/native-acceptance.yml`）支持手动选择候选 ref、每日调度及主 CI 调用。第一项 job 将 ref 解析为不可变完整 SHA；后续 job 均 checkout 该 SHA，并保留提交、源码树、Go 版本、runner 与客户端摘要。工作流本身不发布镜像或修改 Core pin。
 
 所有功能、网络与负载执行仍限于 GitHub Actions。本地仅允许源码检查、Go 静态编译、格式和 AST 检查。缺少客户端、工具编译失败、实际负载不达标与证据不完整均不能记为通过。
+
+## 已完成运行的结果
+
+历史 Node `7c9cd91e8ca4b0bb9ecfa571872c83d384480bee` 的完整 Actions
+`39535513954` 采集了 120/120 measured 正式样本，12 项比较中 11 项满足原阈值。
+唯一超限为 ordinary/long CPU 比率 `1.0518343526007607 > 1.05`；吞吐比率
+`1.0010625490445981`，该比较 CV `0.02694765224992716`。全部 12 项 CV 均低于
+0.10，不能将这次超限改称 CV 噪声不足；报告 `accepted=false`。
+
+其 240 个原始 CPU snapshot 与报告匹配，全部 120 个 CPU window 通过原 validator。
+正式 events 的 40 个停止快照均无 drop/FirstGap，10 个 events/download 全部完成。
+该正式 runner 为 EPYC 7763，不能用这一成功反推另一个 EPYC 9V45 runner 上独立
+持久化诊断的容量问题已修复。30 分钟 soak 实际 1810.692 秒、39 次生命周期循环，
+四档达到 100/250/500/1000 会话，错误为零；七项故障也通过。S3 ledger 因正式 A/B
+超限仍为 false，原始性能/soak/S3 artifacts 为 `12318462976`、`12318463276`、
+`12317904915`。
+
+新取消传播候选 `e5e98291` 的 Actions `39538582760` 已完成，正式 A/B 为
+119/120 measured：候选 60/60、旧基线 59/60。11 项完整比较均满足原阈值，
+ordinary/long CPU `1.0262880019644047`、CV `0.02976481682981216`；最大完整
+CV 为 `0.05961259572251982`。events/download 的旧基线只有 4/5 measured，
+这项比较保持 incomplete，不报告有效比率。
+
+唯一失败样本 g1 legacy/events/download 在原 meter 容量上产生 FirstGap
+sequence 66433、约 4.689335697 秒，最终 drop 109274；store healthy，511 buckets、
+约 45.49 MB，没有触及文件或字节上限。正式运行未启用持久化 observer，不能
+用独立诊断的阶段 trace 为它作具体因果归属。全部 240 份原始 CPU snapshot
+与报告匹配，119 份 measured 均通过原 validator；失败样本 CPU 数值自洽也不能
+绕过账量失败，因此 ledger 的 `process_cpu_windows=false`。
+
+同候选持续负载为 1808.52358869 秒、37 次循环，四档峰值达标且错误全零；
+七项故障均通过。正式性能、soak 和 S3 artifacts 分别为 `12319073827`、
+`12320055119`、`12319572656`。S3 的 `PERFORMANCE`、`equivalent_ab`、
+`process_cpu_windows` 为 false，`allocation_windows` 和 `image_sizes` 为 true，
+`full_S3_accepted=false`。旧基线失败不因候选 60/60 完成而删除，原基线、容量、
+同步步骤、ACK、参数和阈值均保留。
+
+独立 CPU profile 的 artifact `12318630962` 保留旧基线
+events/download 容量失败，其余三个诊断 case 完成；诊断失败不计入正式样本，
+也不被正式样本的结果删除。
 
 ## 持续负载 suite
 
@@ -90,6 +131,38 @@ CPU 方法版本为 `process-cputime-ns-v1`，报告 schema 为 `txnode-native-p
 两侧使用完全相同的工具，报告不扣除这些开销，也不将结果表述为数据面自身的净分配量。
 
 构建结果保留两侧相同参数的业务二进制体积。镜像测量先解析同一 Alpine 3.20 的不可变 RepoDigest，使用同一 runtime Dockerfile、ca-certificates/tzdata 与入口包装已构建的两份业务二进制；真实执行 docker build 和 inspect，保留 recipe、build.log、image ID 与未压缩 Size。此项比较相同 runtime 封装，不能代替两版历史 Dockerfile、注册表压缩传输体积或发布镜像验收。旧 Xray 服务端、其他协议、跨地域实网、TLS 与正式 Core 结算未纳入 A/B 工具。事件内部路径、时间戳和事件数量允许不同并原样记录，物理字节投影通过不证明这些内部边界完全相同。不能用本回环结果推广整个双内核版本或生产场景。
+
+## 独立持久化诊断
+
+`.github/workflows/native-persistence-diagnostics.yml` 和主 CI 的
+`persistence_diagnostics=true` 入口执行单独的 `--persistence-diagnostics-only`。
+固定五组、2 秒预热、10 秒计量、4 线程，只测 events/download；旧/新两侧分别交替
+observer OFF/ON，均不启用 CPU profiler。正式 A/B 仍清除继承的诊断环境变量，
+其 120 份样本、比较阈值及持久化边界不变。
+
+诊断的 `persistence_samples`、`observer_pairs` 与正式 `samples`、`comparisons` 分开。
+`collection_complete` 仅代表证据采集完成；`accepted` 始终为 false，不写入正式 S3
+通过结果。只有一对 OFF/ON 都完成无损字节核对时才提供限定范围的比率；失败后的
+原始流量仍保留，不能作为成功事件计量的性能或 observer 开销比率。
+
+启用 observer 时只保留固定阶段统计、最大值关联的 bucket/sequence 和 64 点环。
+环在首次观察到 FirstGap 时冻结；没有新增周期 goroutine 或逐事件 I/O。阶段 wall 时间
+包含调度及 observer 开销，不是独立 syscall/disk 延迟；meter 与 observer 的时钟起点不同，
+不能直接相减。worker_gap 从一次 ACK 后开始，不能覆盖最初建库和首次 claim 的等待。
+
+精确 Node `7c9cd91e` 的 Actions `39534639986`、artifact `12316907973` 已采集
+20 份诊断，但全部账量不完整，10 对均无可比较比率。OFF/ON 都复现失败，说明
+CPU profiler 和启用 observer 不是失败的必要条件，不能据此计算 observer 性能影响。
+19 份为 meter `CAPACITY_REACHED` 且 store healthy；另一份候选 OFF 触发原有文件数
+上限：4078 个现存文件加本次 4 文件保留量超过 `4096 - 16 = 4080`，当时约
+372.6 MB，未达 1 GiB 字节上限。
+
+候选 ON 的四组首次观察缺口与同一 claim 的 head_publish wall 峰值
+52.703/20.591/18.442/23.567 ms 重合，另一组与 record_file_sync_wall 14.530 ms
+重合。它们定位观察窗口，不能区分 rename、fsync、调度、GC 或编码的因果贡献。
+旧侧有三组在第一次 bucket ACK 前填满 1152 个事件容量；初始 worker 等待未被
+after-ACK worker_gap 覆盖，也不能据较小的已采集阶段峰值排除启动/调度停顿。
+本轮没有为诊断而扩大队列/文件上限、合并同步步骤或提前 ACK。
 
 ## 判定与保留物
 

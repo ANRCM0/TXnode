@@ -12,6 +12,11 @@ on:
         required: false
         default: false
         type: boolean
+      persistence_diagnostics:
+        description: Run independent unprofiled persistence diagnostics without S3 acceptance
+        required: false
+        default: false
+        type: boolean
   schedule:
     # The interop matrix downloads pinned third-party clients; run it nightly
     # so an upstream release cannot silently break the data plane.
@@ -33,6 +38,13 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  persistence-diagnostics:
+    name: Independent persistence diagnostic collection
+    if: github.event_name == 'workflow_dispatch' && inputs.persistence_diagnostics
+    uses: ./.github/workflows/native-persistence-diagnostics.yml
+    with:
+      candidate: ${{ github.sha }}
+
   native-evidence:
     name: Native stability and performance evidence
     if: github.event_name == 'workflow_dispatch' && inputs.native_acceptance
@@ -88,7 +100,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         working-directory: .
         env:
-          TXBOARD_IMAGE_REPO: ghcr.io/anrcm0/txboard-node
+          TXBOARD_IMAGE_REPO: ghcr.io/anrcm0/txnode
         run: bash scripts/resolve-image-tags.sh
       - uses: actions/setup-go@v5
         with:
@@ -178,6 +190,8 @@ jobs:
         run: python3 -m unittest discover -s scripts -p 'test_interop_*.py' -v
       - name: Reject invalid process CPU measurement evidence
         run: python3 -m unittest discover -s scripts -p 'test_native_cpu.py' -v
+      - name: Verify pinned Core Machine contract inspection
+        run: python3 -m unittest discover -s scripts/tests/node-native-machine -p 'test_preflight.py' -v
       - name: Check independent Node image channels
         run: bash scripts/test-image-tags.sh
       - name: Verify native credential publication and replay history
@@ -230,17 +244,17 @@ jobs:
           docker build --build-arg VERSION="$BUILD_VERSION" \
             --build-arg COMMIT="$GITHUB_SHA" --build-arg BUILD_TIME="$build_time" \
             --build-arg SOURCE_URL="https://github.com/$GITHUB_REPOSITORY" \
-            -t txboard-node:config-path-ci .
-          test "$(docker run --rm txboard-node:config-path-ci -v)" = "tx-node $BUILD_VERSION (built $build_time)"
-          test "$(docker image inspect txboard-node:config-path-ci --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$GITHUB_SHA"
-          test "$(docker image inspect txboard-node:config-path-ci --format '{{ index .Config.Labels "org.opencontainers.image.source" }}')" = "https://github.com/$GITHUB_REPOSITORY"
+            -t txnode:config-path-ci .
+          test "$(docker run --rm txnode:config-path-ci -v)" = "tx-node $BUILD_VERSION (built $build_time)"
+          test "$(docker image inspect txnode:config-path-ci --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$GITHUB_SHA"
+          test "$(docker image inspect txnode:config-path-ci --format '{{ index .Config.Labels "org.opencontainers.image.source" }}')" = "https://github.com/$GITHUB_REPOSITORY"
       - name: Verify canonical image command
         run: |
           set -euo pipefail
-          test "$(docker image inspect txboard-node:config-path-ci --format '{{json .Config.Cmd}}')" = '["-c","/etc/txnode/config.yml"]'
+          test "$(docker image inspect txnode:config-path-ci --format '{{json .Config.Cmd}}')" = '["-c","/etc/txnode/config.yml"]'
       - name: Verify offline Installer capability in the exact built image
         run: |
-          docker run --rm --network none txboard-node:config-path-ci --capabilities > "$RUNNER_TEMP/node-capabilities.json"
+          docker run --rm --network none txnode:config-path-ci --capabilities > "$RUNNER_TEMP/node-capabilities.json"
           python3 - "$GITHUB_SHA" "$RUNNER_TEMP/node-capabilities.json" <<'PY'
           import json,sys
           with open(sys.argv[2]) as source:
@@ -311,7 +325,7 @@ jobs:
         id: channel
         working-directory: .
         env:
-          TXBOARD_IMAGE_REPO: ghcr.io/anrcm0/txboard-node
+          TXBOARD_IMAGE_REPO: ghcr.io/anrcm0/txnode
         run: bash scripts/resolve-image-tags.sh
       - name: Select immutable build tags and metadata
         id: build
@@ -339,6 +353,7 @@ jobs:
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - name: Build and push Node image
+        id: push
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -357,8 +372,19 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ steps.build.outputs.version }}
+      - name: Verify both published architectures by immutable digest
+        env:
+          IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
+          IMAGE_VERSION: ${{ steps.build.outputs.version }}
+        run: |
+          python3 scripts/verify-published-image.py \
+            --image "ghcr.io/anrcm0/txnode@$IMAGE_DIGEST" --commit "$GITHUB_SHA" \
+            --source "https://github.com/$GITHUB_REPOSITORY" --version "$IMAGE_VERSION" \
+            --output artifacts/published-image
       - name: Promote current main image to dev
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          IMAGE_DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
@@ -382,8 +408,18 @@ jobs:
             echo "Node runtime advanced; retain immutable image without rolling dev back"
             exit 0
           fi
-          docker buildx imagetools create --tag ghcr.io/anrcm0/txboard-node:dev \
-            "ghcr.io/anrcm0/txboard-node:dev-sha-${GITHUB_SHA:0:12}"
+          docker buildx imagetools create --tag ghcr.io/anrcm0/txnode:dev \
+            "ghcr.io/anrcm0/txnode@$IMAGE_DIGEST"
+          actual_digest="$(docker buildx imagetools inspect ghcr.io/anrcm0/txnode:dev --format '{{json .Manifest}}' | jq -er '.digest')"
+          test "$actual_digest" = "$IMAGE_DIGEST"
+          printf '%s\n' "$actual_digest" > artifacts/published-image/promoted-dev-digest.txt
+      - name: Retain published digest and offline runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-published-image-${{ github.sha }}
+          path: artifacts/published-image/
+          if-no-files-found: warn
 
   release-assets:
     name: Attach Node binaries to Node release
@@ -398,7 +434,7 @@ jobs:
         id: channel
         working-directory: .
         env:
-          TXBOARD_IMAGE_REPO: ghcr.io/anrcm0/txboard-node
+          TXBOARD_IMAGE_REPO: ghcr.io/anrcm0/txnode
         run: bash scripts/resolve-image-tags.sh
       - uses: actions/download-artifact@v4
         with:

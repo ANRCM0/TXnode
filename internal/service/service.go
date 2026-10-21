@@ -165,6 +165,8 @@ func newService(cfg *config.Config, cp controlplane.ControlPlane) *Service {
 }
 
 func (s *Service) Run(ctx context.Context) error {
+	ctx, cancelRequests := context.WithCancel(ctx)
+	defer cancelRequests()
 	if s.reporterInitErr != nil {
 		return fmt.Errorf("durable traffic report spool initialization failed: %w", s.reporterInitErr)
 	}
@@ -183,7 +185,13 @@ func (s *Service) Run(ctx context.Context) error {
 	defer s.certs.Stop()
 
 	// Handshake: get WS config + initial data in one call
-	defer s.closeAuthorization()
+	// A local lease/authority failure must release its own in-flight network
+	// workers before joining them. Final native usage persistence owns its
+	// existing independent bounded cleanup contexts.
+	defer func() {
+		cancelRequests()
+		s.closeAuthorization()
+	}()
 	if err := s.initialSetup(ctx); err != nil {
 		return fmt.Errorf("initial setup: %w", err)
 	}

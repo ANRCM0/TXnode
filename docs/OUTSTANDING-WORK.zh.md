@@ -4,7 +4,109 @@
 [NEXT-DEVELOPMENT.zh.md](NEXT-DEVELOPMENT.zh.md)，严格互通入口见
 [INTEROP.md](INTEROP.md)。历史 `a6d0e96` 的“29 通过、6 跳过”不代表当前候选。
 
-## 当前候选状态
+## 当前工作与合并记录
+
+2026-10-21：取消传播修复候选为 Node
+`e5e98291ba59c55b514b54793c6d46edcc461be4`，源码树
+`07970c700f103bc8bedb225031431c6ce9445d47`，完整 Actions `39538582760`。
+Go/source guards、runtime stability、严格 quick/full、七项带流量故障、Core C2、
+镜像冒烟及完整 Machine 均通过。Machine artifact `12318529666` 验证原 10 秒
+join、旧 token 重启拒绝、新 token 协议恢复和原六批次重放后的六个 SQL 唯一 settled
+行；这不是独立完整财务对账或生产 PKI 认证。
+
+该候选的持续负载通过：实际 1808.52358869 秒、37 次带流量生命周期循环，四档
+均达到 100/250/500/1000 会话，TCP/UDP/mux 错误均为零，artifact `12320055119`。
+正式五组 A/B 的 artifact `12319073827` 共 119/120 measured：候选 60/60、
+旧基线 59/60。12 项比较中 11 项满足原阈值，ordinary/long CPU 比率为
+`1.0262880019644047`，全部完整比较的 CV 小于 0.10；events/download 缺少
+一份旧基线样本，不能计算有效比较比率。
+
+唯一正式失败为 g1 legacy/events/download 的账量缺口：meter `CAPACITY_REACHED`，
+FirstGap sequence 66433、约 4.689335697 秒，最终 drop 109274；store healthy，
+511 buckets、约 45.49 MB，未触及文件或字节上限。停止前后快照一致，不能将其
+解释成 shutdown 新增的缺口。240 份原始 CPU snapshot 与报告逐字段匹配；
+119 份 measured 的原 validator 均通过，失败样本即使 CPU 数值自洽仍不接受。
+S3 artifact `12319572656` 的 `full_S3_accepted=false`；`PERFORMANCE`、
+`equivalent_ab`、`process_cpu_windows` 为 false，持续负载、七项故障、同候选、
+带负载生命周期、带负载故障、镜像体积和 allocation windows 为 true。
+该结果不宣称 S3 全部完成，也不通过改写基线、容量或阈值补齐失败样本。
+
+独立 CPU profile job `119020899421` 失败，artifact `12318630962` 保留旧基线
+events/download 在原事件容量上的缺口：FirstGap sequence 65409、约 4.625 秒，
+同 claim 文件同步阶段 wall 峰值约 92.081 ms。store healthy；wall 包含调度和
+诊断开销，不能单独归因于磁盘，也不能用来解释另一次正式运行的具体因果。
+其余三个诊断 case 完成，这四项不计入正式 A/B。
+
+## `7c9cd91e` 的历史完整运行
+
+修复分支 `fix/native-acceptance-followups` / PR #5 基于 main
+`8ec187840c95de179c5e990dfa39636e75bd874a`，采用已评审的 Core
+`553641029c0094480cd71105cb7b0a7efe9a9a8a`。该历史完整运行的 Node 为
+`7c9cd91e8ca4b0bb9ecfa571872c83d384480bee`，Actions `39535513954`。
+以下结果只对应记录的 SHA，不作为后续取消传播修复的验收。
+
+| `7c9cd91e` 的实际结果 | 状态 |
+|---|---|
+| Go/race、runtime stability、七项故障、Core C2、镜像冒烟 | 通过；七项故障 7/7，无 skip |
+| 严格 quick/full | quick 8 顶层/5 子项；full 37 顶层/27 子项通过，另两项不适用不计通过 |
+| 30 分钟持续负载 | job `119011177323` 通过；只覆盖该 SHA 的实际运行 |
+| 正式五组 A/B 与 S3 ledger | 120/120 measured、11/12 达标；ordinary/long CPU `1.0518343526007607 > 1.05`，job `119011177324` 与汇总 `119020250031` 失败。正式产物 `12318462976` 保留原始失败，不计入 S3 通过 |
+| 完整 Machine | 同 SHA 的 `39534639986` 曾完整通过；`39535513954` 在 token 轮换后的 10 秒终止 join 等待失败，最后恢复未执行通过 |
+| 独立持久化诊断 | `39534639986` 已采集 20/20；账量全部不完整，10 对无可比较比率，`accepted=false` |
+| 合并与注册表交付 | PR #5、main 后续检查和新独立包发布分别跟踪，不由上述 job 推导 |
+
+本轮修复已明确连接 ID 与客户端的对应关系，拒绝把读取超时当作关闭；relay 在 HTTP
+handler 返回前等待取消 watcher 清理，消除完整 Naive h2 互通发现的竞争。日志 envelope
+复用 canonical payload，并由逐字节等价回归检查；原格式、容量、全部同步步骤与 ACK
+边界保留。上述三项已进入 `7c9cd91e` 的 Go/race 和互通结果。
+
+Machine 使用现有 canonical admin operations，保留配置 revision、幂等键、独立凭据
+读取权限、真实安装模块回执、购买履约和签名授权。mailbox 的 nil/空数组表示修复后，
+实际 WS 端口更新已通过；终止等待的新失败则暴露 TXBoard HTTP/Provider 未传父
+context 的源码缺口。后续取消传播修复覆盖 Service worker、Machine discovery/status/
+handshake 及升级后 WS I/O；原 10 秒断言、拒绝规则和持久化条件不放松，
+已由新候选 `e5e98291` 的 Go/source guards 与完整 Machine Actions 验证。
+
+独立诊断表明 OFF/ON 均可触及原有事件容量，一例达到文件数上限；部分失败窗口与
+存储发布或同步阶段 wall 峰值重合，但不能据此断言磁盘 syscall 或编码是唯一原因。
+正式样本禁用 observer，诊断不计入 S3 通过；详见 `NATIVE-PERFORMANCE.zh.md`。
+
+Core 准入修复已通过独立 PR #291 合并为 `2dc3e7b`，该合并提交五项工作流及实际
+镜像发布成功；Node 保留已评审 pin `5536410`。Core 对新 Node 的采用仍是独立评审。
+本仓库发布目标改为 `ghcr.io/anrcm0/txnode`，实际创建、双架构摘要验证与 `dev` 提升
+见 `RELEASE-BLOCKERS.zh.md`。试运行和回滚步骤见 `NATIVE-OPERATIONS.zh.md`，
+文档准备不代表已执行生产部署或正式版本发布。
+
+## PR #3 合并快照
+
+S0-S4 原开发分支已通过 PR #3 squash 合并，合并提交为
+`16f69b5c70a46d0f59594795668a0975a28785cf`，源码树与候选 `235ea2f` 一致。
+后续 PR #4 将 main 更新为 `8ec18784` 并采用 Core `d2e70b8c`。
+
+| 最终候选 `235ea2f` 的实际结果 | 状态 |
+|---|---|
+| Go/race、runtime stability、七项故障、Core C2、镜像冒烟 | 通过 |
+| 严格 quick/full | quick 8 顶层/5 子项；full 37 顶层/27 子项通过，另两项不适用 |
+| 30 分钟持续负载 | 1810.79 秒、39 轮、最高 1000 会话，业务错误为零，原资源预算通过 |
+| 正式五组 A/B | 109/120 完整；双方各五份事件下载 CAPACITY_REACHED，旧侧一份 usage_v2/long EOF；四项噪声未决 |
+| S3 汇总 | `full_S3_accepted=false`，Actions `39499950483` 整体失败 |
+| 完整 Machine | 旧固定 Core preflight 阻塞，后续链路未执行 |
+
+合并后 `16f69b5` 的 CI `39526625462` 中 Go/quick/C2/镜像冒烟通过，
+历史 GHCR 包推送缺少包侧写权限；`8ec18784` 的 CI `39526677523` 则在连接管理测试
+出现 `still-live` EOF，后续发布跳过。修复分支 `fix/native-acceptance-followups`
+为两条真实连接先建立确定身份，并拒绝把读取超时当作关闭；日志 envelope 复用
+canonical payload，所有持久化同步和 ACK 边界保持原值。独立诊断可观察各阶段
+wall 时间与有界 backlog；正式样本禁用 hook，诊断结果不计入性能门禁。
+这次合并记录不能据静态检查声称容量问题已解决；后续结果在当前工作节单独记录。
+
+Machine 夹具迁移至现有 canonical admin operations，保留配置版本、幂等键及
+凭据读取权限，新增真实安装模块回执检查。Core `ws-server` 准入修复在独立
+PR #291 验收；固定 Core 的采纳与完整 Machine 运行结果另行记录。
+本仓库改用独立镜像包 `ghcr.io/anrcm0/txnode`，旧包权限不再作为发布前提；
+实际创建、双架构发布及摘要验证的状态见 `RELEASE-BLOCKERS.zh.md`。
+
+## 历史开发与验收记录
 
 2026-10-21：分支 `feat/interop-acceptance-gates` 已编写以下 S0-S4 实现与验收入口。
 最近已取得功能结果的候选为 `454607f4ca999431bcb0af6b2bcf4a5def0eddaf`，
@@ -106,16 +208,20 @@ events/download 的 coordinator 返回 evidence 错误，账量未确认。测�
 增加两侧相同的只读原 meter 状态快照，以及有界模块预取和锁文件摘要核对；
 失败仍为失败，不变更容量、等待、模式或验收阈值。
 
-| 范围 | 已编写实现 | 待完成或待验收 |
+## 当前分阶段快照
+
+以下功能结果对应 `e5e98291` 的 Actions `39538582760`；性能和持续负载单独记录。
+
+| 范围 | 已编写实现 | 实际验收与边界 |
 | --- | --- | --- |
-| S0 严格门禁 | 固定客户端/用例清单、quick/full、父子结果核对、意外 Skip 拒绝、SIGKILL 精确阶段握手 | 新候选 Go/race、严格矩阵、Core C2 均须通过；已支持链路的 EOF 不再跳过 |
-| S1 REALITY / Naive / TUIC | REALITY 自生成匹配密钥；Naive 信任根/SAN、协商填充帧和 h2 半关闭；TUIC TCP、UDP native/quic 对照和分片，UDP echo 保留 4096 字节断言 | 三类路径在中间候选通过；全部客户端仍须最终候选严格互通 |
-| S2-A smux/yamux UDP | 依固定 sing-mux 客户端版本对齐 packet 格式，复用 core 策略、限速、计量及撤权 | 新候选双向大包、父子关闭、实例隔离和精确计量的 Actions 结果 |
-| S2-B Mieru UDP / TCP 复用 | 有界 UDP 状态机、确认/重传/重组、nonce 与重放历史；TCP underlay 多 session、丢包缺口恢复及认证 FIN 尾部；新增官方客户端网络损伤/精确计量入口 | 普通官方 UDP、失败目标复用和显式整形在中间候选通过；丢包、乱序、重复、撤权密文重放及同端口 Reload/回滚须最终候选执行 |
-| S3 原生覆盖 | Service+Coordinator+observer、真实 UDP 周期、I/O 短写/失败；固定 Core machine 独立入口、真实授权夹具；启动回执与原租约 WS 端口 Reload；普通续期稳定 meter 与严格窗口交接 | 启动/WS 在 `454607f4` Go/race 通过；新续期须新提交 Actions，Service 联合回归限普通 VLESS/VMess TCP。Machine 仍被固定 Core admission 阻塞，完整断言未执行 |
-| S3 持续负载/故障 | 30 分钟 100/250/500/1000 会话工具；真实承载节点撤权/轮换/换证 Reload、限速取消、报告阻塞、慢盘和 SIGKILL 恢复；FD/heap/goroutine 诊断 | `454607f4` 七项 race 故障和 1809.665 秒、38 轮持续负载均在原预算内通过。最终候选仍须取得同 SHA 的完整窗口和故障证据 |
-| S3 新旧 A/B | 固定旧 `a1ad269` 与候选、同 runner/toolchain、三种模式、五组交替、上传/下载/短/长连接、分配窗口及相同 runtime 实际镜像构建；CPU v2 原始进程快照与独立 profile | `8f41aacb` v1 完整验收通过，`08191208` v2 因旧侧两份 EOF 失败；`454607f4` v2 120/120 原始证明、12/12 比较及精确 S3 汇总通过。续期新源码须重跑完整测量，不混用历史结果，阈值不变 |
-| S4 可选/运维 | Mieru 显式整形及低熵编码、严格未知配置拒绝；节点/进程范围连接 ID、受限诊断、迁移说明 | 官方客户端所有显式组合、跨重载关闭与诊断隐私须由新候选验收 |
+| S0 严格门禁 | 固定客户端/用例清单、quick/full、父子结果核对、意外 Skip 拒绝、SIGKILL 精确阶段握手 | Go/race、严格 quick/full、Core C2 与七项故障通过；2 项不适用不计通过，已支持链路的错误不跳过 |
+| S1 REALITY / Naive / TUIC | REALITY 自生成匹配密钥；Naive 信任根/SAN、协商填充帧和 h2 半关闭；TUIC TCP、UDP native/quic 对照和分片，UDP echo 保留 4096 字节断言 | 已进入新候选严格 full 通过结果；保留固定客户端及对照范围，不推广全部客户端版本 |
+| S2-A smux/yamux UDP | 依固定 sing-mux 客户端版本对齐 packet 格式，复用 core 策略、限速、计量及撤权 | 新候选完整 Go/race 与严格 full 通过；地址头 mux 和 Mux.Cool/XUDP 的断言分别记账 |
+| S2-B Mieru UDP / TCP 复用 | 有界 UDP 状态机、确认/重传/重组、nonce 与重放历史；TCP underlay 多 session、丢包缺口恢复及认证 FIN 尾部；官方客户端网络损伤/精确计量 | 新候选严格 full 通过官方客户端与网络损伤组合；物理 I/O 计数不代替 usage_v2 的独立完整结算对账 |
+| S3 原生覆盖 | Service+Coordinator+observer、真实 UDP 周期、I/O 短写/失败、启动回执、WS 端口 Reload、普通续期与严格窗口交接；固定 Core 完整 Machine | 新候选 Go/race 和完整 Machine 通过；原 10 秒终止 join、新旧 token 及 6/6 原批次 SQL 断言保留。Service 续期连续性限已测 VLESS/VMess TCP |
+| S3 持续负载/故障 | 30 分钟 100/250/500/1000 会话、带流量撤权/轮换/换证 Reload、慢盘、报告阻塞和 SIGKILL | 新候选 1808.52358869 秒、37 次循环、四档全部达标且错误为零；七项故障 7/7 通过 |
+| S3 新旧 A/B | 固定旧 `a1ad269`、同 runner/toolchain、三模式、五组交替、四种 workload、CPU 原始窗口、分配及实际镜像体积 | 新候选 119/120 measured，11/12 比较达标；旧基线 events/download 一份账量不完整，S3 为 false。候选 60/60 完成不补齐旧基线缺失样本 |
+| S4 可选/运维 | Mieru 显式整形及低熵编码、严格未知配置拒绝；节点/进程范围连接 ID、受限诊断、迁移说明 | 新候选 Go/race 和严格 full 通过对应组合；试运行、回滚步骤已准备，实际生产试运行未执行 |
 
 ## 支持范围与保留的不适用组合
 

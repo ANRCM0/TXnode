@@ -46,4 +46,4 @@ clean:
 
 # Build Docker image
 docker:
-	docker build --build-arg VERSION="$(VERSION)" --build-arg COMMIT="$(COMMIT)" --build-arg BUILD_TIME="$(BUILD_TIME)" --build-arg SOURCE_URL="$(SOURCE_URL)" -t txboard-node:$(VERSION) -t txboard-node:latest .
+	docker build --build-arg VERSION="$(VERSION)" --build-arg COMMIT="$(COMMIT)" --build-arg BUILD_TIME="$(BUILD_TIME)" --build-arg SOURCE_URL="$(SOURCE_URL)" -t txnode:$(VERSION) -t txnode:latest .

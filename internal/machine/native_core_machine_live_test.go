@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +25,7 @@ import (
 
 	"github.com/ANRCM0/TX-Node/internal/config"
 	"github.com/ANRCM0/TX-Node/internal/controlerror"
+	"github.com/ANRCM0/TX-Node/internal/controlplane"
 	"github.com/ANRCM0/TX-Node/internal/dataplane/opt"
 	"github.com/ANRCM0/TX-Node/internal/dataplane/outbound"
 	"github.com/ANRCM0/TX-Node/internal/dataplane/socks"
@@ -57,6 +60,145 @@ type machineCoreLiveSpool struct {
 	PayloadDigest string          `json:"payload_digest"`
 	PeriodIDs     []string        `json:"period_ids"`
 	Payload       usagev2.Payload `json:"payload"`
+}
+
+// Observe the real callback without changing frames or draining the child mailbox.
+type machineCoreConfigObservation struct {
+	mu                                sync.Mutex
+	targetID, newPort                 int
+	received, dispatched, desiredPort bool
+}
+type machineCoreObservedControlPlane struct {
+	machineControlPlane
+	observation *machineCoreConfigObservation
+}
+
+// Preserve the native context extension while decorating only socket callbacks.
+func (o *machineCoreObservedControlPlane) GetMachineNodesContext(ctx context.Context) (*machineDiscovery, error) {
+	return machineNodesContext(ctx, o.machineControlPlane)
+}
+func (o *machineCoreObservedControlPlane) HandshakeContext(ctx context.Context) (*machineHandshake, error) {
+	return machineHandshakeContext(ctx, o.machineControlPlane)
+}
+func (o *machineCoreObservedControlPlane) ReportMachineStatusContext(ctx context.Context, cpu float64, mem, swap, disk [2]uint64, netIn, netOut float64, status *machineRuntimeStatus) error {
+	if native, ok := o.machineControlPlane.(machineContextControlPlane); ok {
+		return native.ReportMachineStatusContext(ctx, cpu, mem, swap, disk, netIn, netOut, status)
+	}
+	return o.machineControlPlane.ReportMachineStatus(cpu, mem, swap, disk, netIn, netOut, status)
+}
+
+// Raw stacks remain private; only these reviewed owner labels reach evidence.
+func machineCoreWaitChains() []string {
+	labels := []struct{ needle, label string }{
+		{"internal/machine.(*Orchestrator).stopAll(", "machine_children_join"},
+		{"internal/machine.(*Orchestrator).rediscover(", "machine_discovery"},
+		{"internal/machine.(*Orchestrator).startNode(", "machine_child_start"},
+		{"internal/machine.(*Orchestrator).reportMachineStatusContext(", "machine_status"},
+		{"internal/service.(*Service).Run(", "service_run"},
+		{"internal/service.(*Service).closeAuthorization(", "authorization_join"},
+		{"internal/service.(*Service).requestAuthorizationSnapshot.func1(", "authorization_worker"},
+		{"internal/service.(*Service).closeNativeUsage(", "native_usage_close"},
+		{"internal/txboard.(*Client).AuthorizedUsersSnapshotContext(", "core_users_read"},
+		{"internal/txboard.(*Client).requestContext(", "core_http"},
+		{"internal/credentialdeliveryclient.(*Client).Resolve(", "provider_resolve"},
+		{"internal/txboard.(*Socket).connect(", "shared_ws_connect"},
+		{"internal/kernel/txnode.(*Kernel).Stop(", "kernel_stop"},
+		{"sync.(*WaitGroup).Wait(", "worker_wait"},
+	}
+	buffer := make([]byte, 1<<20)
+	stack := buffer[:runtime.Stack(buffer, true)]
+	chains := map[string]bool{}
+	for _, goroutine := range strings.Split(string(stack), "\n\n") {
+		var chain []string
+		for _, line := range strings.Split(goroutine, "\n") {
+			for _, label := range labels {
+				if strings.Contains(line, label.needle) && len(chain) < 12 {
+					chain = append(chain, label.label)
+				}
+			}
+		}
+		if len(chain) > 0 {
+			chains[strings.Join(chain, ">")] = true
+		}
+	}
+	result := make([]string, 0, len(chains))
+	for chain := range chains {
+		result = append(result, chain)
+	}
+	sort.Strings(result)
+	if len(result) > 16 {
+		result = result[:16]
+	}
+	return result
+}
+
+func machineCoreChildren(o *Orchestrator) []<-chan struct{} {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	children := make([]<-chan struct{}, 0, len(o.nodes))
+	for _, child := range o.nodes {
+		children = append(children, child.done)
+	}
+	return children
+}
+
+func machineCoreShutdownDiagnostic(t *testing.T, o *Orchestrator, children []<-chan struct{}, targetPort, siblingPort int) {
+	t.Helper()
+	o.mu.Lock()
+	terminal := o.terminalErr
+	cancelled := o.runCtx != nil && o.runCtx.Err() != nil
+	o.mu.Unlock()
+	denial, typed := controlerror.AsAuthorityDenial(terminal)
+	done := 0
+	for _, child := range children {
+		select {
+		case <-child:
+			done++
+		default:
+		}
+	}
+	socket := o.currentWS()
+	data := map[string]any{"schema": "txnode-machine-shutdown-diagnostic/v1", "stage": "old-rejected", "code": "machine_join_timeout",
+		"terminal_cause_observed": terminal != nil, "terminal_machine_denial": typed && denial.Scope == controlerror.MachineScope,
+		"context_cancelled": cancelled, "tracked_children": len(children), "completed_children": done,
+		"shared_ws_connected": socket != nil && socket.IsConnected(), "target_listener_open": machineCoreListening(targetPort),
+		"sibling_listener_open": machineCoreListening(siblingPort), "wait_chains": machineCoreWaitChains()}
+	body, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal("fixed shutdown diagnostic encoding failed")
+	}
+	t.Logf("NATIVE_MACHINE_SHUTDOWN_DIAGNOSTIC %s", body)
+}
+
+func (o *machineCoreObservedControlPlane) NewMachineSocket(url, token string, machineID int, ws config.WSConfig, kernel config.KernelConfig, onEvent func(machineEvent), onStatus func(bool)) machineSocket {
+	return o.machineControlPlane.NewMachineSocket(url, token, machineID, ws, kernel, func(event machineEvent) {
+		onEvent(event)
+		if event.NodeID != o.observation.targetID || event.NodeEvent.Type != controlplane.EventSyncConfig {
+			return
+		}
+		o.observation.mu.Lock()
+		o.observation.received = true
+		o.observation.dispatched = event.Err == nil && event.NodeEvent.Config != nil
+		o.observation.desiredPort = event.NodeEvent.Config != nil && event.NodeEvent.Config.ServerPort == o.observation.newPort
+		o.observation.mu.Unlock()
+	}, onStatus)
+}
+func (o *machineCoreConfigObservation) report(t *testing.T, orchestrator *Orchestrator, oldPort int, code string) {
+	t.Helper()
+	o.mu.Lock()
+	data := map[string]any{"schema": "txnode-machine-config-diagnostic/v1", "stage": "configured", "code": code,
+		"config_event_received": o.received, "config_event_dispatched": o.dispatched, "config_event_desired_port": o.desiredPort,
+		"child_applied_port": "unavailable"}
+	o.mu.Unlock()
+	data["old_listener_open"] = machineCoreListening(oldPort)
+	data["new_listener_open"] = machineCoreListening(o.newPort)
+	socket := orchestrator.currentWS()
+	data["shared_ws_connected"] = socket != nil && socket.IsConnected()
+	body, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal("fixed config diagnostic encoding failed")
+	}
+	t.Logf("NATIVE_MACHINE_CONFIG_DIAGNOSTIC %s", body)
 }
 
 // Real production Orchestrator, native installation activation, signed
@@ -155,11 +297,13 @@ func TestNativeCoreMachineLive(t *testing.T) {
 			CAFile: filepath.Join(directory, "ca.pem"), ClientCert: filepath.Join(directory, "node.pem"), ClientKey: filepath.Join(directory, "node.key")}}
 	cfg.UsageV2 = config.UsageV2Config{Enabled: true, Directory: filepath.Join(directory, "usage"), CAFile: filepath.Join(directory, "ca.pem")}
 	usageRoot := cfg.UsageV2.Directory
+	configObservation := &machineCoreConfigObservation{targetID: fixture.Nodes[0].ID, newPort: fixture.NewPort}
 	start := func(cfg *config.Config) (*Orchestrator, context.CancelFunc, chan error) {
 		o, e := NewChecked(cfg)
 		if e != nil {
 			t.Fatal(e)
 		}
+		o.client = &machineCoreObservedControlPlane{machineControlPlane: o.client, observation: configObservation}
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
 		go func() { done <- o.Run(ctx) }()
@@ -190,7 +334,7 @@ func TestNativeCoreMachineLive(t *testing.T) {
 	machineCoreAlive(t, endpoint, fixture, fixture.Nodes[0], stream1)
 	machineCoreAlive(t, endpoint, fixture, fixture.Nodes[1], stream2)
 	machineCoreBarrier(t, directory, "initial", map[string]any{"machine_id": fixture.MachineID, "real_two_streams": true, "shared_ws_connected": true})
-	machineCoreClosed(t, stream1, 8*time.Second)
+	machineCoreClosed(t, stream1, 8*time.Second, func(code string) { configObservation.report(t, orchestrator, fixture.Nodes[0].Port, code) })
 	oldPort := fixture.Nodes[0].Port
 	fixture.Nodes[0].Port = fixture.NewPort
 	machineCoreWait(t, done, 8*time.Second, func() bool { return !machineCoreListening(oldPort) && machineCoreListening(fixture.NewPort) })
@@ -244,6 +388,7 @@ func TestNativeCoreMachineLive(t *testing.T) {
 	var replacement struct {
 		Token string `json:"token"`
 	}
+	shutdownChildren := machineCoreChildren(orchestrator)
 	machineCoreBarrierResult(t, directory, "reenabled", map[string]any{"removed_replayed": removed, "fresh_listener": true, "actual_streams": true}, &replacement)
 	select {
 	case e := <-done:
@@ -253,6 +398,7 @@ func TestNativeCoreMachineLive(t *testing.T) {
 		}
 		stopped = true
 	case <-time.After(10 * time.Second):
+		machineCoreShutdownDiagnostic(t, orchestrator, shutdownChildren, fixture.NewPort, fixture.Nodes[1].Port)
 		t.Fatal("authenticated machine rejection failed to join children")
 	}
 	machineCoreClosed(t, stream1, 2*time.Second)
@@ -390,15 +536,21 @@ func machineCoreEcho(t *testing.T, stream net.Conn, request []byte) {
 	}
 	_ = stream.SetDeadline(time.Now().Add(90 * time.Second))
 }
-func machineCoreClosed(t *testing.T, stream net.Conn, limit time.Duration) {
+func machineCoreClosed(t *testing.T, stream net.Conn, limit time.Duration, diagnostic ...func(string)) {
 	t.Helper()
 	_ = stream.SetReadDeadline(time.Now().Add(limit))
 	var b [1]byte
 	n, e := stream.Read(b[:])
 	if n != 0 || e == nil {
+		for _, report := range diagnostic {
+			report("old_stream_remained_open")
+		}
 		t.Fatal("revoked actual stream remained open")
 	}
 	if timeout, ok := e.(net.Error); ok && timeout.Timeout() {
+		for _, report := range diagnostic {
+			report("old_stream_close_timeout")
+		}
 		t.Fatal("stream timed out instead of authority close")
 	}
 }

@@ -41,11 +41,13 @@ Core's adoption review separately records the chosen pair's source fingerprints.
 
 ## Independent releases
 
-Main runtime changes publish `ghcr.io/anrcm0/txboard-node:dev-sha-<12>` and promote
+Main runtime changes publish `ghcr.io/anrcm0/txnode:dev-sha-<12>` and promote
 `dev` only if a newer runtime has not replaced the candidate. Reviewed `vX.Y.Z`
 and prerelease tags publish this repository's own images and Node release binaries.
-Core versions and Core releases do not create Node versions. Existing image and
-configuration paths stay compatible. No new SemVer tag was created by extraction.
+Core versions and Core releases do not create Node versions. The independent
+`txnode` package is this repository's publishing target; the former `txboard-node`
+package is retained as historical evidence and is not updated by this workflow.
+Configuration paths stay compatible. No new SemVer tag was created by extraction.
 
 Core consumes an explicit Node commit as a Git submodule for integration acceptance.
 Node development happens in this repository. A Node update does not change the

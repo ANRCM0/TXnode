@@ -163,10 +163,12 @@ func cloneNodeSpec(spec *model.NodeSpec) *model.NodeSpec {
 		}
 	}
 	if spec.Routes != nil {
-		clone.Routes = append([]model.RouteRule(nil), spec.Routes...)
+		clone.Routes = make([]model.RouteRule, len(spec.Routes))
+		copy(clone.Routes, spec.Routes)
 	}
 	if spec.CustomOutbounds != nil {
-		clone.CustomOutbounds = append([]model.OutboundConfig(nil), spec.CustomOutbounds...)
+		clone.CustomOutbounds = make([]model.OutboundConfig, len(spec.CustomOutbounds))
+		copy(clone.CustomOutbounds, spec.CustomOutbounds)
 	}
 	if spec.CustomRoutes != nil {
 		clone.CustomRoutes = make([]map[string]any, len(spec.CustomRoutes))
@@ -182,7 +184,8 @@ func cloneNodeSpec(spec *model.NodeSpec) *model.NodeSpec {
 		}
 	}
 	if spec.CustomRouteRules != nil {
-		clone.CustomRouteRules = append([]model.CustomRouteRule(nil), spec.CustomRouteRules...)
+		clone.CustomRouteRules = make([]model.CustomRouteRule, len(spec.CustomRouteRules))
+		copy(clone.CustomRouteRules, spec.CustomRouteRules)
 	}
 	if spec.CertConfig != nil {
 		certCopy := *spec.CertConfig

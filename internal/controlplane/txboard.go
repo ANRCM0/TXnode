@@ -63,11 +63,11 @@ func (p *TXBoardControlPlane) snapshot(ctx context.Context) (Snapshot, error) {
 	if p.authorization == nil {
 		return Snapshot{}, errors.New("NODE_AUTHORIZATION_MANAGER_REQUIRED")
 	}
-	cfg, err := p.client.ConfigSnapshot()
+	cfg, err := p.client.ConfigSnapshotContext(ctx)
 	if err != nil {
 		return Snapshot{}, err
 	}
-	users, auth, err := p.client.AuthorizedUsersSnapshot(p.authorization)
+	users, auth, err := p.client.AuthorizedUsersSnapshotContext(ctx, p.authorization)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -97,7 +97,7 @@ func (p *TXBoardControlPlane) Initial(ctx context.Context, metricsFn func() map[
 		return Bootstrap{}, errors.New("NODE_AUTHORIZATION_MANAGER_REQUIRED")
 	}
 	p.client.ResetETags()
-	hs, err := p.client.Handshake()
+	hs, err := p.client.HandshakeContext(ctx)
 	if err != nil {
 		return Bootstrap{}, err
 	}
@@ -147,7 +147,7 @@ func (p *TXBoardControlPlane) Discover(ctx context.Context, _ func() map[string]
 	if p.machine {
 		return nil, nil
 	}
-	hs, err := p.client.Handshake()
+	hs, err := p.client.HandshakeContext(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -284,7 +284,7 @@ func (p *TXBoardControlPlane) RefreshAuthorization(ctx context.Context) (Snapsho
 	if p.authorization == nil {
 		return Snapshot{}, errors.New("NODE_AUTHORIZATION_MANAGER_REQUIRED")
 	}
-	users, auth, err := p.client.AuthorizedUsersSnapshot(p.authorization)
+	users, auth, err := p.client.AuthorizedUsersSnapshotContext(ctx, p.authorization)
 	if err != nil {
 		return Snapshot{}, err
 	}
