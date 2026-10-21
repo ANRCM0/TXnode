@@ -305,17 +305,28 @@ def build_runtime_images(output, report):
             target.unlink()
 
 
-def sample(binary, state, mode, workload, args, origin, cpu_profile=None):
-    state.mkdir(parents=True)
-    log = (state / "server.log").open("w")
+def sample_environment(nonce, cpu_profile=None, persistence_diagnostics=False):
     environment = os.environ.copy()
-    nonce = secrets.token_hex(32)
     environment["TXNODE_NATIVE_AB_CPU_NONCE"] = nonce
     environment.pop("TXNODE_NATIVE_AB_CPU_PROFILE", None)
+    environment.pop("TXNODE_NATIVE_AB_EVENT_DIAGNOSTICS", None)
     if cpu_profile is not None:
         environment["TXNODE_NATIVE_AB_CPU_PROFILE"] = str(cpu_profile)
+        if persistence_diagnostics:
+            environment["TXNODE_NATIVE_AB_EVENT_DIAGNOSTICS"] = "1"
+    elif persistence_diagnostics:
+        raise ValueError("persistence diagnostics require a separate profiled sample")
+    return environment
+
+
+def sample(binary, state, mode, workload, args, origin, cpu_profile=None, persistence_diagnostics=False):
+    nonce = secrets.token_hex(32)
+    environment = sample_environment(nonce, cpu_profile, persistence_diagnostics)
+    state.mkdir(parents=True)
+    log = (state / "server.log").open("w")
     process = subprocess.Popen([str(binary), "-mode", mode, "-state", str(state)], stdout=log, stderr=log, text=True, env=environment)
-    measurements = {"mode": mode, "workload": workload, "status": "incomplete"}
+    measurements = {"mode": mode, "workload": workload, "status": "incomplete",
+                    "persistence_diagnostics": persistence_diagnostics}
     rss_samples = []
     stop = threading.Event()
     def monitor():
@@ -433,10 +444,13 @@ def diagnostics(output, report, args, origin):
             state = output / ("diagnostic-%s-%s-%s" % (mode, workload, side))
             profile = state / "cpu.pprof"
             binary = output / ("server-" + side)
+            persistence_diagnostics = args.diagnostics_only and mode == "events"
             result = {"side": side, "mode": mode, "workload": workload, "acceptance_sample": False,
-                      "profile_scope": "startup, warmup, measurement, graceful shutdown", "binary_sha256": digest(binary)}
+                      "profile_scope": "startup, warmup, measurement, graceful shutdown", "binary_sha256": digest(binary),
+                      "persistence_diagnostics": persistence_diagnostics}
             try:
-                result["sample"] = sample(binary, state, mode, workload, args, origin, cpu_profile=profile)
+                result["sample"] = sample(binary, state, mode, workload, args, origin, cpu_profile=profile,
+                                          persistence_diagnostics=persistence_diagnostics)
                 result["profile_bytes"] = profile.stat().st_size
                 result["profile_sha256"] = digest(profile)
                 top = command(["go", "tool", "pprof", "-top", "-nodecount=40", str(binary), str(profile)])
@@ -523,6 +537,7 @@ def run(args):
                            "build_flags": FLAGS, "protocol": "SOCKS5 RFC1929 IPv4 loopback", "tls": "none on both sides",
                            "legacy_kernel": "sing-box", "loopback_route": "127.0.0.1/32 direct, identical structured rule on both sides",
                            "event_store_max_bytes": 1 << 30, "usage_lease_seconds": 90,
+                           "persistence_diagnostics": "separate diagnostics-only event profiles" if args.diagnostics_only else "disabled",
                            "throughput_floor": 0.95, "cpu_ceiling": 1.05, "noise_cv_ceiling": 0.10},
               "scope": "same runner SOCKS forwarding; ordinary/events/usage_v2 configured identically; local durability, no Core receipts",
               "not_measured": ["cross-region-network", "xray-legacy-kernel", "protocols-other-than-SOCKS", "internal-event-path-and-timestamp-equivalence"],

@@ -88,7 +88,7 @@ func main() {
 	switch *mode {
 	case "ordinary":
 	case "events":
-		coordinator, err = usagebucket.NewAsyncCoordinator(filepath.Join(*root, "events"), usagebucket.StoreOptions{MaxBytes: 1 << 30}, usagebucket.CoordinatorOptions{})
+		coordinator, err = usagebucket.NativeABNewCoordinator(filepath.Join(*root, "events"), usagebucket.StoreOptions{MaxBytes: 1 << 30}, usagebucket.CoordinatorOptions{})
 		if err != nil || !node.SetLocalEventConsumer(coordinator) {
 			panic(fmt.Sprintf("event installation: %v", err))
 		}

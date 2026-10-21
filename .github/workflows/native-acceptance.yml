@@ -13,6 +13,11 @@ on:
         description: Candidate commit or ref (empty uses workflow SHA)
         required: false
         type: string
+      diagnostics_only:
+        description: Run separate CPU and persistence diagnostics without S3 acceptance
+        required: false
+        default: false
+        type: boolean
   schedule:
     - cron: '43 20 * * *'
 
@@ -58,6 +63,7 @@ jobs:
 
   soak:
     name: Native 30 minute TCP UDP mux soak
+    if: inputs.diagnostics_only != true
     needs: source
     runs-on: ubuntu-24.04
     timeout-minutes: 55
@@ -115,6 +121,7 @@ jobs:
 
   faults:
     name: Native live load lifecycle durability and process faults
+    if: inputs.diagnostics_only != true
     needs: source
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -209,6 +216,7 @@ jobs:
 
   performance:
     name: Same runner legacy candidate A B
+    if: inputs.diagnostics_only != true
     needs: source
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -244,7 +252,7 @@ jobs:
 
   acceptance:
     name: Exact source S3 acceptance ledger
-    if: always()
+    if: always() && inputs.diagnostics_only != true
     needs: [source, soak, faults, performance]
     runs-on: ubuntu-24.04
     steps:

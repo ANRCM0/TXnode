@@ -422,12 +422,12 @@ func (s *Store) persistRecord(record journalRecord, control bool) (string, error
 	if err := validateRecord(record); err != nil {
 		return "", err
 	}
-	payload, _ := json.Marshal(record)
-	digest := digestBytes(payload)
-	data, err := json.Marshal(journalEnvelope{record, digest})
+	payload, err := json.Marshal(record)
 	if err != nil {
 		return "", err
 	}
+	digest := digestBytes(payload)
+	data := encodeJournalEnvelope(payload, digest)
 	byteLimit, fileLimit := s.maxBytes-storeControlReserve, storeMaxFiles-storeFileReserve
 	if control {
 		byteLimit = s.maxBytes
@@ -510,6 +510,18 @@ func (s *Store) persistRecord(record journalRecord, control bool) (string, error
 	s.statusMu.Unlock()
 	s.updateStatus()
 	return digest, nil
+}
+
+// payload is the canonical json.Marshal(record) output and digest is its SHA-256
+// hex string. Reusing those bytes preserves the envelope without encoding the
+// complete record a second time.
+func encodeJournalEnvelope(payload []byte, digest string) []byte {
+	data := make([]byte, 0, len(payload)+len(digest)+25)
+	data = append(data, `{"record":`...)
+	data = append(data, payload...)
+	data = append(data, `,"digest":"`...)
+	data = append(data, digest...)
+	return append(data, '"', '}')
 }
 
 func (s *Store) updateStatus() {

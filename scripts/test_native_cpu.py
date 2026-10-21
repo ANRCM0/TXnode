@@ -15,6 +15,25 @@ SPEC.loader.exec_module(BENCH)
 
 
 class CPUContractTests(unittest.TestCase):
+    def test_formal_samples_remove_inherited_diagnostic_flags(self):
+        inherited = {"TXNODE_NATIVE_AB_CPU_PROFILE": "old.pprof",
+                     "TXNODE_NATIVE_AB_EVENT_DIAGNOSTICS": "1"}
+        with patch.dict(BENCH.os.environ, inherited):
+            environment = BENCH.sample_environment("nonce")
+        self.assertNotIn("TXNODE_NATIVE_AB_CPU_PROFILE", environment)
+        self.assertNotIn("TXNODE_NATIVE_AB_EVENT_DIAGNOSTICS", environment)
+        self.assertEqual(environment["TXNODE_NATIVE_AB_CPU_NONCE"], "nonce")
+
+    def test_persistence_observer_requires_explicit_profiled_diagnostic(self):
+        with patch.dict(BENCH.os.environ, {"TXNODE_NATIVE_AB_EVENT_DIAGNOSTICS": "1"}):
+            environment = BENCH.sample_environment("nonce", Path("cpu.pprof"))
+            self.assertNotIn("TXNODE_NATIVE_AB_EVENT_DIAGNOSTICS", environment)
+            environment = BENCH.sample_environment("nonce", Path("cpu.pprof"), True)
+        self.assertEqual(environment["TXNODE_NATIVE_AB_EVENT_DIAGNOSTICS"], "1")
+        self.assertEqual(environment["TXNODE_NATIVE_AB_CPU_PROFILE"], "cpu.pprof")
+        with self.assertRaises(ValueError):
+            BENCH.sample_environment("nonce", persistence_diagnostics=True)
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
