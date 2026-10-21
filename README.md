@@ -25,8 +25,8 @@ Interop results and the remaining protocol gaps are recorded in `docs/INTEROP.md
 planned in `docs/NEXT-DEVELOPMENT.zh.md`. Keep local kernel replacements, licenses and
 `TXNODE-PATCH.md` notes together with their sources under `internal/deps/`.
 Native billing coverage and pending recovery assertions are mapped in
-`docs/NATIVE-ACCEPTANCE-COVERAGE.zh.md`; the current image publishing blocker is
-recorded in `docs/RELEASE-BLOCKERS.zh.md`.
+`docs/NATIVE-ACCEPTANCE-COVERAGE.zh.md`; verified independent image delivery and
+historical publishing blockers are recorded in `docs/RELEASE-BLOCKERS.zh.md`.
 Native configuration changes, connection identities and opt-in diagnostics are
 described in `docs/NATIVE-OPERATIONS.zh.md`.
 

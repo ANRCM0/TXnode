@@ -6,6 +6,16 @@
 
 ## 当前工作与合并记录
 
+PR #5 已于 2026-10-21 合并为 main `112760455433de1f9556b030b42b7a774a928fd1`，
+tree `7cf10cc16c8dc299c60db4c691bba868c26fe063` 与最终 PR head `4b7af523` 相同；
+后者相对运行时候选 `e5e98291` 只追加七份文档。最终 PR Actions `39542127317`
+的 Go/race、quick、Core C2 和镜像冒烟通过。main 的 Actions `39542829266` 也已
+成功：Go/race、quick、Core C2、镜像冒烟及新独立镜像发布实际通过。
+`ghcr.io/anrcm0/txnode:dev-sha-112760455433` 已推送，amd64/arm64 子摘要均经
+实际拉取及离线 capabilities 验证，`dev` 已提升到同一索引；发布产物为
+`12320338211`，完整摘要见 `RELEASE-BLOCKERS.zh.md`。后续文档提交不重建相同
+运行时。合并与开发镜像交付不抹除下面记录的正式 S3 阻塞。
+
 2026-10-21：取消传播修复候选为 Node
 `e5e98291ba59c55b514b54793c6d46edcc461be4`，源码树
 `07970c700f103bc8bedb225031431c6ce9445d47`，完整 Actions `39538582760`。
