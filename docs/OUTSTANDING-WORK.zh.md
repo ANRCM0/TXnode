@@ -6,10 +6,48 @@
 
 ## 当前工作与合并记录
 
-2026-10-21：S0-S4 开发分支已通过 PR #3 squash 合并，合并提交为
-`16f69b5c70a46d0f59594795668a0975a28785cf`，源码树与最终候选 `235ea2f`
-一致。后续 PR #4 将 main 更新为 `8ec18784` 并采用 Core `d2e70b8c`。
-以下完成状态只对应其记录的 SHA，不跨提交继承验收。
+2026-10-21：修复分支 `fix/native-acceptance-followups` / PR #5 基于 main
+`8ec187840c95de179c5e990dfa39636e75bd874a`，采用已评审的 Core
+`553641029c0094480cd71105cb7b0a7efe9a9a8a`。最近完整运行的 Node 为
+`7c9cd91e8ca4b0bb9ecfa571872c83d384480bee`，Actions `39535513954`。
+以下结果只对应记录的 SHA，不作为后续取消传播修复的验收。
+
+| `7c9cd91e` 的实际结果 | 状态 |
+|---|---|
+| Go/race、runtime stability、七项故障、Core C2、镜像冒烟 | 通过；七项故障 7/7，无 skip |
+| 严格 quick/full | quick 8 顶层/5 子项；full 37 顶层/27 子项通过，另两项不适用不计通过 |
+| 30 分钟持续负载 | job `119011177323` 通过；只覆盖该 SHA 的实际运行 |
+| 正式五组 A/B 与 S3 ledger | job `119011177324` 与汇总 `119020250031` 均失败；正式产物 `12318462976` 保留原始失败，不计入 S3 通过 |
+| 完整 Machine | 同 SHA 的 `39534639986` 曾完整通过；`39535513954` 在 token 轮换后的 10 秒终止 join 等待失败，最后恢复未执行通过 |
+| 独立持久化诊断 | `39534639986` 已采集 20/20；账量全部不完整，10 对无可比较比率，`accepted=false` |
+| 合并与注册表交付 | PR #5、main 后续检查和新独立包发布分别跟踪，不由上述 job 推导 |
+
+本轮修复已明确连接 ID 与客户端的对应关系，拒绝把读取超时当作关闭；relay 在 HTTP
+handler 返回前等待取消 watcher 清理，消除完整 Naive h2 互通发现的竞争。日志 envelope
+复用 canonical payload，并由逐字节等价回归检查；原格式、容量、全部同步步骤与 ACK
+边界保留。上述三项已进入 `7c9cd91e` 的 Go/race 和互通结果。
+
+Machine 使用现有 canonical admin operations，保留配置 revision、幂等键、独立凭据
+读取权限、真实安装模块回执、购买履约和签名授权。mailbox 的 nil/空数组表示修复后，
+实际 WS 端口更新已通过；终止等待的新失败则暴露 TXBoard HTTP/Provider 未传父
+context 的源码缺口。后续取消传播修复覆盖 Service worker、Machine discovery/status/
+handshake 及升级后 WS I/O；原 10 秒断言、拒绝规则和持久化条件不放松，须新候选 Actions。
+
+独立诊断表明 OFF/ON 均可触及原有事件容量，一例达到文件数上限；部分失败窗口与
+存储发布或同步阶段 wall 峰值重合，但不能据此断言磁盘 syscall 或编码是唯一原因。
+正式样本禁用 observer，诊断不计入 S3 通过；详见 `NATIVE-PERFORMANCE.zh.md`。
+
+Core 准入修复已通过独立 PR #291 合并为 `2dc3e7b`，该合并提交五项工作流及实际
+镜像发布成功；Node 保留已评审 pin `5536410`。Core 对新 Node 的采用仍是独立评审。
+本仓库发布目标改为 `ghcr.io/anrcm0/txnode`，实际创建、双架构摘要验证与 `dev` 提升
+见 `RELEASE-BLOCKERS.zh.md`。试运行和回滚步骤见 `NATIVE-OPERATIONS.zh.md`，
+文档准备不代表已执行生产部署或正式版本发布。
+
+## PR #3 合并快照
+
+S0-S4 原开发分支已通过 PR #3 squash 合并，合并提交为
+`16f69b5c70a46d0f59594795668a0975a28785cf`，源码树与候选 `235ea2f` 一致。
+后续 PR #4 将 main 更新为 `8ec18784` 并采用 Core `d2e70b8c`。
 
 | 最终候选 `235ea2f` 的实际结果 | 状态 |
 |---|---|
@@ -26,7 +64,7 @@
 为两条真实连接先建立确定身份，并拒绝把读取超时当作关闭；日志 envelope 复用
 canonical payload，所有持久化同步和 ACK 边界保持原值。独立诊断可观察各阶段
 wall 时间与有界 backlog；正式样本禁用 hook，诊断结果不计入性能门禁。
-上述新修复仍须取得新候选的 Actions 结果，不能据静态检查声称容量问题已解决。
+这次合并记录不能据静态检查声称容量问题已解决；后续结果在当前工作节单独记录。
 
 Machine 夹具迁移至现有 canonical admin operations，保留配置版本、幂等键及
 凭据读取权限，新增真实安装模块回执检查。Core `ws-server` 准入修复在独立

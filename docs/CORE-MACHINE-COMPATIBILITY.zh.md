@@ -1,6 +1,6 @@
 # 固定 Core 基线的 Machine 兼容门禁
 
-Node 的固定 Core 基线以 `compatibility/core.v1.json` 为准，当前候选为 `ANRCM0/TXBoard@553641029c0094480cd71105cb7b0a7efe9a9a8a`。该提交经 Core PR #291 完整检查后，于 2026-10-21 合并为 `2dc3e7b446e5c36f393fa6084fb8ad0d811b0d95`，固定提交保留在 main 历史中。这里说明源码合约、真实 owner 调用链和待验收条件；源码检查、语法检查、编译均不构成完整 Machine 功能验收。
+Node 的固定 Core 基线以 `compatibility/core.v1.json` 为准，当前为 `ANRCM0/TXBoard@553641029c0094480cd71105cb7b0a7efe9a9a8a`。该提交经 Core PR #291 完整检查后，于 2026-10-21 合并为 `2dc3e7b446e5c36f393fa6084fb8ad0d811b0d95`，固定提交保留在 main 历史中。这里说明源码合约、真实 owner 调用链和 Actions 证据；源码检查、语法检查、编译均不构成完整 Machine 功能验收。
 
 ## 从旧管理路径迁移到正式操作
 
@@ -27,7 +27,7 @@ Node 的固定 Core 基线以 `compatibility/core.v1.json` 为准，当前候选
 
 `api/app/Listeners/EnforceInstallationAuthority.php` 在原生安装下先检查真实 native/open，再对非准备命令执行封闭的 COMMANDS 检查。新候选把 `ws-server` 加入正式运行库存，未放入准备命令列表；未激活或 worker epoch 过期仍拒绝。
 
-Core 独立 PR #291 增加真实命令 listener 的未激活拒绝、激活成功及 stale worker 拒绝回归；精确提交的 API/MySQL、C2、浏览器与镜像检查均已通过，合并后检查单独跟踪。Node PR #5 单独采用该精确候选，Node 夹具不修改 Core 应用或库存；完整 Machine 仍须取得 Node 当前候选的实际验收。
+Core 独立 PR #291 增加真实命令 listener 的未激活拒绝、激活成功及 stale worker 拒绝回归。合并提交 `2dc3e7b` 的 API、MySQL、native C2、browser ingress 和 Core image 五项工作流均通过，实际镜像发布也成功。它们只证明该 Core 提交，不代表随后 Core main 的其他提交。Node PR #5 单独采用已评审的 `5536410`，Node 夹具不修改 Core 应用或库存。
 
 真实 WS owner 已有：`NodeWebSocketServer -> NodeWorker -> NativeNodeWebSocket -> TxNodeAuth`。NodeWorker 通过 ServerObserver/NodeSyncService 的事务后事件重读当前配置与成员关系；旧 token 在每次 heartbeat/node-scoped event 及服务端同步时重新检查。NodeRegistry 的 successor 清理避免旧连接抹掉后继状态。源码 owner 存在仍需真实进程验收。
 
@@ -60,3 +60,36 @@ Provider trust、安装激活、购买履约、recipient-render、签名有限�
 `run.py` 在数据库探测、迁移、seed 和应用启动之前保存 sources.json 与 compatibility-preflight.json。前置缺口保存失败 result.json，failed_stage=compatibility_preflight；安装状态为 not_started，native_core_installation_admission=false。只有完整真实 gate 成功才记录相应成功字段、Core release/composition 指纹及断言。
 
 公开只上传 sources.json、result.json、compatibility-preflight.json。原始日志、令牌、证书私钥、fixture.json、凭据、spool 和 SQL 快照保持私有。静态 inventory 齐备仍只是必要条件；真实正向全链必须来自 README 规定的 Actions。
+
+## 已取得的真实 Machine 结果
+
+Node `7c9cd91e8ca4b0bb9ecfa571872c83d384480bee` 与上述固定 Core 的 Actions
+`39534639986` 已完成完整 Machine gate。公开 artifact `12316279421` 的 result.json
+记录真实 native 安装/激活、Provider mTLS、VLESS/VMess、canonical admin operations、
+REST 全阻断时的 WS 配置、503 重连、successor 设备事实、跨 Machine 隔离、成员撤回、
+重启用、token 轮换旧凭据拒绝及新凭据恢复。六个原批次实际重放，SQL 唯一行仍为六个；
+runner 校验原 payload、授权 period、冻结 entry 和 settled 状态。
+
+Machine 端口更新曾暴露 Node mailbox 的实际表示变化：`NodeSpecFromPanel` 创建的
+空数组经 `cloneNodeSpec` 的 append-to-nil 变成 null，使仅端口变化的严格 JSON 比较失败，
+转入被夹具阻断的完整 REST 授权路径。现在用 make/copy 保留空数组与 nil 的区别；
+真实 owner 为 `MachineSocket -> TranslateTXBoardEvent -> NodeMailbox.Apply/Drain ->
+Service.handleWSEvent -> reloadNativeWSPort`。mailbox 表示回归和 Service 的真实 mailbox
+交付回归已纳入该候选 Go/race；授权、有限租约和 REST 阻断断言均保留。
+
+中间候选 `b239e8b6` 的 Actions `39534451726` 已通过端口更新，但在重新启用节点时
+因 12 秒新监听等待超时失败。该失败保留；公开证据不足以确定其原因，不能用后续通过
+声称该超时已被单独定位。后续候选的通过不抹除这条历史结果。
+
+同一 Node `7c9cd91e` 的后续完整 Actions `39535513954` 中，Machine 在 token
+轮换后等待原 Orchestrator 返回的 10 秒断言失败，artifact `12317855239`。
+这次端口更新、重启用和轮换操作已执行，但旧 token 终止 join、旧 token 重启拒绝及
+最后恢复未执行通过。不能仅引用前一轮成功来宣布该候选稳定通过。
+
+源码检查确认 TXBoard HTTP 请求没有绑定调用者 context，Provider Resolve 还使用
+Background；Service 退出时却会等待授权刷新 worker，Machine 的同步发现也会等待
+原 HTTP 超时。这是明确的取消传播缺口，但公开失败结果尚不能确定它就是本次
+超时的具体等待点。后续修复与固定白名单失败诊断必须由新候选 Actions 重新验证。
+
+本 gate 不证明独立完整财务对账、生产 PKI 或物理主机部署；相应字段继续为 false。
+Node 后续文档提交、main 镜像发布和 Core 采用应另记实际提交，不继承此处的精确 SHA。

@@ -15,6 +15,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -69,6 +71,103 @@ type machineCoreConfigObservation struct {
 type machineCoreObservedControlPlane struct {
 	machineControlPlane
 	observation *machineCoreConfigObservation
+}
+
+// Preserve the native context extension while decorating only socket callbacks.
+func (o *machineCoreObservedControlPlane) GetMachineNodesContext(ctx context.Context) (*machineDiscovery, error) {
+	return machineNodesContext(ctx, o.machineControlPlane)
+}
+func (o *machineCoreObservedControlPlane) HandshakeContext(ctx context.Context) (*machineHandshake, error) {
+	return machineHandshakeContext(ctx, o.machineControlPlane)
+}
+func (o *machineCoreObservedControlPlane) ReportMachineStatusContext(ctx context.Context, cpu float64, mem, swap, disk [2]uint64, netIn, netOut float64, status *machineRuntimeStatus) error {
+	if native, ok := o.machineControlPlane.(machineContextControlPlane); ok {
+		return native.ReportMachineStatusContext(ctx, cpu, mem, swap, disk, netIn, netOut, status)
+	}
+	return o.machineControlPlane.ReportMachineStatus(cpu, mem, swap, disk, netIn, netOut, status)
+}
+
+// Raw stacks remain private; only these reviewed owner labels reach evidence.
+func machineCoreWaitChains() []string {
+	labels := []struct{ needle, label string }{
+		{"internal/machine.(*Orchestrator).stopAll(", "machine_children_join"},
+		{"internal/machine.(*Orchestrator).rediscover(", "machine_discovery"},
+		{"internal/machine.(*Orchestrator).startNode(", "machine_child_start"},
+		{"internal/machine.(*Orchestrator).reportMachineStatusContext(", "machine_status"},
+		{"internal/service.(*Service).Run(", "service_run"},
+		{"internal/service.(*Service).closeAuthorization(", "authorization_join"},
+		{"internal/service.(*Service).requestAuthorizationSnapshot.func1(", "authorization_worker"},
+		{"internal/service.(*Service).closeNativeUsage(", "native_usage_close"},
+		{"internal/txboard.(*Client).AuthorizedUsersSnapshotContext(", "core_users_read"},
+		{"internal/txboard.(*Client).requestContext(", "core_http"},
+		{"internal/credentialdeliveryclient.(*Client).Resolve(", "provider_resolve"},
+		{"internal/txboard.(*Socket).connect(", "shared_ws_connect"},
+		{"internal/kernel/txnode.(*Kernel).Stop(", "kernel_stop"},
+		{"sync.(*WaitGroup).Wait(", "worker_wait"},
+	}
+	buffer := make([]byte, 1<<20)
+	stack := buffer[:runtime.Stack(buffer, true)]
+	chains := map[string]bool{}
+	for _, goroutine := range strings.Split(string(stack), "\n\n") {
+		var chain []string
+		for _, line := range strings.Split(goroutine, "\n") {
+			for _, label := range labels {
+				if strings.Contains(line, label.needle) && len(chain) < 12 {
+					chain = append(chain, label.label)
+				}
+			}
+		}
+		if len(chain) > 0 {
+			chains[strings.Join(chain, ">")] = true
+		}
+	}
+	result := make([]string, 0, len(chains))
+	for chain := range chains {
+		result = append(result, chain)
+	}
+	sort.Strings(result)
+	if len(result) > 16 {
+		result = result[:16]
+	}
+	return result
+}
+
+func machineCoreChildren(o *Orchestrator) []<-chan struct{} {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	children := make([]<-chan struct{}, 0, len(o.nodes))
+	for _, child := range o.nodes {
+		children = append(children, child.done)
+	}
+	return children
+}
+
+func machineCoreShutdownDiagnostic(t *testing.T, o *Orchestrator, children []<-chan struct{}, targetPort, siblingPort int) {
+	t.Helper()
+	o.mu.Lock()
+	terminal := o.terminalErr
+	cancelled := o.runCtx != nil && o.runCtx.Err() != nil
+	o.mu.Unlock()
+	denial, typed := controlerror.AsAuthorityDenial(terminal)
+	done := 0
+	for _, child := range children {
+		select {
+		case <-child:
+			done++
+		default:
+		}
+	}
+	socket := o.currentWS()
+	data := map[string]any{"schema": "txnode-machine-shutdown-diagnostic/v1", "stage": "old-rejected", "code": "machine_join_timeout",
+		"terminal_cause_observed": terminal != nil, "terminal_machine_denial": typed && denial.Scope == controlerror.MachineScope,
+		"context_cancelled": cancelled, "tracked_children": len(children), "completed_children": done,
+		"shared_ws_connected": socket != nil && socket.IsConnected(), "target_listener_open": machineCoreListening(targetPort),
+		"sibling_listener_open": machineCoreListening(siblingPort), "wait_chains": machineCoreWaitChains()}
+	body, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal("fixed shutdown diagnostic encoding failed")
+	}
+	t.Logf("NATIVE_MACHINE_SHUTDOWN_DIAGNOSTIC %s", body)
 }
 
 func (o *machineCoreObservedControlPlane) NewMachineSocket(url, token string, machineID int, ws config.WSConfig, kernel config.KernelConfig, onEvent func(machineEvent), onStatus func(bool)) machineSocket {
@@ -289,6 +388,7 @@ func TestNativeCoreMachineLive(t *testing.T) {
 	var replacement struct {
 		Token string `json:"token"`
 	}
+	shutdownChildren := machineCoreChildren(orchestrator)
 	machineCoreBarrierResult(t, directory, "reenabled", map[string]any{"removed_replayed": removed, "fresh_listener": true, "actual_streams": true}, &replacement)
 	select {
 	case e := <-done:
@@ -298,6 +398,7 @@ func TestNativeCoreMachineLive(t *testing.T) {
 		}
 		stopped = true
 	case <-time.After(10 * time.Second):
+		machineCoreShutdownDiagnostic(t, orchestrator, shutdownChildren, fixture.NewPort, fixture.Nodes[1].Port)
 		t.Fatal("authenticated machine rejection failed to join children")
 	}
 	machineCoreClosed(t, stream1, 2*time.Second)

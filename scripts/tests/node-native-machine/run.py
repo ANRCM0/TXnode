@@ -109,6 +109,34 @@ def failure_summary(category):
                 config_diagnostic['config_rest_held'] = any(event['kind'] == 'rest-held' and event['path'] == '/txapi/node/v1/config' for event in events)
                 config_diagnostic['users_rest_held'] = any(event['kind'] == 'rest-held' and event['path'] == '/txapi/node/v1/users' for event in events)
                 diagnostics['configuration'] = config_diagnostic
+        shutdown_booleans = {'terminal_cause_observed', 'terminal_machine_denial', 'context_cancelled',
+                             'shared_ws_connected', 'target_listener_open', 'sibling_listener_open'}
+        shutdown_fields = shutdown_booleans | {'schema', 'stage', 'code', 'tracked_children', 'completed_children', 'wait_chains'}
+        wait_labels = {'machine_children_join', 'machine_discovery', 'machine_child_start', 'machine_status',
+                       'service_run', 'authorization_join', 'authorization_worker', 'native_usage_close',
+                       'core_users_read', 'core_http', 'provider_resolve', 'shared_ws_connect', 'kernel_stop', 'worker_wait'}
+        for line in text.splitlines():
+            marker = 'NATIVE_MACHINE_SHUTDOWN_DIAGNOSTIC '
+            if marker not in line:continue
+            encoded = line.split(marker, 1)[1]
+            if len(encoded) > 4096:continue
+            try:shutdown = json.loads(encoded)
+            except (ValueError, TypeError):continue
+            if (isinstance(shutdown, dict) and set(shutdown) == shutdown_fields
+                    and shutdown['schema'] == 'txnode-machine-shutdown-diagnostic/v1'
+                    and shutdown['stage'] == 'old-rejected' and shutdown['code'] == 'machine_join_timeout'
+                    and all(type(shutdown[field]) is bool for field in shutdown_booleans)
+                    and type(shutdown['tracked_children']) is int and 0 <= shutdown['tracked_children'] <= 2
+                    and type(shutdown['completed_children']) is int and 0 <= shutdown['completed_children'] <= shutdown['tracked_children']
+                    and isinstance(shutdown['wait_chains'], list) and len(shutdown['wait_chains']) <= 16
+                    and all(isinstance(chain, str) and 1 <= len(chain.split('>')) <= 12
+                            and all(label in wait_labels for label in chain.split('>')) for chain in shutdown['wait_chains'])):
+                rotation_time = rotation.get('completed_monotonic_ns', 0)
+                shutdown['completed_http_denial_observed'] = any(
+                    event['kind'] == 'http' and event['status'] == 401 and event.get('error_code') == 'NODE_UNAUTHORIZED'
+                    and event.get('machine_id') == str(fixture['machine_id']) and event['monotonic_ns'] >= rotation_time
+                    for event in proxy.event_snapshot())
+                diagnostics['shutdown'] = shutdown
         source = (node / 'internal/machine/native_core_machine_live_test.go').read_text().splitlines()
         for match in re.finditer(r'native_core_machine_live_test\.go:([0-9]+):', text):
             line = int(match.group(1))

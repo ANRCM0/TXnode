@@ -153,8 +153,8 @@ S0 完成后先采集基线；S1/S2 每完成一个切片补相同口径结果�
 
 与源码开发分别记账，发布阻塞不妨碍继续完成 S0-S4。
 
-- 核对 GHCR 现有包的关联仓库、继承权限、Manage Actions access、组织策略和工作流 `packages: write`。现有工作流已声明 `packages: write`，不能仅重复加这一项就认定修复。
-- 优先使 `ANRCM0/TXnode` 的工作流获得现有包的正确写入权限，继续使用 `GITHUB_TOKEN`。若需要包管理员修改设置，提供具体设置项及失败证据；不把仓库提交或 workflow 编辑冒充包授权已生效。
+- 2026-10-21 经用户明确选择独立发布，当前目标为 `ghcr.io/anrcm0/txnode`，由 `ANRCM0/TXnode` 的 `GITHUB_TOKEN` 创建和发布。历史 Core 包的关联和权限问题保留证据，不再作为独立 Node 交付前提。
+- 工作流 `packages: write` 和源码中的新路径不证明发布成功；以实际 registry push、不可变摘要和按摘要运行的 artifact 为准。历史包若另行恢复发布，再单独核对其 Manage Actions access 等包侧授权。
 - 重试选定、不可变提交的发布，核对 amd64/arm64 manifest、源码标签、镜像摘要和 `dev` 提升。随后按摘要拉取并执行实际镜像冒烟，而非只验证本地构建镜像。
 - 候选版本必须对发布提交跑完整互通、原生稳定性及真实 Core C2。正式打标签前评审 Node 版本号和变更说明，使用新标签；本方案本身不创建标签。
 - Core 采用通过其单独的 Node pin 更新评审及跨组件验收完成，记录 Node SHA、Core SHA、renderer 指纹和镜像摘要。Node 合并不等于 Core 已采用。

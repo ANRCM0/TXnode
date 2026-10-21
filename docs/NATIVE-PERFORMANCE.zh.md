@@ -91,6 +91,38 @@ CPU 方法版本为 `process-cputime-ns-v1`，报告 schema 为 `txnode-native-p
 
 构建结果保留两侧相同参数的业务二进制体积。镜像测量先解析同一 Alpine 3.20 的不可变 RepoDigest，使用同一 runtime Dockerfile、ca-certificates/tzdata 与入口包装已构建的两份业务二进制；真实执行 docker build 和 inspect，保留 recipe、build.log、image ID 与未压缩 Size。此项比较相同 runtime 封装，不能代替两版历史 Dockerfile、注册表压缩传输体积或发布镜像验收。旧 Xray 服务端、其他协议、跨地域实网、TLS 与正式 Core 结算未纳入 A/B 工具。事件内部路径、时间戳和事件数量允许不同并原样记录，物理字节投影通过不证明这些内部边界完全相同。不能用本回环结果推广整个双内核版本或生产场景。
 
+## 独立持久化诊断
+
+`.github/workflows/native-persistence-diagnostics.yml` 和主 CI 的
+`persistence_diagnostics=true` 入口执行单独的 `--persistence-diagnostics-only`。
+固定五组、2 秒预热、10 秒计量、4 线程，只测 events/download；旧/新两侧分别交替
+observer OFF/ON，均不启用 CPU profiler。正式 A/B 仍清除继承的诊断环境变量，
+其 120 份样本、比较阈值及持久化边界不变。
+
+诊断的 `persistence_samples`、`observer_pairs` 与正式 `samples`、`comparisons` 分开。
+`collection_complete` 仅代表证据采集完成；`accepted` 始终为 false，不写入正式 S3
+通过结果。只有一对 OFF/ON 都完成无损字节核对时才提供限定范围的比率；失败后的
+原始流量仍保留，不能作为成功事件计量的性能或 observer 开销比率。
+
+启用 observer 时只保留固定阶段统计、最大值关联的 bucket/sequence 和 64 点环。
+环在首次观察到 FirstGap 时冻结；没有新增周期 goroutine 或逐事件 I/O。阶段 wall 时间
+包含调度及 observer 开销，不是独立 syscall/disk 延迟；meter 与 observer 的时钟起点不同，
+不能直接相减。worker_gap 从一次 ACK 后开始，不能覆盖最初建库和首次 claim 的等待。
+
+精确 Node `7c9cd91e` 的 Actions `39534639986`、artifact `12316907973` 已采集
+20 份诊断，但全部账量不完整，10 对均无可比较比率。OFF/ON 都复现失败，说明
+CPU profiler 和启用 observer 不是失败的必要条件，不能据此计算 observer 性能影响。
+19 份为 meter `CAPACITY_REACHED` 且 store healthy；另一份候选 OFF 触发原有文件数
+上限：4078 个现存文件加本次 4 文件保留量超过 `4096 - 16 = 4080`，当时约
+372.6 MB，未达 1 GiB 字节上限。
+
+候选 ON 的四组首次观察缺口与同一 claim 的 head_publish wall 峰值
+52.703/20.591/18.442/23.567 ms 重合，另一组与 record_file_sync_wall 14.530 ms
+重合。它们定位观察窗口，不能区分 rename、fsync、调度、GC 或编码的因果贡献。
+旧侧有三组在第一次 bucket ACK 前填满 1152 个事件容量；初始 worker 等待未被
+after-ACK worker_gap 覆盖，也不能据较小的已采集阶段峰值排除启动/调度停顿。
+本轮没有为诊断而扩大队列/文件上限、合并同步步骤或提前 ACK。
+
 ## 判定与保留物
 
 固定初始调查阈值为候选吞吐不低于旧基线的 95%，CPU/GiB 不高于 105%。5 组中任一侧吞吐或 CPU 的变异系数超过 10% 则为未决；时钟分辨率不足、缺少样本或模式失败则为未完成。越过阈值要求复现和说明，不自动断言根因。

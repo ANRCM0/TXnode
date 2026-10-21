@@ -111,6 +111,10 @@ func (c *Client) WSSURL(path string) (string, error) {
 	return u.String(), nil
 }
 func (c *Client) request(method, path string, body any, etag string) (*http.Response, error) {
+	return c.requestContext(context.Background(), method, path, body, etag)
+}
+
+func (c *Client) requestContext(ctx context.Context, method, path string, body any, etag string) (*http.Response, error) {
 	var reader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -119,7 +123,7 @@ func (c *Client) request(method, path string, body any, etag string) (*http.Resp
 		}
 		reader = bytes.NewReader(b)
 	}
-	req, err := http.NewRequest(method, c.baseURL+prefix+path, reader)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+prefix+path, reader)
 	if err != nil {
 		return nil, errors.New("invalid TXBoard request")
 	}
@@ -327,7 +331,11 @@ func decode(resp *http.Response, dest any, allowed ...int) error {
 	return nil
 }
 func (c *Client) Handshake() (*Handshake, error) {
-	resp, err := c.request("POST", "/handshake", nil, "")
+	return c.HandshakeContext(context.Background())
+}
+
+func (c *Client) HandshakeContext(ctx context.Context) (*Handshake, error) {
+	resp, err := c.requestContext(ctx, "POST", "/handshake", nil, "")
 	if err != nil {
 		return nil, err
 	}
@@ -345,20 +353,32 @@ func (c *Client) Handshake() (*Handshake, error) {
 }
 
 // GetConfig preserves the original nil=304 transport interface.
-func (c *Client) GetConfig() (*panel.NodeConfig, error) { return c.readConfig(false) }
+func (c *Client) GetConfig() (*panel.NodeConfig, error) {
+	return c.GetConfigContext(context.Background())
+}
+
+func (c *Client) GetConfigContext(ctx context.Context) (*panel.NodeConfig, error) {
+	return c.readConfig(ctx, false)
+}
 
 // ConfigSnapshot returns an independent complete desired body, including on304.
 // An uncached304 forces one unconditional request and then fails explicitly.
-func (c *Client) ConfigSnapshot() (*panel.NodeConfig, error) { return c.readConfig(true) }
+func (c *Client) ConfigSnapshot() (*panel.NodeConfig, error) {
+	return c.ConfigSnapshotContext(context.Background())
+}
 
-func (c *Client) readConfig(complete bool) (*panel.NodeConfig, error) {
+func (c *Client) ConfigSnapshotContext(ctx context.Context) (*panel.NodeConfig, error) {
+	return c.readConfig(ctx, true)
+}
+
+func (c *Client) readConfig(ctx context.Context, complete bool) (*panel.NodeConfig, error) {
 	c.configReadMu.Lock()
 	defer c.configReadMu.Unlock()
 	for attempt := 0; attempt < 2; attempt++ {
 		c.mu.Lock()
 		etag, generation := c.configETag, c.configGeneration
 		c.mu.Unlock()
-		resp, err := c.request("GET", "/config", nil, etag)
+		resp, err := c.requestContext(ctx, "GET", "/config", nil, etag)
 		if err != nil {
 			return nil, err
 		}
@@ -427,6 +447,10 @@ func cloneConfigSnapshot(cfg *panel.NodeConfig) (*panel.NodeConfig, error) {
 // AuthorizedUsersSnapshot fetches a complete signed users snapshot. It never
 // uses ETag/304 because a cached unsigned body cannot renew finite authority.
 func (c *Client) AuthorizedUsersSnapshot(m *authorization.Manager) ([]panel.User, *authorization.Snapshot, error) {
+	return c.AuthorizedUsersSnapshotContext(context.Background(), m)
+}
+
+func (c *Client) AuthorizedUsersSnapshotContext(ctx context.Context, m *authorization.Manager) ([]panel.User, *authorization.Snapshot, error) {
 	if m == nil {
 		return nil, nil, errors.New("NODE_AUTHORIZATION_MANAGER_REQUIRED")
 	}
@@ -437,7 +461,7 @@ func (c *Client) AuthorizedUsersSnapshot(m *authorization.Manager) ([]panel.User
 	if err != nil || endpoint.Scheme != "https" || endpoint.User != nil {
 		return nil, nil, errors.New("NODE_AUTHORIZATION_HTTPS_REQUIRED")
 	}
-	resp, err := c.request("GET", "/users", nil, "")
+	resp, err := c.requestContext(ctx, "GET", "/users", nil, "")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -487,7 +511,7 @@ func (c *Client) AuthorizedUsersSnapshot(m *authorization.Manager) ([]panel.User
 				return nil, nil, err
 			}
 			defer delivery.Close()
-			users, err = delivery.Resolve(context.Background(), credentialdelivery.Envelope{Payload: envelope.Payload, Signature: envelope.Signature}, grant)
+			users, err = delivery.Resolve(ctx, credentialdelivery.Envelope{Payload: envelope.Payload, Signature: envelope.Signature}, grant)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -506,7 +530,11 @@ func cloneUsersSnapshot(users []panel.User) []panel.User {
 	return cloned
 }
 func (c *Client) GetMachineNodes() (*NodeList, error) {
-	resp, err := c.request("GET", "/machine/nodes", nil, "")
+	return c.GetMachineNodesContext(context.Background())
+}
+
+func (c *Client) GetMachineNodesContext(ctx context.Context) (*NodeList, error) {
+	resp, err := c.requestContext(ctx, "GET", "/machine/nodes", nil, "")
 	if err != nil {
 		return nil, err
 	}
@@ -567,8 +595,12 @@ func (c *Client) PostReport(body map[string]any) error {
 	return nil
 }
 func (c *Client) ReportMachineStatus(body map[string]any) error {
+	return c.ReportMachineStatusContext(context.Background(), body)
+}
+
+func (c *Client) ReportMachineStatusContext(ctx context.Context, body map[string]any) error {
 	body["protocol_version"] = 1
-	resp, err := c.request("POST", "/machine/status", body, "")
+	resp, err := c.requestContext(ctx, "POST", "/machine/status", body, "")
 	if err != nil {
 		return err
 	}

@@ -21,10 +21,14 @@ full 用于 nightly/dispatch/tag；标签发布依赖 full 成功。源码中已
 quick 选择其中 8 个顶层。新增 `TestInteropXrayVMessNativeOutbound` 使用本仓库
 outbound 连接固定 Xray 服务端，覆盖 AES-GCM、ChaCha20、none 的同流多次消息及
 跨帧请求；它与 Xray 客户端连接本仓库服务端的既有测试分别验收。
-最终候选 `235ea2f` 的 Actions `39499950483` 已通过上述 quick/full 矩阵，
-完整 Go/race 也通过独立 wire、并发及 Service VLESS/VMess 续期回归；该源码树
-已随 PR #3 合并为 `16f69b5`。后续修复候选仍须重新验收；S3 与 Machine 的
-未通过记录见 `OUTSTANDING-WORK.zh.md`。以下保留发现与修复过程中的历史失败。
+候选 `7c9cd91e8ca4b0bb9ecfa571872c83d384480bee` 的 Actions `39535513954`
+已通过 quick 8 顶层/5 子项和 full 37 顶层/27 子项；另两项不适用不计通过。
+full artifact 为 `12316734483`。完整 Go/race 也通过独立 wire、并发及 Service VLESS/VMess
+续期回归。此前完整互通暴露的 Naive h2 取消 watcher 竞争已由 `copyPipe` 在返回前
+等待清理完成修复，并由确定性生命周期回归和真实第三方客户端门禁验证。
+本结果只对应该 SHA；后续源码仍须重新验收。S3 与 Machine 的实际状态见
+`OUTSTANDING-WORK.zh.md`。历史候选 `235ea2f` 已随 PR #3 合并为 `16f69b5`，
+以下保留发现与修复过程中的历史失败。
 `c2823dd` 的新 Service VMess 测试在首次 echo 即失败，尚未进入续期；随后源码
 修复客户端的 salted command key、独立长度 nonce、双向长度认证和 tag/padding
 编排，并补充真实 TCP 的 12 种 cipher/framing 组合。新增用例及修复须由新提交
