@@ -21,6 +21,10 @@ full 用于 nightly/dispatch/tag；标签发布依赖 full 成功。源码中已
 quick 选择其中 8 个顶层。新增 `TestInteropXrayVMessNativeOutbound` 使用本仓库
 outbound 连接固定 Xray 服务端，覆盖 AES-GCM、ChaCha20、none 的同流多次消息及
 跨帧请求；它与 Xray 客户端连接本仓库服务端的既有测试分别验收。
+最终候选 `235ea2f` 的 Actions `39499950483` 已通过上述 quick/full 矩阵，
+完整 Go/race 也通过独立 wire、并发及 Service VLESS/VMess 续期回归；该源码树
+已随 PR #3 合并为 `16f69b5`。后续修复候选仍须重新验收；S3 与 Machine 的
+未通过记录见 `OUTSTANDING-WORK.zh.md`。以下保留发现与修复过程中的历史失败。
 `c2823dd` 的新 Service VMess 测试在首次 echo 即失败，尚未进入续期；随后源码
 修复客户端的 salted command key、独立长度 nonce、双向长度认证和 tag/padding
 编排，并补充真实 TCP 的 12 种 cipher/framing 组合。新增用例及修复须由新提交
@@ -30,7 +34,7 @@ Actions 取得结果，不能将同仓库两端互通当作第三方兼容证明
 body 再写响应；VMess authenticated length 还须在 Seal 前减去长度 AEAD 的
 16 字节开销、Open 后加回。`e9de82c` 修正夹具，`f9d74f2` 同步校准两端 wire
 值、加入独立 raw AEAD 向量与共享 Proxy 并发回归，后者的 PR quick 已通过。
-完整矩阵仍须最终提交重验。反向用例只声明三种 cipher 的普通 chunk framing；
+该完整矩阵已在 `235ea2f` 重验通过。反向用例只声明三种 cipher 的普通 chunk framing；
 同仓库 12 组合中的 `none/padded` 和 `zero` 不属于已证明的固定 Xray 兼容范围。
 
 以下命令供 GitHub Actions 环境使用，功能和网络验收继续遵守 README 的 Actions-only 约定：

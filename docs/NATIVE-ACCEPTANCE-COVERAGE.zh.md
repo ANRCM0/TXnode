@@ -4,6 +4,13 @@
 静态检查通过、历史 CI 通过均不能证明当前提交已经通过功能验收；功能、race、网络和
 互操作验证应在 GitHub Actions 对应提交运行，并记录实际 SHA、运行链接及结果。
 
+最终候选 `235ea2f` 的 Actions `39499950483` 已通过 Go/race、严格互通、
+七项故障、Core C2、镜像冒烟及 30 分钟负载，包含下表普通授权续期、独立 VMess
+wire 与反向互通等回归。其正式 A/B 与完整 Machine 未通过，源码已随 PR #3 合并。
+下表的“待新提交”保留各测试引入时的边界，后续修复候选以新提交结果为准。
+本轮新增日志 envelope 逐字节等价、连接身份修正与 Machine canonical 操作回归，
+分别由 Go/race、`test_native_cpu.py` 和 `test_preflight.py` 在 Actions 执行。
+
 ## 已有测试源码与断言边界
 
 | 范围 | 测试入口 | 已编写的断言 | 不能据此推出 |

@@ -4,7 +4,37 @@
 [NEXT-DEVELOPMENT.zh.md](NEXT-DEVELOPMENT.zh.md)，严格互通入口见
 [INTEROP.md](INTEROP.md)。历史 `a6d0e96` 的“29 通过、6 跳过”不代表当前候选。
 
-## 当前候选状态
+## 当前工作与合并记录
+
+2026-10-21：S0-S4 开发分支已通过 PR #3 squash 合并，合并提交为
+`16f69b5c70a46d0f59594795668a0975a28785cf`，源码树与最终候选 `235ea2f`
+一致。后续 PR #4 将 main 更新为 `8ec18784` 并采用 Core `d2e70b8c`。
+以下完成状态只对应其记录的 SHA，不跨提交继承验收。
+
+| 最终候选 `235ea2f` 的实际结果 | 状态 |
+|---|---|
+| Go/race、runtime stability、七项故障、Core C2、镜像冒烟 | 通过 |
+| 严格 quick/full | quick 8 顶层/5 子项；full 37 顶层/27 子项通过，另两项不适用 |
+| 30 分钟持续负载 | 1810.79 秒、39 轮、最高 1000 会话，业务错误为零，原资源预算通过 |
+| 正式五组 A/B | 109/120 完整；双方各五份事件下载 CAPACITY_REACHED，旧侧一份 usage_v2/long EOF；四项噪声未决 |
+| S3 汇总 | `full_S3_accepted=false`，Actions `39499950483` 整体失败 |
+| 完整 Machine | 旧固定 Core preflight 阻塞，后续链路未执行 |
+
+合并后 `16f69b5` 的 CI `39526625462` 中 Go/quick/C2/镜像冒烟通过，
+历史 GHCR 包推送缺少包侧写权限；`8ec18784` 的 CI `39526677523` 则在连接管理测试
+出现 `still-live` EOF，后续发布跳过。修复分支 `fix/native-acceptance-followups`
+为两条真实连接先建立确定身份，并拒绝把读取超时当作关闭；日志 envelope 复用
+canonical payload，所有持久化同步和 ACK 边界保持原值。独立诊断可观察各阶段
+wall 时间与有界 backlog；正式样本禁用 hook，诊断结果不计入性能门禁。
+上述新修复仍须取得新候选的 Actions 结果，不能据静态检查声称容量问题已解决。
+
+Machine 夹具迁移至现有 canonical admin operations，保留配置版本、幂等键及
+凭据读取权限，新增真实安装模块回执检查。Core `ws-server` 准入修复在独立
+PR #291 验收；固定 Core 的采纳与完整 Machine 运行结果另行记录。
+本仓库改用独立镜像包 `ghcr.io/anrcm0/txnode`，旧包权限不再作为发布前提；
+实际创建、双架构发布及摘要验证的状态见 `RELEASE-BLOCKERS.zh.md`。
+
+## 历史开发与验收记录
 
 2026-10-21：分支 `feat/interop-acceptance-gates` 已编写以下 S0-S4 实现与验收入口。
 最近已取得功能结果的候选为 `454607f4ca999431bcb0af6b2bcf4a5def0eddaf`，
