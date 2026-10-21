@@ -1,10 +1,10 @@
 # 固定 Core 基线的 Machine 兼容门禁
 
-Node 的固定 Core 基线以 `compatibility/core.v1.json` 为准，当前为 `ANRCM0/TXBoard@d2e70b8c3896b8d9808595886cb544d133f179ee`。这里说明源码合约、真实 owner 调用链和待验收条件；源码检查、语法检查、编译均不构成完整 Machine 功能验收。
+Node 的固定 Core 基线以 `compatibility/core.v1.json` 为准，当前候选为 `ANRCM0/TXBoard@553641029c0094480cd71105cb7b0a7efe9a9a8a`（Core PR #291）。这里说明源码合约、真实 owner 调用链和待验收条件；源码检查、语法检查、编译均不构成完整 Machine 功能验收。
 
 ## 从旧管理路径迁移到正式操作
 
-该 Core pin 仍未准入原夹具使用的 `ws-server` 命令和四个 raw 管理 HTTP 路径。但其已有正式的 Core browser 操作及 owner，Node 夹具现在使用它们，不要求重新开放未版本化的旧管理入口。
+旧 pin `d2e70b8c` 未准入原夹具使用的 `ws-server` 命令和四个 raw 管理 HTTP 路径。新候选补上现有原生 WS worker 的命令准入；管理操作沿用正式 Core browser owner，Node 夹具不要求重新开放未版本化的旧管理入口。
 
 | 原夹具调用 | 当前正式操作与 owner |
 | --- | --- |
@@ -12,7 +12,7 @@ Node 的固定 Core 基线以 `compatibility/core.v1.json` 为准，当前为 `A
 | PUT network-nodes/{id} | `network.nodes.configuration.replace` → `replaceConfigured`，提交完整 configuration_json、expected_revision 和 UUID 幂等键 |
 | PATCH network-nodes/{id} | `network.nodes.patch` → `patch`，保留单节点启停、成员关系通知和兄弟节点隔离 |
 | POST network-machines/{id}/token/rotate 并直接取 token | `network.machines.token.rotate` → `nativeRotateToken`，回执只含 ok；另用 `network.machines.credentials.get` → `nativeCredentials` 重新鉴权后取得 token |
-| CLI ws-server | `NodeWebSocketServer` → 真实 `NodeWorker` 已存在；该 pin 的 `NativeRuntimeAdmission.COMMANDS` 仍未含 `ws-server`，因此完整 gate 仍应失败 |
+| CLI ws-server | `NodeWebSocketServer` → 真实 `NodeWorker`，Core PR #291 将其加入 `NativeRuntimeAdmission.COMMANDS`；仍要求原生安装已激活且 worker epoch 当前 |
 
 操作通过实际 `POST /gateway/v1/core/admin/operations/{operation}` 调用，原管理员 Bearer、同源 Origin、X-Core-Admin-Path、明确的 `tx_internal_actor_grant`、严格 input schema、写操作 UUID 幂等键均保留。配置更新重放同一输入和键，必须取得同一结果；token 轮换重放同一键后重新读取凭据，必须保持同一新 token。不能把 token 放入轮换回执。
 
@@ -23,11 +23,11 @@ Node 的固定 Core 基线以 `compatibility/core.v1.json` 为准，当前为 `A
 - `api/app/Http/Controllers/Txapi/Admin/NetworkMachineAdminController.php` 的 nativeRotateToken 不返回凭据；nativeCredentials 每次检查当前安装权威。
 - `api/tests/Feature/Txapi/NativeNetworkBrowserTest.php` 与 `NativeNodeConfigurationTest.php` 覆盖正式操作、当前授权、凭据独立读取、无 token 回执和过期 revision 冲突。它们的存在不是 Node 完整 Machine 验收结果。
 
-## 剩余 Core 准入条件
+## Core 准入与验收条件
 
-`api/app/Listeners/EnforceInstallationAuthority.php` 在原生安装下先检查真实 native/open，再对非准备命令执行封闭的 COMMANDS 检查。`ws-server` 不在准备命令列表，也未列入 COMMANDS；只切换安装环境变量无法启动它。
+`api/app/Listeners/EnforceInstallationAuthority.php` 在原生安装下先检查真实 native/open，再对非准备命令执行封闭的 COMMANDS 检查。新候选把 `ws-server` 加入正式运行库存，未放入准备命令列表；未激活或 worker epoch 过期仍拒绝。
 
-Core 独立适配应在既有安装权威下准入真实 ws-server，并在它自己的 Actions 验证命令 admission、未激活安装拒绝、有限原生授权及 Workerman 身份/成员隔离。Node 不修改 Core 应用、库存或 pin 来绕开门禁。只有 Core 独立变更取得精确 SHA 验收，再经单独兼容采用后，Node 才能重跑完整 gate。
+Core 独立 PR #291 增加真实命令 listener 的未激活拒绝、激活成功及 stale worker 拒绝回归，并运行 API/MySQL、C2 和浏览器 Actions。Node PR #5 单独采用该精确候选，Node 夹具不修改 Core 应用或库存；整体合入前仍须取得 Core 自身与完整 Machine 的实际验收。
 
 真实 WS owner 已有：`NodeWebSocketServer -> NodeWorker -> NativeNodeWebSocket -> TxNodeAuth`。NodeWorker 通过 ServerObserver/NodeSyncService 的事务后事件重读当前配置与成员关系；旧 token 在每次 heartbeat/node-scoped event 及服务端同步时重新检查。NodeRegistry 的 successor 清理避免旧连接抹掉后继状态。源码 owner 存在仍需真实进程验收。
 
@@ -55,7 +55,7 @@ Provider trust、安装激活、购买履约、recipient-render、签名有限�
 
 `preflight.py` 检查真实 Core HEAD、API 源码状态、精确 inventory Git blob、ws-server command，以及五个正式操作的 HTTP admission、编译 owner 绑定、admin actor/permission、幂等模式和 browser surface。输出 `required_contracts` 逐项记录及编译合约 blob；不执行 PHP，不建立数据库或网络连接，始终 `runtime_verified=false`。
 
-当前 pin 在正式操作合约齐备时，剩余预期 gap 是 `CORE_WS_COMMAND_NOT_ADMITTED`。若操作、权限、绑定、surface 或源码发生不兼容变化仍应失败。`test_preflight.py` 为 Actions 保留这些回归；缺口检查不能改成 allow-failure 或 skip。
+新 pin 的六项必要合约应全部齐备；旧 `d2e70b8c` 的 `CORE_WS_COMMAND_NOT_ADMITTED` 仍由回归保留。若操作、权限、绑定、surface 或源码发生不兼容变化仍应失败。`test_preflight.py` 为 Actions 保留这些回归；缺口检查不能改成 allow-failure 或 skip。
 
 `run.py` 在数据库探测、迁移、seed 和应用启动之前保存 sources.json 与 compatibility-preflight.json。前置缺口保存失败 result.json，failed_stage=compatibility_preflight；安装状态为 not_started，native_core_installation_admission=false。只有完整真实 gate 成功才记录相应成功字段、Core release/composition 指纹及断言。
 
