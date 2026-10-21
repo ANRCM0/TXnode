@@ -12,6 +12,11 @@ on:
         required: false
         default: false
         type: boolean
+      persistence_diagnostics:
+        description: Run independent unprofiled persistence diagnostics without S3 acceptance
+        required: false
+        default: false
+        type: boolean
   schedule:
     # The interop matrix downloads pinned third-party clients; run it nightly
     # so an upstream release cannot silently break the data plane.
@@ -33,6 +38,13 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  persistence-diagnostics:
+    name: Independent persistence diagnostic collection
+    if: github.event_name == 'workflow_dispatch' && inputs.persistence_diagnostics
+    uses: ./.github/workflows/native-persistence-diagnostics.yml
+    with:
+      candidate: ${{ github.sha }}
+
   native-evidence:
     name: Native stability and performance evidence
     if: github.event_name == 'workflow_dispatch' && inputs.native_acceptance

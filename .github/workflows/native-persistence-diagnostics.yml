@@ -1,6 +1,12 @@
 name: Independent native persistence diagnostics
 
 on:
+  workflow_call:
+    inputs:
+      candidate:
+        description: Full immutable candidate commit SHA (40 lowercase hex characters)
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       candidate:
