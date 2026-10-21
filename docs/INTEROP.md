@@ -21,9 +21,10 @@ full 用于 nightly/dispatch/tag；标签发布依赖 full 成功。源码中已
 quick 选择其中 8 个顶层。新增 `TestInteropXrayVMessNativeOutbound` 使用本仓库
 outbound 连接固定 Xray 服务端，覆盖 AES-GCM、ChaCha20、none 的同流多次消息及
 跨帧请求；它与 Xray 客户端连接本仓库服务端的既有测试分别验收。
-候选 `7c9cd91e8ca4b0bb9ecfa571872c83d384480bee` 的 Actions `39535513954`
+候选 `e5e98291ba59c55b514b54793c6d46edcc461be4` 的 Actions `39538582760`
 已通过 quick 8 顶层/5 子项和 full 37 顶层/27 子项；另两项不适用不计通过。
-full artifact 为 `12316734483`。完整 Go/race 也通过独立 wire、并发及 Service VLESS/VMess
+full artifact 为 `12318408957`，summary 的状态为 `accepted-with-gaps`，明确保留两项
+不适用组合。完整 Go/race 也通过独立 wire、并发及 Service VLESS/VMess
 续期回归。此前完整互通暴露的 Naive h2 取消 watcher 竞争已由 `copyPipe` 在返回前
 等待清理完成修复，并由确定性生命周期回归和真实第三方客户端门禁验证。
 本结果只对应该 SHA；后续源码仍须重新验收。S3 与 Machine 的实际状态见

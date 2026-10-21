@@ -68,8 +68,9 @@ Machine 的 discovery、per-node prefetch、handshake 和 status 沿 native Cont
 HTTP 升级后继续由同一 context 关闭私有连接，覆盖等待 session.ready 及阻塞写入。
 取消本身不构造 AuthorityDenial；完成的原生 401/404 仍按原内容、身份及 scope 规则识别。
 
-这些取消传播修复须取得对应新提交的 Actions；不能借此把 `7c9cd91e` 的 Machine
-终止超时追认为已通过，也不承诺 OS fsync 能取消。
+这些取消传播修复已由 `e5e98291` 的 Actions `39538582760` 通过 Go/source guards
+及完整 Machine 验证；不能借此把 `7c9cd91e` 的 Machine 终止超时追认为已通过，
+也不承诺 OS fsync 能取消。
 
 ## 受限诊断
 

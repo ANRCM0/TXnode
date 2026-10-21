@@ -4,12 +4,22 @@
 静态检查通过、历史 CI 通过均不能证明当前提交已经通过功能验收；功能、race、网络和
 互操作验证应在 GitHub Actions 对应提交运行，并记录实际 SHA、运行链接及结果。
 
-当前运行时候选 `7c9cd91e8ca4b0bb9ecfa571872c83d384480bee` 的 Actions
+当前运行时候选 `e5e98291ba59c55b514b54793c6d46edcc461be4` 的 Actions
+`39538582760` 已通过 Go/source guards、runtime stability、严格 quick/full、
+七项故障、Core C2、镜像冒烟及完整 Machine。取消回归包含实际阻塞 Core/Provider、
+Machine owner 请求、升级后 WS ready 等待和父 context 活跃时的 Service 自身租约退出。
+完整 Machine 的原 10 秒 join、旧 token 拒绝、新 token 恢复与六批次 SQL 唯一 settled
+行核对通过，artifact `12318529666`。持续负载 1808.52358869 秒、37 次循环、四档
+会话达标且错误全零。正式 A/B 仅 119/120 measured：候选 60/60、旧基线 59/60，
+11 项比较达标，旧基线 events/download 一份账量不完整，最终 S3 仍为 false。
+
+历史运行时候选 `7c9cd91e8ca4b0bb9ecfa571872c83d384480bee` 的 Actions
 `39535513954` 已通过 Go/race、runtime stability、严格 quick/full 和七项故障。
 其同 SHA 的 Actions `39534639986` 已通过完整真实 Machine、Core C2 与镜像冒烟。
 后续完整运行 `39535513954` 的 Machine 在 token 轮换后的 10 秒终止等待失败；
 该失败与前一轮通过一并记录，不能将 Machine 认定为稳定通过。
-本表中的包级及 Service 测试均已纳入该候选的 Go/race；它们各自的断言边界继续有效。
+本表中的包级及 Service 测试均已纳入当前 `e5e98291` 的 Go/race；
+它们各自的断言边界继续有效，历史 `7c9cd91e` 不接受后加的取消测试。
 正式 S3、合并与注册表发布分别记录在 `OUTSTANDING-WORK.zh.md` 和
 `RELEASE-BLOCKERS.zh.md`，不能由测试源码或单一 job 的通过推导。
 
@@ -44,8 +54,8 @@
 | Machine mailbox 配置表示 | `internal/controlplane/mailbox_test.go`、`internal/service/native_config_reload_linux_test.go` | nil/空/非空配置在 Seed、Apply/Drain 后保留 JSON 表示；真实 Machine mailbox 交付端口更新，保持原签名 collector、兄弟流和 REST 阻断 | 当前候选 Go/race 已通过；未放宽仅端口变化的配置等价条件 |
 | relay 取消与 HTTP 生命周期 | `internal/dataplane/core/pipe_lifecycle_test.go`、严格 Naive h2 互通 | channel 控制 deadline watcher，copyPipe 返回前等待取消清理，禁止 handler 退役后的 deadline/close；第三方完整 Naive 链 | 当前候选 Go/race 和严格 full 已通过；不推导所有 net.Conn 实现的 deadline 都有有界耗时 |
 | 日志 canonical envelope | `internal/usagebucket/store_envelope_test.go` | BUCKET、全部控制类型、null 和转义字符的 envelope 与原 json.Marshal 逐字节相同，输入不变且 canonical decoder/digest 通过 | 当前候选 Go/race 已通过；编码优化不证明固定容量下全部事件性能样本无损 |
-| native 请求取消与 worker join | `internal/txboard/request_context_test.go`、`socket_test.go`、`internal/machine/context_test.go`、`internal/service/authorization_cancellation_linux_test.go` | 阻塞 Core/Provider 实际请求服从父 context、Service 自身租约终止取消刷新后 join、Machine 五种 owner 请求取消、升级后 WS ready 等待取消；原完成拒绝类型保留 | 后续源码新增，尚待新提交 Actions；不能据编译结果解释全部旧超时或证明磁盘同步可取消 |
-| 固定 Core machine 契约 | `internal/machine/native_core_machine_live_test.go`、`scripts/tests/node-native-machine/`，CI `core-machine` | 真实 Provider mTLS、native 安装/激活、账户/购买/履约、生产 Orchestrator、双 Node、共享 WS/503/后继心跳、设备事实、隔离、轮换与原使用量重放 | Node `7c9cd91e` 与 Core `5536410` 已在 Actions `39534639986` 完整通过，详见 `CORE-MACHINE-COMPATIBILITY.zh.md`；不证明独立完整财务对账、生产 PKI 或物理主机部署 |
+| native 请求取消与 worker join | `internal/txboard/request_context_test.go`、`socket_test.go`、`internal/machine/context_test.go`、`internal/service/authorization_cancellation_linux_test.go` | 阻塞 Core/Provider 实际请求服从父 context、Service 自身租约终止取消刷新后 join、Machine 五种 owner 请求取消、升级后 WS ready 等待取消；原完成拒绝类型保留 | `e5e98291` Go/source guards 和完整 Machine 已通过；不能解释全部旧超时或证明磁盘同步可取消 |
+| 固定 Core machine 契约 | `internal/machine/native_core_machine_live_test.go`、`scripts/tests/node-native-machine/`，CI `core-machine` | 真实 Provider mTLS、native 安装/激活、账户/购买/履约、生产 Orchestrator、双 Node、共享 WS/503/后继心跳、设备事实、隔离、轮换与原使用量重放 | Node `e5e98291` 与 Core `5536410` 已在 Actions `39538582760` 完整通过，详见 `CORE-MACHINE-COMPATIBILITY.zh.md`；不证明独立完整财务对账、生产 PKI 或物理主机部署 |
 
 ## SIGKILL 夹具约束
 
@@ -63,11 +73,11 @@
 
 | 挂起文件 | 原生恢复验收应覆盖 |
 |---|---|
-| `docs/removed-tests/usage_event_store_adapter_test.go.txt` | 原生 Service 测试已编写真实 TCP/UDP、关闭、持久化恢复、失败隔离和进程归属断言；待候选 Actions |
+| `docs/removed-tests/usage_event_store_adapter_test.go.txt` | 原生 Service 测试覆盖真实 TCP/UDP、关闭、持久化恢复、失败隔离和进程归属，已进入 `e5e98291` Go/race；只接受现行明确断言 |
 | `docs/removed-tests/usage_observer_adapter_test.go.txt` | 原生 Service 测试已编写真实 I/O、身份、关闭、错误隔离、禁用和恢复断言；用户 delta/Reload 失败的细分边界仍由各自生命周期测试承担 |
 | `docs/removed-tests/store_io_test.go.txt` | 原生 core relay 测试覆盖短写/正字节伴错/失败写和取消；使用当前物理方向口径，不恢复旧 wrapper |
-| `docs/removed-tests/traffic_period_packet_test.go.txt` | 已编写真实 SOCKS UDP 周期切换、原周期尾部和精确分段断言；待候选 Actions |
-| `docs/removed-tests/native_core_machine_live_test.go.txt` | 现行独立入口已在 Node `7c9cd91e` / Core `5536410` 的真实 Machine gate 通过；仅覆盖现行明确断言，不恢复旧内核 wrapper，也不推导独立完整财务对账 |
+| `docs/removed-tests/traffic_period_packet_test.go.txt` | 真实 SOCKS UDP 周期切换、原周期尾部和精确分段断言已进入 `e5e98291` Go/race；不外推其他协议的周期行为 |
+| `docs/removed-tests/native_core_machine_live_test.go.txt` | 现行独立入口已在 Node `e5e98291` / Core `5536410` 的真实 Machine gate 通过；仅覆盖现行明确断言，不恢复旧内核 wrapper，也不推导独立完整财务对账 |
 
 恢复时应逐项写出实际 owner 调用链和精确断言，再将替代测试纳入 Actions。只把旧文件
 改成可编译、改用 mock，或引用现有单层测试，都不足以关闭这些缺口。

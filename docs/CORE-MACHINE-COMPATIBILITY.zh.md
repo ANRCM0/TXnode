@@ -63,6 +63,15 @@ Provider trust、安装激活、购买履约、recipient-render、签名有限�
 
 ## 已取得的真实 Machine 结果
 
+取消传播修复候选 Node `e5e98291ba59c55b514b54793c6d46edcc461be4`
+（tree `07970c700f103bc8bedb225031431c6ce9445d47`）的 Actions `39538582760`
+已通过完整 Machine job `119021745734`，artifact `12318529666`。固定 Core 仍为
+`5536410`，没有改写 Core 应用源码。真实安装、Provider、WS-only 端口更新、503
+恢复、successor、隔离、撤回及重启用均执行；原 10 秒终止 join、旧 token 重启拒绝、
+新 token 协议恢复通过。原六个批次实际重放，SQL 唯一 settled batch 行仍为六个，
+原 payload、usage period 和 frozen period 的校验保留。Core C2 job `119021745839`
+也通过。该结果不抹除以下历史失败，后续源码提交仍须记录自己的验证范围。
+
 Node `7c9cd91e8ca4b0bb9ecfa571872c83d384480bee` 与上述固定 Core 的 Actions
 `39534639986` 已完成完整 Machine gate。公开 artifact `12316279421` 的 result.json
 记录真实 native 安装/激活、Provider mTLS、VLESS/VMess、canonical admin operations、
@@ -89,7 +98,8 @@ Service.handleWSEvent -> reloadNativeWSPort`。mailbox 表示回归和 Service �
 源码检查确认 TXBoard HTTP 请求没有绑定调用者 context，Provider Resolve 还使用
 Background；Service 退出时却会等待授权刷新 worker，Machine 的同步发现也会等待
 原 HTTP 超时。这是明确的取消传播缺口，但公开失败结果尚不能确定它就是本次
-超时的具体等待点。后续修复与固定白名单失败诊断必须由新候选 Actions 重新验证。
+超时的具体等待点。修复及固定白名单失败诊断已进入 `e5e98291`，由该提交的
+Go/source guards 和完整 Machine Actions 验证；不能据新成功反推旧失败的唯一原因。
 
 本 gate 不证明独立完整财务对账、生产 PKI 或物理主机部署；相应字段继续为 false。
 Node 后续文档提交、main 镜像发布和 Core 采用应另记实际提交，不继承此处的精确 SHA。
