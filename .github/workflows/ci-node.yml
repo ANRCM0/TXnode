@@ -88,7 +88,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         working-directory: .
         env:
-          TXBOARD_IMAGE_REPO: ghcr.io/anrcm0/txboard-node
+          TXBOARD_IMAGE_REPO: ghcr.io/anrcm0/txnode
         run: bash scripts/resolve-image-tags.sh
       - uses: actions/setup-go@v5
         with:
@@ -178,6 +178,8 @@ jobs:
         run: python3 -m unittest discover -s scripts -p 'test_interop_*.py' -v
       - name: Reject invalid process CPU measurement evidence
         run: python3 -m unittest discover -s scripts -p 'test_native_cpu.py' -v
+      - name: Verify pinned Core Machine contract inspection
+        run: python3 -m unittest discover -s scripts/tests/node-native-machine -p 'test_preflight.py' -v
       - name: Check independent Node image channels
         run: bash scripts/test-image-tags.sh
       - name: Verify native credential publication and replay history
@@ -230,17 +232,17 @@ jobs:
           docker build --build-arg VERSION="$BUILD_VERSION" \
             --build-arg COMMIT="$GITHUB_SHA" --build-arg BUILD_TIME="$build_time" \
             --build-arg SOURCE_URL="https://github.com/$GITHUB_REPOSITORY" \
-            -t txboard-node:config-path-ci .
-          test "$(docker run --rm txboard-node:config-path-ci -v)" = "tx-node $BUILD_VERSION (built $build_time)"
-          test "$(docker image inspect txboard-node:config-path-ci --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$GITHUB_SHA"
-          test "$(docker image inspect txboard-node:config-path-ci --format '{{ index .Config.Labels "org.opencontainers.image.source" }}')" = "https://github.com/$GITHUB_REPOSITORY"
+            -t txnode:config-path-ci .
+          test "$(docker run --rm txnode:config-path-ci -v)" = "tx-node $BUILD_VERSION (built $build_time)"
+          test "$(docker image inspect txnode:config-path-ci --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')" = "$GITHUB_SHA"
+          test "$(docker image inspect txnode:config-path-ci --format '{{ index .Config.Labels "org.opencontainers.image.source" }}')" = "https://github.com/$GITHUB_REPOSITORY"
       - name: Verify canonical image command
         run: |
           set -euo pipefail
-          test "$(docker image inspect txboard-node:config-path-ci --format '{{json .Config.Cmd}}')" = '["-c","/etc/txnode/config.yml"]'
+          test "$(docker image inspect txnode:config-path-ci --format '{{json .Config.Cmd}}')" = '["-c","/etc/txnode/config.yml"]'
       - name: Verify offline Installer capability in the exact built image
         run: |
-          docker run --rm --network none txboard-node:config-path-ci --capabilities > "$RUNNER_TEMP/node-capabilities.json"
+          docker run --rm --network none txnode:config-path-ci --capabilities > "$RUNNER_TEMP/node-capabilities.json"
           python3 - "$GITHUB_SHA" "$RUNNER_TEMP/node-capabilities.json" <<'PY'
           import json,sys
           with open(sys.argv[2]) as source:
@@ -311,7 +313,7 @@ jobs:
         id: channel
         working-directory: .
         env:
-          TXBOARD_IMAGE_REPO: ghcr.io/anrcm0/txboard-node
+          TXBOARD_IMAGE_REPO: ghcr.io/anrcm0/txnode
         run: bash scripts/resolve-image-tags.sh
       - name: Select immutable build tags and metadata
         id: build
@@ -382,8 +384,8 @@ jobs:
             echo "Node runtime advanced; retain immutable image without rolling dev back"
             exit 0
           fi
-          docker buildx imagetools create --tag ghcr.io/anrcm0/txboard-node:dev \
-            "ghcr.io/anrcm0/txboard-node:dev-sha-${GITHUB_SHA:0:12}"
+          docker buildx imagetools create --tag ghcr.io/anrcm0/txnode:dev \
+            "ghcr.io/anrcm0/txnode:dev-sha-${GITHUB_SHA:0:12}"
 
   release-assets:
     name: Attach Node binaries to Node release
@@ -398,7 +400,7 @@ jobs:
         id: channel
         working-directory: .
         env:
-          TXBOARD_IMAGE_REPO: ghcr.io/anrcm0/txboard-node
+          TXBOARD_IMAGE_REPO: ghcr.io/anrcm0/txnode
         run: bash scripts/resolve-image-tags.sh
       - uses: actions/download-artifact@v4
         with:
