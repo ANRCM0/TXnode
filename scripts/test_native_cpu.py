@@ -157,5 +157,81 @@ class CPUContractTests(unittest.TestCase):
                 BENCH.cpu_measurement(start, end, size)
 
 
+class PersistenceDiagnosticContractTests(unittest.TestCase):
+    def test_unprofiled_observer_requires_explicit_independent_mode(self):
+        inherited = {"TXNODE_NATIVE_AB_CPU_PROFILE": "old.pprof", "TXNODE_NATIVE_AB_EVENT_DIAGNOSTICS": "1"}
+        with patch.dict(BENCH.os.environ, inherited):
+            off = BENCH.sample_environment("nonce", persistence_diagnostics_only=True)
+            on = BENCH.sample_environment("nonce", persistence_diagnostics=True, persistence_diagnostics_only=True)
+        self.assertNotIn("TXNODE_NATIVE_AB_CPU_PROFILE", off)
+        self.assertNotIn("TXNODE_NATIVE_AB_CPU_PROFILE", on)
+        self.assertNotIn("TXNODE_NATIVE_AB_EVENT_DIAGNOSTICS", off)
+        self.assertEqual(on["TXNODE_NATIVE_AB_EVENT_DIAGNOSTICS"], "1")
+        with self.assertRaises(ValueError):
+            BENCH.sample_environment("nonce", persistence_diagnostics=True)
+        with self.assertRaises(ValueError):
+            BENCH.sample_environment("nonce", Path("cpu.pprof"), persistence_diagnostics_only=True)
+
+    def test_five_groups_cover_all_cells_and_reverse_execution_order(self):
+        plan = BENCH.persistence_plan(5)
+        self.assertEqual(len(plan), 20)
+        for group in range(1, 6):
+            cells = [(side, enabled) for number, side, enabled in plan if number == group]
+            self.assertEqual(set(cells), {("legacy", False), ("legacy", True), ("candidate", False), ("candidate", True)})
+        first = [(side, enabled) for group, side, enabled in plan if group == 1]
+        second = [(side, enabled) for group, side, enabled in plan if group == 2]
+        self.assertEqual(first, list(reversed(second)))
+
+    def report(self):
+        return {"schema": "txnode-native-persistence-diagnostics/v1", "status": "persistence-diagnostics-only",
+                "accepted": False, "samples": [], "comparisons": [],
+                "persistence_samples": [
+                    {"group": group, "side": side, "observer_enabled": enabled, "acceptance_sample": False,
+                     "mode": "events", "workload": "download",
+                     "cpu_profile_enabled": False,
+                     "sample": {"status": "incomplete", "persistence_diagnostics": enabled},
+                     "event_observation": {"observer_evidence_present": enabled}}
+                    for group, side, enabled in BENCH.persistence_plan(5)]}
+
+    def test_collected_accounting_failures_never_become_acceptance(self):
+        report = self.report()
+        self.assertTrue(BENCH.persistence_collection_complete(report, 5))
+        self.assertIs(report["accepted"], False)
+        self.assertEqual(report["samples"], [])
+        self.assertEqual(report["comparisons"], [])
+        for field, value in (("accepted", True), ("samples", [{}]), ("comparisons", [{}]),
+                             ("schema", "txnode-native-performance/v2")):
+            changed = self.report()
+            changed[field] = value
+            with self.subTest(field=field):
+                self.assertFalse(BENCH.persistence_collection_complete(changed, 5))
+
+    def test_collection_requires_unique_cases_and_matching_observer_evidence(self):
+        for field, value in (("cpu_profile_enabled", True), ("acceptance_sample", True),
+                             ("collection_error", "snapshot missing")):
+            report = self.report()
+            report["persistence_samples"][0][field] = value
+            with self.subTest(field=field):
+                self.assertFalse(BENCH.persistence_collection_complete(report, 5))
+        report = self.report()
+        report["persistence_samples"][-1] = report["persistence_samples"][0]
+        self.assertFalse(BENCH.persistence_collection_complete(report, 5))
+        report = self.report()
+        report["persistence_samples"][0]["event_observation"]["observer_evidence_present"] = True
+        self.assertFalse(BENCH.persistence_collection_complete(report, 5))
+
+    def test_pairs_exclude_failed_accounting_from_ratios(self):
+        report = self.report()
+        pairs = BENCH.persistence_pairs(report["persistence_samples"], 5)
+        self.assertTrue(all(not item["paired_metrics_available"] for item in pairs))
+        self.assertTrue(all("observer_on_over_off_cpu" not in item for item in pairs))
+        for item in report["persistence_samples"]:
+            item["sample"].update(status="measured", mib_per_second=20 if item["observer_enabled"] else 10,
+                                  cpu_seconds_per_gib=3 if item["observer_enabled"] else 2)
+        pairs = BENCH.persistence_pairs(report["persistence_samples"], 5)
+        self.assertTrue(all(item["observer_on_over_off_throughput"] == 2 for item in pairs))
+        self.assertTrue(all(item["observer_on_over_off_cpu"] == 1.5 for item in pairs))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -33,24 +33,37 @@ var nativeABStageBoundaries = [...]nativeABStageBoundary{
 }
 
 type nativeABStageTiming struct {
-	Name          string     `json:"name"`
-	Count         uint64     `json:"count"`
-	TotalNanos    uint64     `json:"total_nanos"`
-	MaxNanos      uint64     `json:"max_nanos"`
-	Log2Histogram [64]uint64 `json:"log2_nanoseconds_histogram"`
+	Name                     string                 `json:"name"`
+	Count                    uint64                 `json:"count"`
+	TotalNanos               uint64                 `json:"total_nanos"`
+	MaxNanos                 uint64                 `json:"max_nanos"`
+	Log2Histogram            [64]uint64             `json:"log2_nanoseconds_histogram"`
+	PeakObservedElapsedNanos int64                  `json:"peak_observed_elapsed_nanos"`
+	PeakClaim                nativeABClaimReference `json:"peak_claim"`
+}
+
+type nativeABClaimReference struct {
+	Tracker              string `json:"tracker"`
+	Bucket               uint64 `json:"bucket"`
+	StartSequence        uint64 `json:"start_sequence"`
+	EndSequenceExclusive uint64 `json:"end_sequence_exclusive"`
 }
 
 type nativeABMeterBacklog struct {
-	Tracker        string `json:"tracker"`
-	OpenEvents     int    `json:"open_events"`
-	SealedEvents   int    `json:"sealed_events"`
-	SealedBuckets  int    `json:"sealed_buckets"`
-	ClaimBucket    uint64 `json:"claim_bucket"`
-	ClaimEvents    int    `json:"claim_events"`
-	NextSequence   uint64 `json:"next_sequence"`
-	Persisted      uint64 `json:"persisted_buckets"`
-	Dropped        uint64 `json:"dropped_events"`
-	DegradedReason string `json:"degraded_reason"`
+	Tracker                   string `json:"tracker"`
+	OpenEvents                int    `json:"open_events"`
+	SealedEvents              int    `json:"sealed_events"`
+	SealedBuckets             int    `json:"sealed_buckets"`
+	ClaimBucket               uint64 `json:"claim_bucket"`
+	ClaimEvents               int    `json:"claim_events"`
+	ClaimStartSequence        uint64 `json:"claim_start_sequence"`
+	ClaimEndSequenceExclusive uint64 `json:"claim_end_sequence_exclusive"`
+	NextSequence              uint64 `json:"next_sequence"`
+	Persisted                 uint64 `json:"persisted_buckets"`
+	Dropped                   uint64 `json:"dropped_events"`
+	DegradedReason            string `json:"degraded_reason"`
+	FirstGapSequence          uint64 `json:"first_gap_sequence"`
+	FirstGapMeterElapsedNanos int64  `json:"first_gap_meter_elapsed_nanos"`
 }
 
 type nativeABBacklogSample struct {
@@ -63,26 +76,35 @@ type nativeABBacklogSample struct {
 }
 
 type nativeABPersistenceDiagnostic struct {
-	Schema                 string                  `json:"schema"`
-	Scope                  string                  `json:"scope"`
-	HistogramRule          string                  `json:"histogram_rule"`
-	SampleCapacity         int                     `json:"sample_capacity"`
-	SamplesSeen            uint64                  `json:"samples_seen"`
-	LastBoundary           string                  `json:"last_boundary"`
-	SinceLastBoundaryNanos int64                   `json:"since_last_boundary_nanos"`
-	Stages                 []nativeABStageTiming   `json:"stages"`
-	Backlog                []nativeABBacklogSample `json:"backlog"`
+	Schema                       string                  `json:"schema"`
+	Scope                        string                  `json:"scope"`
+	HistogramRule                string                  `json:"histogram_rule"`
+	SampleCapacity               int                     `json:"sample_capacity"`
+	SamplesSeen                  uint64                  `json:"samples_seen"`
+	ObservationsSeen             uint64                  `json:"observations_seen"`
+	RingFrozen                   bool                    `json:"ring_frozen"`
+	FirstGapObservedElapsedNanos int64                   `json:"first_gap_observed_elapsed_nanos,omitempty"`
+	FirstGapObservedBoundary     string                  `json:"first_gap_observed_boundary,omitempty"`
+	LastBoundary                 string                  `json:"last_boundary"`
+	SinceLastBoundaryNanos       int64                   `json:"since_last_boundary_nanos"`
+	Stages                       []nativeABStageTiming   `json:"stages"`
+	Backlog                      []nativeABBacklogSample `json:"backlog"`
 }
 
 type nativeABPersistenceObserver struct {
-	mu          sync.Mutex
-	started     time.Time
-	lastAt      time.Time
-	lastStage   string
-	stages      [len(nativeABStageBoundaries)]nativeABStageTiming
-	samples     [64]nativeABBacklogSample
-	samplesSeen uint64
-	coordinator atomic.Pointer[Coordinator]
+	mu                           sync.Mutex
+	started                      time.Time
+	lastAt                       time.Time
+	lastStage                    string
+	stages                       [len(nativeABStageBoundaries)]nativeABStageTiming
+	samples                      [64]nativeABBacklogSample
+	samplesSeen                  uint64
+	observationsSeen             uint64
+	frozen                       bool
+	firstGapObservedElapsedNanos int64
+	firstGapObservedBoundary     string
+	currentClaim                 nativeABClaimReference
+	coordinator                  atomic.Pointer[Coordinator]
 }
 
 // NativeABNewCoordinator changes only the explicitly enabled disposable harness.
@@ -108,7 +130,22 @@ func NativeABNewCoordinator(dir string, storeOptions StoreOptions, options Coord
 
 func (o *nativeABPersistenceObserver) hook(stage string) error {
 	now := time.Now()
+	var claim nativeABClaimReference
+	if stage == "before_write" {
+		if coordinator := o.coordinator.Load(); coordinator != nil {
+			sample := o.sample(coordinator, stage)
+			for _, meter := range sample.Meters[:sample.MeterCount] {
+				if meter.ClaimBucket != 0 {
+					claim = nativeABClaimReference{meter.Tracker, meter.ClaimBucket, meter.ClaimStartSequence, meter.ClaimEndSequenceExclusive}
+					break
+				}
+			}
+		}
+	}
 	o.mu.Lock()
+	if stage == "before_write" {
+		o.currentClaim = claim
+	}
 	for i, boundary := range nativeABStageBoundaries {
 		if o.lastStage == boundary.from && stage == boundary.to {
 			elapsed := uint64(now.Sub(o.lastAt))
@@ -117,6 +154,8 @@ func (o *nativeABPersistenceObserver) hook(stage string) error {
 			timing.TotalNanos += elapsed
 			if elapsed > timing.MaxNanos {
 				timing.MaxNanos = elapsed
+				timing.PeakObservedElapsedNanos = time.Since(o.started).Nanoseconds()
+				timing.PeakClaim = o.currentClaim
 			}
 			bin := bits.Len64(elapsed)
 			if bin > 0 {
@@ -128,7 +167,7 @@ func (o *nativeABPersistenceObserver) hook(stage string) error {
 	}
 	o.lastStage, o.lastAt = stage, now
 	o.mu.Unlock()
-	if stage == "before_write" || stage == "after_ack" {
+	if stage == "after_ack" {
 		if coordinator := o.coordinator.Load(); coordinator != nil {
 			o.sample(coordinator, stage)
 		}
@@ -136,7 +175,7 @@ func (o *nativeABPersistenceObserver) hook(stage string) error {
 	return nil
 }
 
-func (o *nativeABPersistenceObserver) sample(c *Coordinator, boundary string) {
+func (o *nativeABPersistenceObserver) sample(c *Coordinator, boundary string) nativeABBacklogSample {
 	var meters [8]*Meter
 	sample := nativeABBacklogSample{ElapsedNanos: time.Since(o.started).Nanoseconds(), Boundary: boundary}
 	c.mu.Lock()
@@ -148,12 +187,15 @@ func (o *nativeABPersistenceObserver) sample(c *Coordinator, boundary string) {
 		backlog := nativeABMeterBacklog{
 			Tracker: meter.open.TrackerID, OpenEvents: len(meter.open.Events), SealedBuckets: len(meter.sealed),
 			NextSequence: meter.nextSequence, Persisted: meter.persisted, Dropped: meter.dropped, DegradedReason: meter.degraded,
+			FirstGapSequence: meter.firstGap.Sequence, FirstGapMeterElapsedNanos: meter.firstGap.Completed.ElapsedNanos,
 		}
 		for _, bucket := range meter.sealed {
 			backlog.SealedEvents += len(bucket.Events)
 		}
 		if meter.claim != nil {
 			backlog.ClaimBucket, backlog.ClaimEvents = meter.claim.bucket.Number, len(meter.claim.bucket.Events)
+			backlog.ClaimStartSequence = meter.claim.bucket.StartSequence
+			backlog.ClaimEndSequenceExclusive = meter.claim.bucket.EndSequenceExclusive
 		}
 		meter.mu.Unlock()
 		sample.Meters[i] = backlog
@@ -162,9 +204,21 @@ func (o *nativeABPersistenceObserver) sample(c *Coordinator, boundary string) {
 		sample.StoreSequence = store.Sequence
 	}
 	o.mu.Lock()
-	o.samples[o.samplesSeen%uint64(len(o.samples))] = sample
-	o.samplesSeen++
+	o.observationsSeen++
+	if !o.frozen {
+		o.samples[o.samplesSeen%uint64(len(o.samples))] = sample
+		o.samplesSeen++
+		for _, meter := range sample.Meters[:sample.MeterCount] {
+			if meter.FirstGapSequence != 0 {
+				o.frozen = true
+				o.firstGapObservedElapsedNanos = sample.ElapsedNanos
+				o.firstGapObservedBoundary = boundary
+				break
+			}
+		}
+	}
 	o.mu.Unlock()
+	return sample
 }
 
 func (o *nativeABPersistenceObserver) snapshot(c *Coordinator) *nativeABPersistenceDiagnostic {
@@ -172,10 +226,12 @@ func (o *nativeABPersistenceObserver) snapshot(c *Coordinator) *nativeABPersiste
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	result := &nativeABPersistenceDiagnostic{
-		Schema:         "txnode-native-persistence-diagnostic/v1",
-		Scope:          "diagnostics only; wall stages include scheduling and observer overhead; startup/control records included; independent lock reads; bounded backlog sampled at before_write/after_ack/snapshot, no periodic samples",
+		Schema:         "txnode-native-persistence-diagnostic/v2",
+		Scope:          "diagnostics only; wall stages include scheduling and observer overhead; startup/control records included; independent lock reads; before_write/after_ack/snapshot only, no periodic or relay-hot-path samples; ring freezes at first observed gap; observer elapsed starts at constructor, first_gap_meter_elapsed_nanos uses the original meter clock; peak time and gap detection are observations, not exact fault instants; worker-gap peak claim is the next before_write claim",
 		HistogramRule:  "bin 0: [0,2) ns; bin n>0: [2^n,2^(n+1)) ns",
 		SampleCapacity: len(o.samples), SamplesSeen: o.samplesSeen, LastBoundary: o.lastStage,
+		ObservationsSeen: o.observationsSeen, RingFrozen: o.frozen,
+		FirstGapObservedElapsedNanos: o.firstGapObservedElapsedNanos, FirstGapObservedBoundary: o.firstGapObservedBoundary,
 		Stages: append([]nativeABStageTiming(nil), o.stages[:]...),
 	}
 	if !o.lastAt.IsZero() {
