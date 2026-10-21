@@ -163,6 +163,8 @@ func TestNativeConfigWSPortReloadKeepsSignedCollectorAndSibling(t *testing.T) {
 	}))
 	t.Cleanup(func() { close(release); server.Close() })
 	s, plane := nativeConfigService(t, initial, server.URL)
+	s.machineMailbox = controlplane.NewNodeMailbox()
+	s.markMailboxReadyAndDrain(context.Background())
 	siblingPanel, siblingInitial := nativeConfigPanel(t, authorityPort(t), origin)
 	sibling, _ := nativeConfigService(t, siblingInitial, server.URL)
 	_, siblingStream := nativeC2VLESSDial(t, net.JoinHostPort("127.0.0.1", strconv.Itoa(siblingPanel.ServerPort)), plane.uuidOrDefault(), origin.Addr())
@@ -193,7 +195,10 @@ func TestNativeConfigWSPortReloadKeepsSignedCollectorAndSibling(t *testing.T) {
 	frames <- map[string]any{"protocol_version": 1, "event": "sync.config", "data": map[string]any{"node_id": 42, "config": wire}}
 	select {
 	case event := <-events:
-		s.handleWSEvent(ctx, event)
+		if !s.machineMailbox.Apply(event) {
+			t.Fatal("machine mailbox rejected config")
+		}
+		s.drainMachineMailbox(ctx)
 	case <-time.After(3 * time.Second):
 		t.Fatal("real WS config missing")
 	}

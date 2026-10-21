@@ -1,10 +1,52 @@
 package controlplane
 
 import (
+	"bytes"
+	"encoding/json"
 	"testing"
 
 	"github.com/ANRCM0/TX-Node/internal/model"
 )
+
+func TestNodeMailboxPreservesConfigRepresentation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		spec *model.NodeSpec
+	}{
+		{name: "nil", spec: &model.NodeSpec{Protocol: "vless", ServerPort: 10443}},
+		{name: "empty", spec: &model.NodeSpec{Protocol: "vless", ServerPort: 10443,
+			Routes: []model.RouteRule{}, CustomOutbounds: []model.OutboundConfig{}, CustomRouteRules: []model.CustomRouteRule{}}},
+		{name: "configured", spec: &model.NodeSpec{Protocol: "vless", ServerPort: 10443,
+			Routes: []model.RouteRule{{ID: 1, Action: "direct"}}, CustomOutbounds: []model.OutboundConfig{{Tag: "direct"}},
+			CustomRouteRules: []model.CustomRouteRule{{Name: "local"}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expected, err := json.Marshal(tc.spec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mb := NewNodeMailbox()
+			mb.SeedBaseline(nil, tc.spec)
+			assertSame := func(config *model.NodeSpec) {
+				t.Helper()
+				actual, err := json.Marshal(config)
+				if err != nil || !bytes.Equal(actual, expected) {
+					t.Fatal("mailbox changed configuration representation", err)
+				}
+			}
+			assertSame(mb.config)
+			mb.MarkReady()
+			if !mb.Apply(Event{Type: EventSyncConfig, Config: tc.spec}) {
+				t.Fatal("config event rejected")
+			}
+			state := mb.DrainIfReady()
+			if !state.HasConfig {
+				t.Fatal("config event missing")
+			}
+			assertSame(state.Config)
+		})
+	}
+}
 
 func TestNodeMailboxLatestStateAndNotifyCollapse(t *testing.T) {
 	mb := NewNodeMailbox()

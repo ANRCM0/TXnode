@@ -88,6 +88,27 @@ def failure_summary(category):
     log = evidence / 'node-live.log'
     if log.is_file():
         text = log.read_text(errors='replace')
+        config_booleans = {'config_event_received', 'config_event_dispatched', 'config_event_desired_port',
+                           'old_listener_open', 'new_listener_open', 'shared_ws_connected'}
+        config_fields = config_booleans | {'schema', 'stage', 'code', 'child_applied_port'}
+        for line in text.splitlines():
+            marker = 'NATIVE_MACHINE_CONFIG_DIAGNOSTIC '
+            if marker not in line:continue
+            encoded = line.split(marker, 1)[1]
+            if len(encoded) > 1024:continue
+            try:config_diagnostic = json.loads(encoded)
+            except (ValueError, TypeError):continue
+            if (isinstance(config_diagnostic, dict) and set(config_diagnostic) == config_fields
+                    and config_diagnostic['schema'] == 'txnode-machine-config-diagnostic/v1'
+                    and config_diagnostic['stage'] == 'configured'
+                    and config_diagnostic['code'] in {'old_stream_remained_open', 'old_stream_close_timeout'}
+                    and config_diagnostic['child_applied_port'] == 'unavailable'
+                    and all(type(config_diagnostic[field]) is bool for field in config_booleans)):
+                events = proxy.event_snapshot()
+                config_diagnostic['rest_gate_held'] = not proxy.rest_release.is_set()
+                config_diagnostic['config_rest_held'] = any(event['kind'] == 'rest-held' and event['path'] == '/txapi/node/v1/config' for event in events)
+                config_diagnostic['users_rest_held'] = any(event['kind'] == 'rest-held' and event['path'] == '/txapi/node/v1/users' for event in events)
+                diagnostics['configuration'] = config_diagnostic
         source = (node / 'internal/machine/native_core_machine_live_test.go').read_text().splitlines()
         for match in re.finditer(r'native_core_machine_live_test\.go:([0-9]+):', text):
             line = int(match.group(1))

@@ -23,6 +23,7 @@ import (
 
 	"github.com/ANRCM0/TX-Node/internal/config"
 	"github.com/ANRCM0/TX-Node/internal/controlerror"
+	"github.com/ANRCM0/TX-Node/internal/controlplane"
 	"github.com/ANRCM0/TX-Node/internal/dataplane/opt"
 	"github.com/ANRCM0/TX-Node/internal/dataplane/outbound"
 	"github.com/ANRCM0/TX-Node/internal/dataplane/socks"
@@ -57,6 +58,48 @@ type machineCoreLiveSpool struct {
 	PayloadDigest string          `json:"payload_digest"`
 	PeriodIDs     []string        `json:"period_ids"`
 	Payload       usagev2.Payload `json:"payload"`
+}
+
+// Observe the real callback without changing frames or draining the child mailbox.
+type machineCoreConfigObservation struct {
+	mu                                sync.Mutex
+	targetID, newPort                 int
+	received, dispatched, desiredPort bool
+}
+type machineCoreObservedControlPlane struct {
+	machineControlPlane
+	observation *machineCoreConfigObservation
+}
+
+func (o *machineCoreObservedControlPlane) NewMachineSocket(url, token string, machineID int, ws config.WSConfig, kernel config.KernelConfig, onEvent func(machineEvent), onStatus func(bool)) machineSocket {
+	return o.machineControlPlane.NewMachineSocket(url, token, machineID, ws, kernel, func(event machineEvent) {
+		onEvent(event)
+		if event.NodeID != o.observation.targetID || event.NodeEvent.Type != controlplane.EventSyncConfig {
+			return
+		}
+		o.observation.mu.Lock()
+		o.observation.received = true
+		o.observation.dispatched = event.Err == nil && event.NodeEvent.Config != nil
+		o.observation.desiredPort = event.NodeEvent.Config != nil && event.NodeEvent.Config.ServerPort == o.observation.newPort
+		o.observation.mu.Unlock()
+	}, onStatus)
+}
+func (o *machineCoreConfigObservation) report(t *testing.T, orchestrator *Orchestrator, oldPort int, code string) {
+	t.Helper()
+	o.mu.Lock()
+	data := map[string]any{"schema": "txnode-machine-config-diagnostic/v1", "stage": "configured", "code": code,
+		"config_event_received": o.received, "config_event_dispatched": o.dispatched, "config_event_desired_port": o.desiredPort,
+		"child_applied_port": "unavailable"}
+	o.mu.Unlock()
+	data["old_listener_open"] = machineCoreListening(oldPort)
+	data["new_listener_open"] = machineCoreListening(o.newPort)
+	socket := orchestrator.currentWS()
+	data["shared_ws_connected"] = socket != nil && socket.IsConnected()
+	body, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal("fixed config diagnostic encoding failed")
+	}
+	t.Logf("NATIVE_MACHINE_CONFIG_DIAGNOSTIC %s", body)
 }
 
 // Real production Orchestrator, native installation activation, signed
@@ -155,11 +198,13 @@ func TestNativeCoreMachineLive(t *testing.T) {
 			CAFile: filepath.Join(directory, "ca.pem"), ClientCert: filepath.Join(directory, "node.pem"), ClientKey: filepath.Join(directory, "node.key")}}
 	cfg.UsageV2 = config.UsageV2Config{Enabled: true, Directory: filepath.Join(directory, "usage"), CAFile: filepath.Join(directory, "ca.pem")}
 	usageRoot := cfg.UsageV2.Directory
+	configObservation := &machineCoreConfigObservation{targetID: fixture.Nodes[0].ID, newPort: fixture.NewPort}
 	start := func(cfg *config.Config) (*Orchestrator, context.CancelFunc, chan error) {
 		o, e := NewChecked(cfg)
 		if e != nil {
 			t.Fatal(e)
 		}
+		o.client = &machineCoreObservedControlPlane{machineControlPlane: o.client, observation: configObservation}
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan error, 1)
 		go func() { done <- o.Run(ctx) }()
@@ -190,7 +235,7 @@ func TestNativeCoreMachineLive(t *testing.T) {
 	machineCoreAlive(t, endpoint, fixture, fixture.Nodes[0], stream1)
 	machineCoreAlive(t, endpoint, fixture, fixture.Nodes[1], stream2)
 	machineCoreBarrier(t, directory, "initial", map[string]any{"machine_id": fixture.MachineID, "real_two_streams": true, "shared_ws_connected": true})
-	machineCoreClosed(t, stream1, 8*time.Second)
+	machineCoreClosed(t, stream1, 8*time.Second, func(code string) { configObservation.report(t, orchestrator, fixture.Nodes[0].Port, code) })
 	oldPort := fixture.Nodes[0].Port
 	fixture.Nodes[0].Port = fixture.NewPort
 	machineCoreWait(t, done, 8*time.Second, func() bool { return !machineCoreListening(oldPort) && machineCoreListening(fixture.NewPort) })
@@ -390,15 +435,21 @@ func machineCoreEcho(t *testing.T, stream net.Conn, request []byte) {
 	}
 	_ = stream.SetDeadline(time.Now().Add(90 * time.Second))
 }
-func machineCoreClosed(t *testing.T, stream net.Conn, limit time.Duration) {
+func machineCoreClosed(t *testing.T, stream net.Conn, limit time.Duration, diagnostic ...func(string)) {
 	t.Helper()
 	_ = stream.SetReadDeadline(time.Now().Add(limit))
 	var b [1]byte
 	n, e := stream.Read(b[:])
 	if n != 0 || e == nil {
+		for _, report := range diagnostic {
+			report("old_stream_remained_open")
+		}
 		t.Fatal("revoked actual stream remained open")
 	}
 	if timeout, ok := e.(net.Error); ok && timeout.Timeout() {
+		for _, report := range diagnostic {
+			report("old_stream_close_timeout")
+		}
 		t.Fatal("stream timed out instead of authority close")
 	}
 }
