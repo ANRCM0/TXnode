@@ -82,7 +82,8 @@ if ($mode === 'seed') {
  $nodes = []; $recipients = [];
  foreach (['vless','vmess'] as $index=>$protocol) {
   $group = ServerGroup::unguarded(fn()=>ServerGroup::create(['name'=>'isolated-machine-group-'.$protocol]));
-  $plan = Plan::withoutEvents(fn()=>Plan::create(['name'=>'isolated-machine-plan-'.$protocol,'group_id'=>$group->id,'transfer_enable'=>1,'prices'=>['monthly'=>'0.00','reset_traffic'=>'0.00'],'show'=>true,'sell'=>true,'renew'=>true,'reset_traffic_method'=>2]));
+  // Native publication uses null for unlimited capacity; the legacy DB default is zero.
+  $plan = Plan::withoutEvents(fn()=>Plan::create(['name'=>'isolated-machine-plan-'.$protocol,'group_id'=>$group->id,'transfer_enable'=>1,'capacity_limit'=>null,'prices'=>['monthly'=>'0.00','reset_traffic'=>'0.00'],'show'=>true,'sell'=>true,'renew'=>true,'reset_traffic_method'=>2]));
   $published = app(PlanPublicationService::class)->publish($plan->id,'machine-publish-'.$protocol,'USD','UTC');
   $offer = collect($published['offers'])->firstWhere('offer_code','monthly');
   $port = (int)getenv('NATIVE_MACHINE_NODE_PORT_'.$index); $origin = (int)getenv('NATIVE_MACHINE_ORIGIN_PORT');
