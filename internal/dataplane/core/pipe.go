@@ -65,10 +65,12 @@ func activeLimiters(ls ...*Limiter) []waiter {
 // side, which turns a slow reader into backpressure on the writer, exactly like
 // Limiter.Wait inside the original pipe.
 func pipeLimited(ctx context.Context, a, b net.Conn, upLim, downLim []waiter, up, down func(int64), hook ChunkHook, meta Chunk) error {
-	// A chunk hook needs a userspace copy: admission must happen before the
-	// bytes move, which splice(2) cannot express.
-	if hook == nil && len(upLim) == 0 && len(downLim) == 0 {
-		if ok, err := splicePipe(ctx, a, b, up, down); ok {
+	allowSplice := hook == nil
+	if explicit, ok := hook.(SpliceChunkHook); ok {
+		allowSplice = explicit.AllowSplice()
+	}
+	if allowSplice && len(upLim) == 0 && len(downLim) == 0 {
+		if ok, err := splicePipeWithHook(ctx, a, b, up, down, hook, meta); ok {
 			return err
 		}
 	}
@@ -140,7 +142,7 @@ func copyDirection(ctx context.Context, dst, src net.Conn, lims []waiter, count 
 			c := meta
 			c.Dir, c.N = dir, int64(len(buf))
 			var herr error
-			token, herr = hook.Begin(c)
+			token, herr = beginChunk(ctx, hook, c)
 			if herr != nil {
 				return herr
 			}
@@ -149,7 +151,16 @@ func copyDirection(ctx context.Context, dst, src net.Conn, lims []waiter, count 
 		if hook != nil && dir == DirUpload {
 			c := meta
 			c.Dir, c.N, c.Err = dir, int64(n), rerr
+			if n == 0 && errors.Is(rerr, ErrReadPaused) {
+				c.Err = nil
+			}
 			hook.Complete(c, token)
+		}
+		if n == 0 && errors.Is(rerr, ErrReadPaused) {
+			if err := waitReadReady(ctx, hook, rerr); err != nil {
+				return err
+			}
+			continue
 		}
 		if n > 0 {
 			if len(lims) > 0 {
@@ -161,7 +172,7 @@ func copyDirection(ctx context.Context, dst, src net.Conn, lims []waiter, count 
 				c := meta
 				c.Dir, c.N = dir, int64(n)
 				var herr error
-				token, herr = hook.Begin(c)
+				token, herr = beginChunk(ctx, hook, c)
 				if herr != nil {
 					return herr
 				}

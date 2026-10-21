@@ -165,3 +165,7 @@ require (
 // Xray code is linked into the node.
 
 // Preserve the pinned protocol while publishing immutable authentication indexes.
+
+replace github.com/xtaci/smux => ./internal/deps/smux
+
+replace github.com/hashicorp/yamux => ./internal/deps/yamux

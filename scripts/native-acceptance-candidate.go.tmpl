@@ -1,0 +1,12 @@
+package main
+
+import (
+	"github.com/ANRCM0/TX-Node/internal/kernel/txnode"
+	"github.com/ANRCM0/TX-Node/internal/usageinterval"
+)
+
+func makeKernel() *txnode.Kernel { return txnode.New(txnode.RuntimeConfig{}) }
+func installNative(k *txnode.Kernel, c *usageinterval.NativeCollector) bool {
+	m, ok := k.NewNativeMeter(c, map[string]int{"native-ab-secret": 7})
+	return ok && k.SetNativeUsageTracker(m)
+}

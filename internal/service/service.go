@@ -494,6 +494,9 @@ func (s *Service) handleWSEvent(ctx context.Context, event controlplane.Event) {
 	if s.authorizationEnabled() {
 		switch event.Type {
 		case controlplane.EventSyncUsers, controlplane.EventSyncUserDelta, controlplane.EventSyncConfig:
+			if event.Type == controlplane.EventSyncConfig && s.reloadNativeWSPort(ctx, event.Config) {
+				return
+			}
 			s.requestAuthorizationPoll(ctx)
 			return
 		}
@@ -585,6 +588,11 @@ func (s *Service) buildMetrics(status monitor.Status) map[string]interface{} {
 	}
 
 	m := make(map[string]interface{})
+	if s.cfg != nil && s.cfg.Dataplane.Diagnostics {
+		if d, ok := s.kernel.(kernel.RuntimeDiagnosticProvider); ok {
+			m["native_dataplane"] = d.RuntimeDiagnostics()
+		}
+	}
 	if s.cfg != nil && s.cfg.UsageObserver.Enabled {
 		m["usage_observer"] = s.usageObserverMetrics()
 	}

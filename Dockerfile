@@ -8,6 +8,8 @@ RUN apk add --no-cache git
 WORKDIR /build
 
 COPY go.mod go.sum ./
+# Local protocol patches must be present when Go resolves module replacements.
+COPY internal/deps ./internal/deps
 RUN go mod download
 
 COPY . .

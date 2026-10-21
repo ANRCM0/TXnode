@@ -15,13 +15,20 @@ Core owns identity, entitlement and settlement; Node consumes versioned protocol
 Use Go 1.26 and the checked-in module locks. `make build` is a local static build.
 Run functional, race, network, browser and container acceptance in GitHub Actions.
 `make test` covers both commands and internal packages; `make test-runtime-stability`
-repeats focused lifecycle suites. The third-party interop matrix is not part of the
-default gates: `scripts/fetch-interop-clients.sh` downloads the pinned clients
-(version + SHA-256) and the `interop` workflow job runs
-`go test ./internal/kernel/txnode/ -run TestInterop` nightly, on dispatch and on tags.
+repeats focused lifecycle suites. Strict third-party interop has a quick PR/main
+profile and a full nightly/dispatch/tag profile. `scripts/fetch-interop-clients.sh`
+downloads the pinned clients (version + SHA-256); `scripts/interop_gate.py` checks
+the declared cases and retains JSON events, client provenance and result summaries.
+Known gaps and unsupported client combinations are not accepted capabilities.
 Interop results and the remaining protocol gaps are recorded in `docs/INTEROP.md` and
-`docs/OUTSTANDING-WORK.zh.md`. Keep local kernel replacements, licenses and
+`docs/OUTSTANDING-WORK.zh.md`. The next development stages and acceptance gates are
+planned in `docs/NEXT-DEVELOPMENT.zh.md`. Keep local kernel replacements, licenses and
 `TXNODE-PATCH.md` notes together with their sources under `internal/deps/`.
+Native billing coverage and pending recovery assertions are mapped in
+`docs/NATIVE-ACCEPTANCE-COVERAGE.zh.md`; the current image publishing blocker is
+recorded in `docs/RELEASE-BLOCKERS.zh.md`.
+Native configuration changes, connection identities and opt-in diagnostics are
+described in `docs/NATIVE-OPERATIONS.zh.md`.
 
 The independent workflow owns tests, actual image checks and a real native Core
 compatibility test. `compatibility/core.v1.json` pins the supported Core baseline.

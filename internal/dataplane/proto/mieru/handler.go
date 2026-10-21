@@ -33,8 +33,9 @@ type Handler struct {
 	keys    []*keyEntry
 	keysFor map[string]*keyEntry
 
-	rmu  *sync.Mutex
-	seen map[uint64]time.Time
+	rmu      *sync.Mutex
+	seen     map[uint64]time.Time
+	v2Replay map[uint64]time.Time
 
 	packetCurrent atomic.Pointer[func() *Handler]
 	packetRelay   func(context.Context, *core.Session) error
@@ -44,6 +45,7 @@ type Handler struct {
 	v2Mtu int
 	// v2Heartbeat is the v2 idle heartbeat (Options.Heartbeat, default 20s).
 	v2Heartbeat time.Duration
+	pattern     *TrafficPattern
 
 	next uint32
 }
@@ -101,6 +103,13 @@ const (
 
 // NewHandler validates the users and derives their keys.
 func NewHandler(o Options) (*Handler, error) {
+	pattern, err := parseTrafficPattern(o.TrafficPattern)
+	if err != nil {
+		return nil, err
+	}
+	if o.MTU != 0 && (o.MTU < 512 || o.MTU > 65507) {
+		return nil, errors.New("mieru: MTU must be zero or in [512,65507]")
+	}
 	if len(o.Users) == 0 && !o.AllowEmptyUsers {
 		return nil, errors.New("mieru: no users configured")
 	}
@@ -115,10 +124,12 @@ func NewHandler(o Options) (*Handler, error) {
 		users:       make(map[string]core.User, len(o.Users)),
 		keysFor:     make(map[string]*keyEntry, len(o.Users)),
 		seen:        make(map[uint64]time.Time),
+		v2Replay:    make(map[uint64]time.Time),
 		scans:       scanGatePointer(o.ScanRate, o.ScanBurst),
 		rmu:         new(sync.Mutex),
 		v2Mtu:       o.MTU,
 		v2Heartbeat: o.Heartbeat,
+		pattern:     pattern,
 	}
 	if h.Idle <= 0 {
 		h.Idle = defaultIdle
@@ -246,25 +257,37 @@ func (h *Handler) identifyUnhinted(seg []byte) (*segmentCipher, *parsedSegment, 
 // the segment design (parsePacket compares timestamps).
 func (h *Handler) checkReplay(ts, seq uint32) bool {
 	key := uint64(ts)<<32 | uint64(seq)
+	return h.rememberReplay(key)
+}
+
+func (h *Handler) rememberReplay(key uint64) bool {
 	now := time.Now()
 	h.rmu.Lock()
 	defer h.rmu.Unlock()
-	if _, ok := h.seen[key]; ok {
-		return false
-	}
-	h.seen[key] = now
 	for k, t := range h.seen {
 		if now.Sub(t) > replayWindow {
 			delete(h.seen, k)
 		}
 	}
+	if _, ok := h.seen[key]; ok || len(h.seen) >= 65536 {
+		return false
+	}
+	h.seen[key] = now
 	return true
 }
 
 // Handle parses the opening segment and returns the session.
 func (h *Handler) Handle(ctx context.Context, conn net.Conn) (*core.Session, error) {
+	deadline := time.Now().Add(handshakeTimeout)
+	if limit, ok := ctx.Deadline(); ok && limit.Before(deadline) {
+		deadline = limit
+	}
+	_ = conn.SetReadDeadline(deadline)
 	br := bufio.NewReaderSize(conn, 4096)
 	if kk, plain, nonce, ok := h.v2Try(br); ok {
+		if h.packetRelay != nil {
+			return h.v2ServeTCP(ctx, conn, br, kk, plain, nonce)
+		}
 		return h.v2Handshake(conn, br, kk, plain, nonce)
 	}
 	conn = &bufConn{Conn: conn, r: br}

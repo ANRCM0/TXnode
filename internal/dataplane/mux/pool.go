@@ -49,17 +49,21 @@ func NewPool(kind byte) *Pool {
 // connection is needed; it must return a secured connection (TLS/REALITY
 // already applied).
 func (p *Pool) Dial(ctx context.Context, dest socks.Addr, dial func(context.Context) (net.Conn, error)) (net.Conn, error) {
-	return p.dial(ctx, 0, dest, dial)
+	stream, err := p.dial(ctx, 0, dest, dial)
+	if err != nil {
+		return nil, err
+	}
+	return &responseConn{Conn: stream}, nil
 }
 
 // DialPacket opens a stream marked as UDP (flags bit 0) and returns the packet
 // adapter. The peer's mux handler sees Session.Packets instead of Session.Conn.
 func (p *Pool) DialPacket(ctx context.Context, dest socks.Addr, dial func(context.Context) (net.Conn, error)) (*Packets, error) {
-	stream, err := p.dial(ctx, FlagUDP, dest, dial)
+	stream, err := p.dial(ctx, FlagUDP|FlagAddr, dest, dial)
 	if err != nil {
 		return nil, err
 	}
-	return NewPackets(stream), nil
+	return newClientPackets(stream, FlagUDP|FlagAddr, dest), nil
 }
 
 func (p *Pool) dial(ctx context.Context, flags uint16, dest socks.Addr, dial func(context.Context) (net.Conn, error)) (net.Conn, error) {

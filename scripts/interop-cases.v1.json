@@ -1,0 +1,457 @@
+{
+  "schema": "txnode-interop-cases/v1",
+  "package": "github.com/ANRCM0/TX-Node/internal/kernel/txnode",
+  "source": "internal/kernel/txnode/interop_test.go",
+  "clients": {
+    "xray": {
+      "version": "26.3.27",
+      "environment": "TXNODE_INTEROP_XRAY",
+      "sha256": "8255dd939c34cf966cc91517b6324dd3c8d0bcf49ffac8beca049a38c46845ed"
+    },
+    "mihomo": {
+      "version": "1.19.32",
+      "environment": "TXNODE_INTEROP_MIHOMO",
+      "sha256": "7a0d59da2e678d56c899a3db996a2ad8963286c4f3634b0451435db248f13fa1"
+    },
+    "sing-box": {
+      "version": "1.14.3",
+      "environment": "TXNODE_INTEROP_SINGBOX",
+      "sha256": "768d31fa7f68debc067bb4626539498a1e8751d36a7b99e1a54bee6a23815f93"
+    },
+    "mieru": {
+      "version": "3.38.1",
+      "environment": "TXNODE_INTEROP_MIERU",
+      "sha256": "3529fc7190e073d89da1ea9bbf08aa481edca59866c466725b8231325b0b6577"
+    },
+    "curl": {
+      "version": "8.5.0",
+      "environment": "TXNODE_INTEROP_CURL",
+      "default_path": "/usr/bin/curl",
+      "version_arguments": [
+        "--version"
+      ],
+      "version_pattern": "^curl 8\\.5\\.0(?: |$)",
+      "provenance": "Ubuntu 24.04 system package; actual binary SHA-256 and version output are retained per run"
+    }
+  },
+  "profiles": {
+    "quick": {
+      "description": "PR/main fast protocol coverage; all selected cases must pass"
+    },
+    "full": {
+      "description": "Pinned-client complete candidate matrix; explicitly quarantined gaps remain unaccepted"
+    }
+  },
+  "cases": [
+    {
+      "test": "TestInteropXrayVLESS",
+      "client": "xray",
+      "profiles": [
+        "quick",
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropXrayVLESSWebSocket",
+      "client": "xray",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropXrayVMess",
+      "client": "xray",
+      "profiles": [
+        "quick",
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropXrayVMessNativeOutbound",
+      "client": "xray",
+      "profiles": [
+        "quick",
+        "full"
+      ],
+      "expected": "pass",
+      "subtests": [
+        "aes-128-gcm",
+        "chacha20-poly1305",
+        "none"
+      ],
+      "owner": "native VMess outbound against pinned Xray inbound"
+    },
+    {
+      "test": "TestInteropXrayTrojanTLS",
+      "client": "xray",
+      "profiles": [
+        "quick",
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropXrayShadowsocks",
+      "client": "xray",
+      "profiles": [
+        "quick",
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropXrayVLESSReality",
+      "client": "xray",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropMihomoHysteria2",
+      "client": "mihomo",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropMihomoVLESSReality",
+      "client": "mihomo",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropXrayVLESSTLS",
+      "client": "xray",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropXrayVLESSGRPC",
+      "client": "xray",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropXrayVLESSH2Removed",
+      "client": "xray",
+      "profiles": [
+        "full"
+      ],
+      "expected": "not-applicable",
+      "owner": "pinned Xray client capability",
+      "gap": {
+        "id": "H2-REMOVED",
+        "reason": "standalone HTTP/2 transport removed by pinned Xray; covered by XHTTP",
+        "marker": "INTEROP_KNOWN_GAP:H2-REMOVED"
+      }
+    },
+    {
+      "test": "TestInteropXrayVLESSHTTPUpgrade",
+      "client": "xray",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropXrayVLESSXHTTP",
+      "client": "xray",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropXrayVMessWebSocket",
+      "client": "xray",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropXrayShadowsocks2022",
+      "client": "xray",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropMihomoTUIC",
+      "client": "mihomo",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility",
+      "subtests": [
+        "reference",
+        "reference/native",
+        "reference/quic",
+        "native",
+        "native/native",
+        "native/quic",
+        "wrong-password"
+      ]
+    },
+    {
+      "test": "TestInteropSingBoxAnyTLS",
+      "client": "sing-box",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropSingBoxTUIC",
+      "client": "sing-box",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropSingBoxHysteria2",
+      "client": "sing-box",
+      "profiles": [
+        "quick",
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropSingBoxShadowsocks2022",
+      "client": "sing-box",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropSingBoxHysteria2UDP",
+      "client": "sing-box",
+      "profiles": [
+        "quick",
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropSingBoxTUICUDP",
+      "client": "sing-box",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropSingBoxXUDP",
+      "client": "sing-box",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropSingBoxMux",
+      "client": "sing-box",
+      "profiles": [
+        "quick",
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility",
+      "subtests": [
+        "smux",
+        "yamux"
+      ]
+    },
+    {
+      "test": "TestInteropSingBoxMuxUDP",
+      "client": "sing-box",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility",
+      "subtests": [
+        "smux",
+        "yamux"
+      ]
+    },
+    {
+      "test": "TestInteropXrayMux",
+      "client": "xray",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropSingBoxMieru",
+      "client": "sing-box",
+      "profiles": [
+        "full"
+      ],
+      "expected": "not-applicable",
+      "owner": "pinned sing-box client capability",
+      "gap": {
+        "id": "SINGBOX-MIERU",
+        "reason": "pinned sing-box has no mieru outbound; official mieru covers TCP",
+        "marker": "INTEROP_KNOWN_GAP:SINGBOX-MIERU"
+      }
+    },
+    {
+      "test": "TestInteropSingBoxSnell",
+      "client": "sing-box",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropSingBoxNaive",
+      "client": "sing-box",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility",
+      "subtests": [
+        "untrusted-root",
+        "wrong-san"
+      ]
+    },
+    {
+      "test": "TestInteropXrayVLESSEncryption",
+      "client": "xray",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropCurlNaiveH2",
+      "client": "curl",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropMieruOfficialClient",
+      "client": "mieru",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropMieruOfficialIdle",
+      "client": "mieru",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropMieruOfficialDialFailure",
+      "client": "mieru",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropMieruOfficialBulk",
+      "client": "mieru",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native data plane protocol compatibility"
+    },
+    {
+      "test": "TestInteropMieruOfficialUDPTransport",
+      "client": "mieru",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native Mieru packet underlay",
+      "subtests": [
+        "tcp-over-udp-bulk",
+        "application-udp-over-udp",
+        "idle-and-reuse"
+      ]
+    },
+    {
+      "test": "TestInteropMieruOfficialPacketFaults",
+      "client": "mieru",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native Mieru packet loss recovery and exact business accounting"
+    },
+    {
+      "test": "TestInteropMieruOfficialTrafficPatterns",
+      "client": "mieru",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native Mieru explicit traffic patterns",
+      "subtests": [
+        "TCP/low-entropy-32",
+        "TCP/low-entropy-40",
+        "TCP/low-entropy-48",
+        "TCP/low-entropy-56",
+        "UDP/low-entropy-32",
+        "UDP/low-entropy-40",
+        "UDP/low-entropy-48",
+        "UDP/low-entropy-56"
+      ]
+    }
+  ]
+}

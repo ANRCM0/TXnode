@@ -6,6 +6,12 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      native_acceptance:
+        description: Run the complete native soak and same-runner performance evidence
+        required: false
+        default: false
+        type: boolean
   schedule:
     # The interop matrix downloads pinned third-party clients; run it nightly
     # so an upstream release cannot silently break the data plane.
@@ -27,6 +33,13 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  native-evidence:
+    name: Native stability and performance evidence
+    if: github.event_name == 'workflow_dispatch' && inputs.native_acceptance
+    uses: ./.github/workflows/native-acceptance.yml
+    with:
+      candidate: ${{ github.sha }}
+
   changes:
     name: Classify Node runtime changes
     runs-on: ubuntu-latest
@@ -82,6 +95,18 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
           cache: true
+      - name: Fetch Go modules with bounded transport retries
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if go mod download; then
+              exit 0
+            fi
+            if [[ "$attempt" != 3 ]]; then
+              sleep 5
+            fi
+          done
+          exit 1
       - name: Verify canonical Go module and source paths
         run: |
           set -euo pipefail
@@ -142,6 +167,17 @@ jobs:
           }
       - name: Run full Node tests
         run: make test
+      - name: Verify pinned mux write completion patches
+        run: |
+          set -euo pipefail
+          for dependency in smux yamux; do
+            go -C "internal/deps/$dependency" test -race -count=1 ./...
+            go -C "internal/deps/$dependency" vet ./...
+          done
+      - name: Verify strict interop result policy
+        run: python3 -m unittest discover -s scripts -p 'test_interop_*.py' -v
+      - name: Reject invalid process CPU measurement evidence
+        run: python3 -m unittest discover -s scripts -p 'test_native_cpu.py' -v
       - name: Check independent Node image channels
         run: bash scripts/test-image-tags.sh
       - name: Verify native credential publication and replay history
@@ -219,7 +255,7 @@ jobs:
   build:
     name: Node release binaries
     runs-on: ubuntu-latest
-    needs: [test, runtime-stability, image-smoke, core-compatibility]
+    needs: [test, runtime-stability, image-smoke, core-compatibility, core-machine, interop-quick, interop]
     if: startsWith(github.ref, 'refs/tags/v')
     strategy:
       matrix:
@@ -251,13 +287,16 @@ jobs:
   publish-image:
     name: Publish independent Node image
     runs-on: ubuntu-latest
-    needs: [changes, test, runtime-stability, image-smoke, core-compatibility]
+    needs: [changes, test, runtime-stability, image-smoke, core-compatibility, core-machine, interop-quick, interop]
     if: >-
       ${{ !cancelled() && needs.changes.result == 'success' && needs.test.result == 'success' &&
           needs.image-smoke.result == 'success' && needs.core-compatibility.result == 'success' &&
+          needs.interop-quick.result == 'success' &&
           ((github.event_name == 'push' && github.ref == 'refs/heads/main' &&
-            needs.changes.outputs.runtime == 'true' && needs.runtime-stability.result == 'skipped') ||
-           (startsWith(github.ref, 'refs/tags/v') && needs.runtime-stability.result == 'success')) }}
+            needs.changes.outputs.runtime == 'true' && needs.runtime-stability.result == 'skipped' &&
+            needs.interop.result == 'skipped') ||
+           (startsWith(github.ref, 'refs/tags/v') && needs.runtime-stability.result == 'success' &&
+            needs.interop.result == 'success' && needs.core-machine.result == 'success')) }}
     permissions:
       contents: read
       packages: write
@@ -384,6 +423,95 @@ jobs:
           fi
           gh release upload "$RELEASE_TAG" dist/tx-node-linux-amd64 dist/tx-node-linux-arm64 --clobber
 
+  core-machine:
+    name: Pinned Core machine contract with native Node
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      CGO_ENABLED: '1'
+      APP_ENV: testing
+      DB_CONNECTION: mysql
+      DB_HOST: 127.0.0.1
+      DB_PORT: '3306'
+      DB_DATABASE: txboard_native_machine_test
+      DB_USERNAME: txboard_native_machine
+      DB_PASSWORD: native-machine-ci-only
+      REDIS_PORT: '6379'
+      REDIS_DB: '14'
+      REDIS_CACHE_DB: '15'
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: native-machine-root-ci-only
+          MYSQL_DATABASE: txboard_native_machine_test
+          MYSQL_USER: txboard_native_machine
+          MYSQL_PASSWORD: native-machine-ci-only
+        ports: ['3306:3306']
+        options: --health-cmd="mysqladmin ping -h 127.0.0.1 -pnative-machine-root-ci-only" --health-interval 5s --health-timeout 5s --health-retries 24
+      redis:
+        image: redis:7.4
+        ports: ['6379:6379']
+        options: --health-cmd="redis-cli ping" --health-interval 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read immutable supported Core
+        id: core
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          value = json.load(open('compatibility/core.v1.json'))
+          assert value['repository'] == 'ANRCM0/TXBoard'
+          assert re.fullmatch('[0-9a-f]{40}', value['revision'])
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('revision=' + value['revision'] + '\n')
+          PY
+      - uses: actions/checkout@v4
+        with:
+          repository: ANRCM0/TXBoard
+          ref: ${{ steps.core.outputs.revision }}
+          path: .compat/core
+          persist-credentials: false
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: mbstring, pdo_mysql, pdo_sqlite, curl, openssl, sodium, bcmath, redis, fileinfo
+          coverage: none
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Prepare exclusive fixed Core fixture
+        run: |
+          set -euo pipefail
+          if ! command -v mysql && ! command -v mariadb; then
+            sudo apt-get update
+            sudo apt-get install -y default-mysql-client
+          fi
+          python3 -m py_compile scripts/tests/node-native-machine/*.py
+          php -l scripts/tests/node-native-machine/fixture.php
+          cd .compat/core/api
+          composer install --no-interaction --prefer-dist
+          cp .env.example .env
+          php artisan key:generate
+      - name: Exercise production Orchestrator and existing Core machine contract
+        run: python3 scripts/tests/node-native-machine/run.py .compat/core/api . "$RUNNER_TEMP/native-machine-evidence"
+      - name: Retain source and assertion evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-machine-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/native-machine-evidence/sources.json
+            ${{ runner.temp }}/native-machine-evidence/compatibility-preflight.json
+            ${{ runner.temp }}/native-machine-evidence/result.json
+          if-no-files-found: warn
+
   core-compatibility:
     name: Native compatibility with pinned Core
     runs-on: ubuntu-latest
@@ -447,11 +575,43 @@ jobs:
           path: artifacts/core-compatibility-sources.json
           if-no-files-found: error
 
+  interop-quick:
+    name: Strict interop quick matrix
+    # Pin the system curl baseline as well as the four downloaded clients.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+          cache: true
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/interop-clients
+          key: interop-clients-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-interop-clients.sh') }}
+      - name: Fetch pinned clients
+        run: scripts/fetch-interop-clients.sh "$RUNNER_TEMP/interop-clients"
+      - name: Run and summarize strict quick interop
+        if: ${{ !cancelled() }}
+        env:
+          TXNODE_INTEROP_XRAY: ${{ runner.temp }}/interop-clients/xray/xray
+          TXNODE_INTEROP_SINGBOX: ${{ runner.temp }}/interop-clients/singbox/sing-box
+        run: python3 scripts/interop_gate.py --profile quick --output artifacts/interop-quick
+      - name: Retain quick interop evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-interop-quick-${{ github.sha }}
+          path: artifacts/interop-quick/
+          if-no-files-found: warn
+
   interop:
-    name: Third-party interop matrix
-    runs-on: ubuntu-latest
-    # Pinned client binaries are fetched with their SHA-256; the clients are
-    # test tools and never enter go.mod, the image or a release artifact.
+    name: Strict third-party interop full matrix
+    runs-on: ubuntu-24.04
+    # Client binaries are test tools only. A tagged publisher depends on this
+    # complete profile; dispatch and nightly runs verify without publishing.
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || startsWith(github.ref, 'refs/tags/v')
     timeout-minutes: 30
     steps:
@@ -461,12 +621,25 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
           cache: true
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/interop-clients
+          key: interop-clients-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-interop-clients.sh') }}
       - name: Fetch pinned clients
         run: scripts/fetch-interop-clients.sh "$RUNNER_TEMP/interop-clients"
-      - name: Run the interop matrix
+      - name: Run and summarize strict full interop
+        if: ${{ !cancelled() }}
         env:
           TXNODE_INTEROP_XRAY: ${{ runner.temp }}/interop-clients/xray/xray
           TXNODE_INTEROP_MIHOMO: ${{ runner.temp }}/interop-clients/mihomo/mihomo
           TXNODE_INTEROP_SINGBOX: ${{ runner.temp }}/interop-clients/singbox/sing-box
           TXNODE_INTEROP_MIERU: ${{ runner.temp }}/interop-clients/mieru/mieru
-        run: go test ./internal/kernel/txnode/ -run TestInterop -count=1 -v -timeout 900s
+          TXNODE_INTEROP_CURL: /usr/bin/curl
+        run: python3 scripts/interop_gate.py --profile full --output artifacts/interop-full
+      - name: Retain full interop evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: node-interop-full-${{ github.sha }}
+          path: artifacts/interop-full/
+          if-no-files-found: warn

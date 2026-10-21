@@ -409,6 +409,14 @@ func (m *Meter) seal(at Stamp, reason SealReason) bool {
 	m.sealed = append(m.sealed, m.open)
 	m.cutVersion++
 	m.open = m.newBucket(m.open.Number+1, at)
+	// Wake the existing consumer without reversing its coordinator -> meter
+	// lock order. The one-slot signal never waits for persistence or an ACK.
+	if m.consumer != nil {
+		select {
+		case m.consumer.wake <- struct{}{}:
+		default:
+		}
+	}
 	return true
 }
 

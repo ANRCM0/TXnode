@@ -24,9 +24,10 @@ import (
 // those bytes to the protocol (core.earlyConn.peek @0x7b32a0, Read @0x7b3500).
 type earlyConn struct {
 	net.Conn
-	mu   sync.Mutex
-	buf  []byte
-	done bool
+	mu           sync.Mutex
+	buf          []byte
+	done         bool
+	peekDeadline time.Time
 }
 
 func newEarlyConn(c net.Conn) *earlyConn { return &earlyConn{Conn: c} }
@@ -42,17 +43,32 @@ func (e *earlyConn) peek(timeout time.Duration) ([]byte, error) {
 	if timeout <= 0 {
 		timeout = 10 * time.Second
 	}
-	_ = e.Conn.SetReadDeadline(time.Now().Add(timeout))
+	var previous time.Time
+	if tracked, ok := e.Conn.(interface{ ReadDeadline() time.Time }); ok {
+		previous = tracked.ReadDeadline()
+	}
+	if e.peekDeadline.IsZero() {
+		e.peekDeadline = time.Now().Add(timeout)
+		if !previous.IsZero() && previous.Before(e.peekDeadline) {
+			e.peekDeadline = previous
+		}
+	}
+	if err := e.Conn.SetReadDeadline(e.peekDeadline); err != nil {
+		return nil, err
+	}
 	tmp := make([]byte, 8192)
 	n, err := e.Conn.Read(tmp)
-	_ = e.Conn.SetReadDeadline(time.Time{})
+	restoreErr := e.Conn.SetReadDeadline(previous)
+	if restoreErr != nil {
+		err = restoreErr
+	}
 	if n > 0 {
 		e.buf = append(e.buf, tmp[:n]...)
 		e.done = true
-		return e.buf, nil
+		return e.buf, err
 	}
 	if err != nil {
-		e.done = true
+		e.done = !errors.Is(err, ErrReadPaused)
 		return nil, err
 	}
 	return nil, nil
@@ -108,6 +124,19 @@ func (s *Server) relayTCP(ctx context.Context, sess *Session) error {
 	if o.Hooks != nil {
 		defer o.Hooks.Close(meta)
 	}
+	if pausable, ok := o.Hooks.(PausableChunkHook); ok {
+		reader, _ := sess.Conn.(ReadPauser)
+		if capability, ok := sess.Conn.(interface{ ReadPauseSupported() bool }); ok && !capability.ReadPauseSupported() {
+			reader = nil
+		}
+		unbind, err := pausable.BindReadPause(reader)
+		if err != nil {
+			return err
+		}
+		if unbind != nil {
+			defer unbind()
+		}
+	}
 	// A protocol that carries an inner SOCKS5 handshake (mieru) must answer the
 	// peer before the relay can read application bytes: the peer legitimately
 	// sends nothing until it sees the SOCKS5 reply. For those sessions the peek
@@ -116,26 +145,43 @@ func (s *Server) relayTCP(ctx context.Context, sess *Session) error {
 	var head []byte
 	var err error
 	if reply == nil {
-		var token any
-		if o.Hooks != nil {
-			c := meta
-			c.Dir, c.N = DirUpload, 8192
-			token, err = o.Hooks.Begin(c)
-			if err != nil {
+		for {
+			var token any
+			if o.Hooks != nil {
+				c := meta
+				c.Dir, c.N = DirUpload, 8192
+				token, err = beginChunk(ctx, o.Hooks, c)
+				if err != nil {
+					return err
+				}
+			}
+			head, err = ec.peek(o.HandshakeTimeout)
+			if o.Hooks != nil {
+				c := meta
+				c.Dir, c.N, c.Err = DirUpload, int64(len(head)), err
+				if len(head) == 0 && errors.Is(err, ErrReadPaused) {
+					c.Err = nil
+				}
+				o.Hooks.Complete(c, token)
+			}
+			if len(head) == 0 && errors.Is(err, ErrReadPaused) {
+				if err = waitReadReady(ctx, o.Hooks, err); err != nil {
+					return err
+				}
+				continue
+			}
+			if err != nil && len(head) == 0 {
+				if errors.Is(err, io.EOF) {
+					return nil
+				}
 				return err
 			}
-		}
-		head, err = ec.peek(o.HandshakeTimeout)
-		if o.Hooks != nil {
-			c := meta
-			c.Dir, c.N, c.Err = DirUpload, int64(len(head)), err
-			o.Hooks.Complete(c, token)
-		}
-		if err != nil && len(head) == 0 {
-			if errors.Is(err, io.EOF) {
-				return nil
+			// Account partial reads to their issuing token, but never retry a
+			// timeout or other error that may have consumed protocol state.
+			if err != nil && !errors.Is(err, io.EOF) {
+				return err
 			}
-			return err
+			break
 		}
 	}
 	proto, sni := SniffTCP(head)
@@ -276,8 +322,9 @@ func (s *Server) relayTCP(ctx context.Context, sess *Session) error {
 		}()
 	}
 
-	upCount := func(n int64) { touch(); count(true)(n) }
-	downCount := func(n int64) { touch(); count(false)(n) }
+	upTraffic, downTraffic := count(true), count(false)
+	upCount := func(n int64) { touch(); upTraffic(n) }
+	downCount := func(n int64) { touch(); downTraffic(n) }
 
 	// Flush the peeked bytes to the remote, then relay the bare connections so
 	// splice(2) stays available on a plain TCP node. Buffered wrappers are
@@ -614,20 +661,32 @@ func (u *udpRelay) readBack(a *udpAssoc) {
 				return
 			}
 		}
-		err = u.sess.Packets.WritePacket(buf[:n], addr)
-		if u.opts.Hooks != nil {
-			meta.Err = err
-			if err != nil {
-				meta.N = 0
+		written := n
+		if counted, ok := u.sess.Packets.(PacketWriteCounter); ok {
+			written, err = counted.WritePacketCount(buf[:n], addr)
+			if written < 0 || written > n {
+				written, err = 0, errors.Join(err, io.ErrShortWrite)
+			} else if written != n && err == nil {
+				err = io.ErrShortWrite
 			}
+		} else {
+			err = u.sess.Packets.WritePacket(buf[:n], addr)
+			if err != nil {
+				written = 0
+			}
+		}
+		if u.opts.Hooks != nil {
+			meta.N, meta.Err = int64(written), err
 			u.opts.Hooks.Complete(meta, token)
 		}
 		u.writeMu.Unlock()
+		if written > 0 {
+			u.count(false, int64(written))
+		}
 		if err != nil {
 			u.remove(a.dest, a)
 			return
 		}
-		u.count(false, int64(n))
 	}
 }
 

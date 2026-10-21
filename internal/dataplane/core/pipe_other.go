@@ -12,6 +12,10 @@ func splicePipe(ctx context.Context, a, b net.Conn, up, down func(int64)) (bool,
 	return false, nil
 }
 
+func splicePipeWithHook(ctx context.Context, a, b net.Conn, up, down func(int64), hook ChunkHook, meta Chunk) (bool, error) {
+	return false, nil
+}
+
 // Splice falls back to Pipe on platforms without splice(2).
 func Splice(a, b net.Conn) (bool, error) {
 	return false, Pipe(context.Background(), a, b, nil, nil)

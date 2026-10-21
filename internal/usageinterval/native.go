@@ -316,14 +316,20 @@ func (c *NativeCollector) Complete(op *Operation, direction string, n int64, ioE
 }
 
 func (c *NativeCollector) CompleteIO(op *Operation, direction string, n int64, ioError bool) error {
+	return c.completeIOWithClock(op, direction, n, ioError, time.Now)
+}
+
+func (c *NativeCollector) completeIOWithClock(op *Operation, direction string, n int64, ioError bool, clock func() time.Time) error {
 	if op == nil || op.native != c {
 		c.failed.Store(true)
 		return ErrUnknown
 	}
-	now := time.Now()
-	at := stamp{now.UnixNano(), int64(now.Sub(c.origin))}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Serialize the wall/monotonic observation with BeginIO and other completions.
+	// This is a completion upper bound: waiting for the lock cannot extend a lease.
+	now := clock()
+	at := stamp{now.UnixNano(), int64(now.Sub(c.origin))}
 	for i := range c.state.Events {
 		e := &c.state.Events[i]
 		if e.Sequence != op.sequence {

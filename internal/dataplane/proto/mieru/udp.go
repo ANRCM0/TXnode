@@ -40,7 +40,7 @@ func (h *Handler) ServePackets(ctx context.Context, pc net.PacketConn) error {
 	if h.packetRelay == nil {
 		return errors.New("mieru: UDP relay is not configured")
 	}
-	srv := &udpServer{owner: h, pc: pc, ctx: ctx, peers: make(map[string]*udpPeer)}
+	srv := &udpServer{owner: h, pc: pc, ctx: ctx, peers: make(map[string]*udpPeer), v2Peers: make(map[string]*v2DatagramConn)}
 	h.packetServer.Store(srv)
 	defer h.packetServer.CompareAndSwap(srv, nil)
 	defer srv.closePeers()
@@ -65,12 +65,16 @@ func (h *Handler) ServePackets(ctx context.Context, pc net.PacketConn) error {
 }
 
 type udpServer struct {
-	owner  *Handler
-	active *Handler
-	ctx    context.Context
-	pc     net.PacketConn
-	mu     sync.Mutex
-	peers  map[string]*udpPeer
+	owner           *Handler
+	active          *Handler
+	ctx             context.Context
+	pc              net.PacketConn
+	mu              sync.Mutex
+	peers           map[string]*udpPeer
+	v2Peers         map[string]*v2DatagramConn
+	retransmissions atomic.Uint64
+	duplicates      atomic.Uint64
+	dropped         atomic.Uint64
 }
 
 func (s *udpServer) handle(addr net.Addr, seg []byte) {
@@ -80,6 +84,10 @@ func (s *udpServer) handle(addr net.Addr, seg []byte) {
 		s.active = handler
 	}
 	if handler == nil {
+		return
+	}
+	handler.packetServer.Store(s)
+	if s.handleV2(handler, addr, seg) {
 		return
 	}
 	cipher, parsed, entry, err := handler.identify(seg)
@@ -102,7 +110,9 @@ func (s *udpServer) handle(addr net.Addr, seg []byte) {
 	}
 	if parsed.flags&flagAck != 0 {
 		if peer != nil && len(parsed.payload) >= 4 {
-			peer.received[fingerprint] = struct{}{}
+			if len(peer.received) < 4096 {
+				peer.received[fingerprint] = struct{}{}
+			}
 			peer.ps.acked(binary.BigEndian.Uint32(parsed.payload[:4]))
 		}
 		return
@@ -122,6 +132,13 @@ func (s *udpServer) handle(addr net.Addr, seg []byte) {
 		peer = nil
 	}
 	if peer == nil {
+		s.mu.Lock()
+		full := len(s.peers)+len(s.v2Peers) >= v2MaxPeers
+		s.mu.Unlock()
+		if full {
+			s.dropped.Add(1)
+			return
+		}
 		ctx, cancel := context.WithCancel(s.ctx)
 		peer = &udpPeer{srv: s, key: key, client: addr, cipher: cipher, dest: dest, ctx: ctx, cancel: cancel, done: make(chan struct{}), received: make(map[uint64]struct{})}
 		peer.ps = NewPacketSession(peer.send)
@@ -135,7 +152,9 @@ func (s *udpServer) handle(addr net.Addr, seg []byte) {
 		}()
 	}
 	peer.lastSeen.Store(time.Now().UnixNano())
-	peer.received[fingerprint] = struct{}{}
+	if len(peer.received) < 4096 {
+		peer.received[fingerprint] = struct{}{}
+	}
 	peer.ps.mu.Lock()
 	inWindow := parsed.seq <= peer.ps.nextSeq+reorderWindow
 	peer.ps.mu.Unlock()
@@ -155,20 +174,7 @@ func packetReplayID(seg []byte) uint64 {
 }
 
 func (h *Handler) checkPacketReplay(seg []byte) bool {
-	key := packetReplayID(seg)
-	now := time.Now()
-	h.rmu.Lock()
-	defer h.rmu.Unlock()
-	if _, seen := h.seen[key]; seen {
-		return false
-	}
-	h.seen[key] = now
-	for k, ts := range h.seen {
-		if now.Sub(ts) > replayWindow {
-			delete(h.seen, k)
-		}
-	}
-	return true
+	return h.rememberReplay(packetReplayID(seg))
 }
 
 type udpPeer struct {
@@ -251,9 +257,16 @@ func (s *udpServer) closePeers() {
 	for _, p := range s.peers {
 		list = append(list, p)
 	}
+	v2List := make([]*v2DatagramConn, 0, len(s.v2Peers))
+	for _, p := range s.v2Peers {
+		v2List = append(v2List, p)
+	}
 	s.mu.Unlock()
 	for _, p := range list {
 		_ = p.Close()
+	}
+	for _, p := range v2List {
+		p.abort(net.ErrClosed)
 	}
 }
 func (s *udpServer) sweep(done <-chan struct{}) {

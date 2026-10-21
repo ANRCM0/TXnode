@@ -51,8 +51,7 @@ const (
 	addrNone = 0xff
 )
 
-// TUIC address types differ from SOCKS5: 1 is a domain, 3 is IPv4 and 4 is IPv6
-// (readAddr @0xb42580 / appendAddr @0xb42900, notes §2.3).
+// TUIC v5 address types shared by Mihomo v1.19.32 and sing-quic 75c3ac4fa12b.
 const (
 	// TUIC v5 uses sing's address serializer: FQDN 0x00, IPv4 0x01, IPv6 0x02,
 	// empty 0xff (sing-quic/tuic AddressSerializer).
@@ -75,7 +74,7 @@ func (h Header) Append(buf []byte) []byte {
 
 // frame is one TUIC v5 packet frame:
 //
-//	05 02 | assocID(2) | pktID(2) | fragID(1) | fragTotal(1) | len(2) | addr? | payload
+//	05 02 | assocID(2) | pktID(2) | fragTotal(1) | fragID(1) | len(2) | addr? | payload
 //
 // len is the payload length; the address is self-describing. On the wire the
 // address follows the header and the payload follows the address, which is how
@@ -89,6 +88,7 @@ type frame struct {
 	addr      socks.Addr
 	hasAddr   bool
 	payload   []byte
+	stream    bool // Reply through the carrier used by this association's first packet.
 }
 
 // headerSize is the full frame size before the payload.
@@ -107,7 +107,7 @@ func (f *frame) append(buf []byte) []byte {
 	buf = append(buf, version, cmdPacket)
 	buf = binary.BigEndian.AppendUint16(buf, f.assocID)
 	buf = binary.BigEndian.AppendUint16(buf, f.pktID)
-	buf = append(buf, f.fragID, f.fragTotal)
+	buf = append(buf, f.fragTotal, f.fragID)
 	buf = binary.BigEndian.AppendUint16(buf, uint16(len(f.payload)))
 	if f.hasAddr {
 		buf = appendAddr(buf, f.addr)
@@ -130,14 +130,17 @@ var errShortFrame = errors.New("tuic: short packet frame")
 // assocID(2 BE), u16, u8, u8, len(2 BE), payload, address (notes §2.3 records
 // the offsets; the named FRAG semantics are inferred).
 func parsePacketBody(b []byte) (*frame, error) {
-	if len(b) < 8 {
+	if len(b) < 9 {
 		return nil, errShortFrame
 	}
 	f := &frame{
 		assocID:   binary.BigEndian.Uint16(b[0:2]),
 		pktID:     binary.BigEndian.Uint16(b[2:4]),
-		fragID:    b[4],
-		fragTotal: b[5],
+		fragTotal: b[4],
+		fragID:    b[5],
+	}
+	if f.fragTotal > 1 && f.fragID >= f.fragTotal || f.fragTotal <= 1 && f.fragID != 0 {
+		return nil, errors.New("tuic: invalid fragment index")
 	}
 	payloadLen := int(binary.BigEndian.Uint16(b[6:8]))
 	rest := b[8:]
@@ -153,7 +156,7 @@ func parsePacketBody(b []byte) (*frame, error) {
 	} else if len(rest) > 0 {
 		rest = rest[1:]
 	}
-	if len(rest) < payloadLen {
+	if len(rest) != payloadLen {
 		return nil, errShortFrame
 	}
 	f.payload = rest[:payloadLen]
@@ -241,14 +244,12 @@ func fragment(base *frame, payload []byte, chunk int) []*frame {
 	if len(payload) <= chunk {
 		f := *base
 		f.payload = payload
-		f.fragID, f.fragTotal = 0, 0
+		f.fragID, f.fragTotal = 0, 1
 		return []*frame{&f}
 	}
 	total := (len(payload) + chunk - 1) / chunk
-	clipped := false
 	if total > maxFragments {
-		total = maxFragments
-		clipped = true
+		return nil
 	}
 	out := make([]*frame, 0, total)
 	for i := 0; i < total; i++ {
@@ -260,18 +261,15 @@ func fragment(base *frame, payload []byte, chunk int) []*frame {
 		f := *base
 		f.fragID = uint8(i)
 		f.fragTotal = uint8(total)
+		if i > 0 {
+			f.hasAddr = false
+			f.addr = socks.Addr{}
+		}
 		f.payload = payload[start:end]
 		out = append(out, &f)
 		if end == len(payload) {
 			break
 		}
-	}
-	if clipped && len(out) > 0 {
-		// Keep the frame count legal; the last fragment carries the remainder so
-		// no byte is silently dropped.
-		last := out[len(out)-1]
-		start := (len(out) - 1) * chunk
-		last.payload = payload[start:]
 	}
 	return out
 }

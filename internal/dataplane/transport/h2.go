@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/ANRCM0/TX-Node/internal/dataplane/core"
 )
@@ -32,11 +33,10 @@ func (h *h2Handler) Handle(ctx context.Context, conn net.Conn) (*core.Session, e
 				return
 			}
 			defer stream.Close()
-			w.WriteHeader(http.StatusOK)
-			stream.flusher.Flush()
-			cs := &connectStream{httpStream: stream, auth: r.Header.Get("Proxy-Authorization"), authority: connectAuthority(r)}
+			cs := &connectStream{httpStream: stream, auth: r.Header.Get("Proxy-Authorization"), authority: connectAuthority(r), padding: r.Header.Get("Padding") != ""}
 			sess, err := h.next.Handle(ctx, cs)
 			if err != nil || sess == nil {
+				w.WriteHeader(http.StatusProxyAuthRequired)
 				return
 			}
 			if sess.Conn == nil {
@@ -95,15 +95,45 @@ func (i *Inbound) pathOK(path string) bool {
 // methods after net.Conn match naive.Stream structurally.
 type connectStream struct {
 	*httpStream
-	auth      string
-	authority string
+	auth        string
+	authority   string
+	padding     bool
+	writeClosed atomic.Bool
+}
+
+func (c *connectStream) Read(p []byte) (int, error) {
+	n, err := c.httpStream.Read(p)
+	if err != nil && c.writeClosed.Load() {
+		// Closing our request body wakes the upload reader with HTTP/2's
+		// private "body closed by handler" error. It is a graceful local EOF,
+		// not a relay fault that should reset the flushed response stream.
+		err = io.EOF
+	}
+	return n, err
+}
+
+func (c *connectStream) CloseWrite() error {
+	c.writeClosed.Store(true)
+	return c.httpStream.CloseWrite()
 }
 
 func (c *connectStream) ProxyAuthorization() string { return c.auth }
 func (c *connectStream) Authority() string          { return c.authority }
-func (c *connectStream) Accept() net.Conn           { return c }
+func (c *connectStream) PaddingRequested() bool     { return c.padding }
+func (c *connectStream) Accept() net.Conn {
+	c.rw.WriteHeader(http.StatusOK)
+	c.flusher.Flush()
+	return c
+}
+func (c *connectStream) AcceptPadding(value string) net.Conn {
+	c.rw.Header().Set("Padding", value)
+	return c.Accept()
+}
 
 func connectAuthority(r *http.Request) string {
+	if authority := r.Header.Get("-connect-authority"); authority != "" {
+		return authority
+	}
 	if r.Host != "" {
 		return r.Host
 	}

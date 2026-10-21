@@ -1,0 +1,67 @@
+# 固定 Core 基线的 Machine 兼容缺口
+
+本记录只说明源码合约缺口与已有失败证据，不是 Machine 功能验收。Node 的固定 Core 基线仍是 `ANRCM0/TXBoard@ca25f21de8ff41a476c1ffcf182359f3bc565122`，以 `compatibility/core.v1.json` 为准。本切片不修改 Core 应用、Core pin、授权策略或 CI 成败条件。
+
+## 已有 Actions 失败
+
+Node `75e1554` 的 Actions run `39463019286`，Core machine job `118770492079` 在真实 Machine 初始就绪阶段失败。结构化失败诊断定位 `internal/machine/native_core_machine_live_test.go:160` 的 readiness 等待，信号为 readiness timeout；这不是双节点、共享 WS 或 Provider 授权通过的证据。该执行使用 `CORE_INSTALLATION_MODE=legacy`，公开 evidence 的 `native_core_installation_admission=false`，不能解释成 native 安装验收。
+
+## Node 的原生夹具准备与调用链
+
+本切片补齐 Node 仓库自己的原生夹具准备，不修改固定 Core 源码，也不代表 Machine 功能已经验收。以下 Core 行号均对应上述不可变 pin。
+
+1. `scripts/tests/node-native-machine/native_setup.py` 准备隔离 CA、Core/Node mTLS 身份、Core 签名 seed 和真实 Credential Provider 进程，沿用固定 Core 已有的受信配置入口。
+2. `fixture.php` 调用真实 `InstallationAuthority.initialize(native)`、方案发布、Provider 注册、readiness 和 activate，要求 native/open、epoch 2；账户经 HTTP 注册、订单、免费 checkout 和 `core:native-work` 履约取得 Provider subject。固定 Core 的 recipient-render 客户端取得 VLESS/VMess 凭据，不直接填充 User UUID/token。
+3. `internal/machine/machine.go` 通过 `ExpandMachineNode` 创建 per-node control plane 和 service。Go 夹具提供完整 `Authorization`、Provider mTLS 与 `UsageV2` 配置；`initAuthorization` 继续在既有 state 根目录下按 node ID 隔离 manager。
+4. `internal/controlplane/txboard.go` 的 `Initial` 仍要求授权 manager、握手 trust 和完整签名 snapshot；`initNativeUsage` 使用该 snapshot 创建原生 collector、原有 NativeStore 和 UsageV2 spool。旧的 legacy terminal Batch 断言映射为原 node/source epoch/batch ID/payload digest/usage period 与真实持久化 receipt、SQL 唯一性。
+
+这些准备全部位于静态前置检查之后。固定 pin 仍有下面五项 admission 缺口，因此真实安装、Provider、账户和完整 Machine 链尚未在此 gate 执行。
+
+## Node 自身尚未满足的 Machine 行为
+
+| 保留的原业务断言 | 当前原生实现及缺口 |
+| --- | --- |
+| 恢复旧使用量并取得 Core 持久化回执后才开放监听 | 新增启动恢复源码：`OpenNativeStore` 导出旧意图后，在新 collector 和 listener 之前验证固定恢复集合的真实持久化 receipt。每页最多 16 个、最多 16 页未获回执的记录，整体 30 秒、每页 2 秒；已确认历史本地验证且不占网络预算。原 session、payload、period 和 digest 保持，matching 当前 cutoff 阻止准入。真实内核回归已编写，须取得当前提交 Actions 结果才算验收。 |
+| 兄弟节点已建流跨授权刷新继续存活 | 新增普通续期源码：凭据、权限、period、terms、tariff、revocation 和会话身份相同且租约不缩短时，稳定 meter 暂停新 Begin，等待原 token 完成，严格封口后切换 collector，再恢复读取。新增真实 VLESS/VMess 同流三次续期、每个原 grant 批次的精确计量、cutoff 及 unsupported 回退回归，待新提交 Actions。不能安全暂停的承载和身份/策略变化仍重建；完整 Machine 断言未验收。 |
+| 所有 config/users REST 请求阻断时仍由 WS 完成配置更新 | 新增端口变化的窄路径：当前签名用户、协议、安全参数、路由及原有限租约保持，使用既有 Kernel.Reload 复用原 meter/collector，并阻止旧在途 full REST 结果回滚新端口。失败保留旧已应用监听，过期/撤权照常关闭。其他配置变化仍获取完整签名 REST snapshot；新增真实 WS/VLESS 回归待当前 Actions 验收。 |
+
+这些是 Node 的兼容与验收缺口，不能归入 Core admission 缺失，也不证明当前原生计量已经丢失。夹具保留相应严格断言；即使后续 Core inventory 通过，也不能据此宣称完整 Machine 已通过。
+
+启动恢复的时间预算覆盖可取消的递交和阶段检查；本地 spool 枚举仍使用既有完整读取，不能把页数预算解释成磁盘 I/O 或内存的绝对上限。持久化回执只证明 Core 接收保管，`pending` 不等于财务已结算。启动恢复与 WS 端口更新在 `454607f4` 的 Actions `39489699245` Go/race 中通过；新增续期源码改变了运行时，必须重新取得新提交证据。
+
+普通续期的 owner 链为 `Service.applyNativeAuthorization -> renewNativeAuthorization -> Kernel.PauseNativeRenewal -> nativeMeter renewal ticket -> protocol ReadPauseConn -> NativeCollector.RetireQuiescent -> NativeStore`。稳定 hook 保留原 token 的 issuing meter/collector；暂停时不把 token 迁移到后继窗口。旧 grant 以整秒边界封口，新 collector 的 ReadyAt 必须不早于该边界；新 authority high-water 经原 manager 持久化后，在 watchdog/quarantine 的原锁下发布并 Resume。
+
+续期成功窗口最多两秒，且不超过旧授权和候选租约的剩余时间。锁等待和阶段检查可取消，OS fsync 本身不可取消；磁盘操作不持 meter/kernel gate 锁，旧 watchdog 仍能终止 I/O，迟到返回不能恢复失效 owner。任何进入暂停后发生的错误均 Abort，不恢复已封口旧窗口，也不回滚授权 high-water。只有暂停前无副作用的 unsupported 结果能走原重建路径。
+
+当前读取暂停仅识别握手后的裸 TCP，以及协议明确保留的完整帧起点。VMess 半个长度、body 或 padding 均不能重试；TLS、REALITY、Vision 和其他不透明承载不声明可暂停，使用原重建路径。Service 联合回归覆盖普通 VLESS 和 VMess AES128GCM/TCP；VMess 使用与 Machine 夹具相同的本仓库 outbound 客户端，第三方互通仍独立验收。它们不能推导完整 Machine 或全部承载连接连续性。
+
+## 固定 Core 调用链
+
+| 固定 Core 源码 | 必要行为与缺口 |
+| --- | --- |
+| `api/app/Http/Controllers/Txapi/NodeProtocolController.php:19`、`:38`、`:42` | handshake 无条件读取 `NodeAuthorizationQueries::publicTrust()`；授权不可用返回 503。 |
+| `api/app/Domains/Network/NativeProviderNodeAuthorization.php:30`、`:34` | publicTrust 首先调用 `InstallationAuthority::assertNativeRead()`。 |
+| `api/app/Domains/Installation/InstallationAuthority.php:236`、`:292`、`:298` | assertNativeRead 进入 native domain；安装必须是 authority=native、phase=open，并校验 native 配置。legacy fixture 不满足。 |
+| `api/app/Listeners/EnforceInstallationAuthority.php:50`、`:59` | native 命令必须在 `NativeRuntimeAdmission::COMMANDS` 中；未列入则抛出 `INSTALLATION_AUTHORITY_NATIVE_COMMAND_UNAVAILABLE`。 |
+| `api/app/Domains/Installation/NativeRuntimeAdmission.php:9` | COMMANDS 缺少实际启动 Workerman 所用的 `ws-server`。 |
+| `api/app/Http/Middleware/EnsureInstallationAuthority.php:20` | native HTTP 请求必须通过封闭的 admission inventory。 |
+| `api/app/Domains/Installation/NativeRuntimeAdmission.php:13`、`:50` | HTTP inventory 缺少本 gate 必需的 network-nodes 列表、完整更新、启停更新及 Machine token rotate。 |
+
+所以保留 legacy 不能取得必需的 native Provider trust；仅切换环境变量到 native 也不能让未激活安装、未准入 WS 命令和缺少的管理路径变为可用。不能用关闭 Provider 授权、伪造 trust、替换 Core API、放宽安装权威或跳过阶段来获得绿色结果。
+
+## 独立 Core 适配的必需能力
+
+- 验证经过真实安装生命周期进入 native/open 的隔离 fixture，包含锁定配置、Provider 注册、trust 和子节点可使用的有限签名授权；Node 已准备相应源码，密钥与租约仍须来自对应真实 owner 并经实际执行验证。
+- 在安装权威下实现并准入真实 `ws-server`，覆盖 Machine 认证、单共享 tunnel、节点广播、断线重连、token 轮换及旧会话撤销。
+- 实现并准入管理接口：`GET /txapi/admin/{admin}/network-nodes`、`PUT /txapi/admin/{admin}/network-nodes/{id}`、`PATCH /txapi/admin/{admin}/network-nodes/{id}`、`POST /txapi/admin/{admin}/network-machines/{id}/token/rotate`，保留管理员鉴权和状态一致性。
+- 独立 Core 变更必须先取得它自己精确 SHA 的功能验收，再经单独兼容评审采用新 pin；随后 Node 重跑真实授权 fixture 和完整 gate，并分别处理上述 Node 行为缺口。静态 inventory 通过只是必要条件。
+
+## 静态前置检查与证据
+
+`scripts/tests/node-native-machine/preflight.py` 只读取固定 Core 源码及 Git 状态，检查实际 HEAD、API 源码差异、`COMMANDS` 和上述 HTTP 合约。输出只包含固定 gap code、公开路径和 revision，不输出日志、环境、令牌或异常正文。缺口返回非零。
+
+`run.py` 在数据库探测、迁移、seed 和应用启动之前保存 `sources.json`、`compatibility-preflight.json`；发现缺口时保存 `result.json`，其中 `status=failed`、`failed_stage=compatibility_preflight`。CI 仍失败，不能把诊断前移解释成验收通过。当前固定 pin 预期缺少 `CORE_WS_COMMAND_NOT_ADMITTED` 及四个 `CORE_HTTP_NOT_ADMITTED` 必需项。
+
+`sources.json` 区分请求的 native 模式与实际尚未启动的安装状态；只有真实 activate 成功后运行记录才声明 native。前置失败的 `native_core_installation_admission=false` 保持不变。
+
+这项检查不证明 PHP 运行时、MySQL、安装激活、Provider 进程、签名租约或 WS 生命周期可用，也不消除上述 Node 行为缺口。功能结果仍须来自 README 规定的 Actions 执行。

@@ -79,8 +79,10 @@ import (
 //
 // Body chunks (both directions, vmess.newCodecLen @0xb45320):
 //
-//	length  : BE16(n), sealed with KDF16(bodyKey,"auth_len") when option&0x10
-//	payload : sealed with bodyKey
+//	length  : BE16(payload + tag + clear padding); authenticated lengths subtract
+//	          their AEAD tag size before sealing and add it after opening, using
+//	          the request key/IV in both directions and a separate nonce counter
+//	payload : sealed with the direction's bodyKey, followed by clear padding
 //	nonce   : the 12-byte body IV with bytes [0:2] replaced by BE16(counter);
 //	          the counter starts at 0 and increments on every Seal/Open
 //	          (0xb45986), and 0xffff marks the codec broken.
@@ -117,6 +119,7 @@ const (
 	kdfRespIV           = "AEAD Resp Header IV"
 	kdfAuthLen          = "auth_len"
 	kdfRoot             = "VMess AEAD KDF"
+	vmessCmdKeySalt     = "c48619fe-8f02-49e0-b9e9-edf763e17e21"
 )
 
 // newVMess builds the VMess client. Only AEAD headers exist: alterId must be 0.
@@ -206,9 +209,9 @@ func isVMessCipher(v string) bool {
 	return false
 }
 
-// cmdKey is MD5(uuid) — only a KDF seed (vmess.cmdKey @0xb493e0).
+// VMess AEAD uses the same salted UUID command key as Xray's protocol.NewID.
 func (p *Proxy) cmdKey() []byte {
-	sum := md5.Sum(p.uuid[:])
+	sum := md5.Sum(append(append([]byte(nil), p.uuid[:]...), vmessCmdKeySalt...))
 	return sum[:]
 }
 
@@ -298,6 +301,7 @@ type vmessKeys struct {
 	bodyIV  [16]byte
 	bodyKey [16]byte
 	respV   byte
+	option  byte
 }
 
 // fnv1a32 is the request-header checksum (0x811c9dc5 / 0x1000193, stored big
@@ -358,7 +362,7 @@ func (p *Proxy) vmessRequest(w io.Writer, dest socks.Addr) (vmessKeys, error) {
 		// global padding without masking is rejected by the server.
 		option |= vmessOptionChunkMasking
 	}
-	p.vmessOption = option
+	keys.option = option
 
 	header := make([]byte, 0, 42+len(dest.Host)+padLen+4)
 	header = append(header, 0x01) // version
@@ -401,17 +405,11 @@ func (p *Proxy) vmessRequest(w io.Writer, dest socks.Addr) (vmessKeys, error) {
 	hdrNonce := vmessKDF(keys.cmdKey, []byte(kdfHeaderNonce), authID[:], connNonce[:])[:12]
 	sealedHdr := hdrAEAD.Seal(nil, hdrNonce, header, authID[:])
 
-	if _, err := w.Write(authID[:]); err != nil {
+	wire := append(append(append(append([]byte{}, authID[:]...), sealedLen...), connNonce[:]...), sealedHdr...)
+	if n, err := w.Write(wire); err != nil {
 		return keys, err
-	}
-	if _, err := w.Write(sealedLen); err != nil {
-		return keys, err
-	}
-	if _, err := w.Write(connNonce[:]); err != nil {
-		return keys, err
-	}
-	if _, err := w.Write(sealedHdr); err != nil {
-		return keys, err
+	} else if n != len(wire) {
+		return keys, io.ErrShortWrite
 	}
 	return keys, nil
 }
@@ -422,25 +420,28 @@ func (p *Proxy) vmessStream(c net.Conn, dest socks.Addr) (net.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("vmess outbound: %w", err)
 	}
-	return newVMessConn(c, keys, p.security, p.vmessOption)
+	return newVMessConn(c, keys, p.security, keys.option)
 }
 
 // ---------------------------------------------------------------------------
 // body codec (vmess.newCodecLen @0xb45320)
 
 type vmessCodec struct {
-	data    cipher.AEAD
-	lenAEAD cipher.AEAD
-	nonce   [12]byte
-	count   uint16
-	wraps   bool
+	data     cipher.AEAD
+	lenAEAD  cipher.AEAD
+	nonce    [12]byte
+	count    uint16
+	wraps    bool
+	lenNonce [12]byte
+	lenCount uint16
+	lenWraps bool
 
 	mask bool
 	pad  bool
 	xof  io.Reader
 }
 
-func newVMessCodec(sec byte, key, iv []byte, option byte) (*vmessCodec, error) {
+func newVMessCodec(sec byte, key, iv []byte, option byte, authKey, authIV []byte) (*vmessCodec, error) {
 	c := &vmessCodec{}
 	copy(c.nonce[:], iv[:12])
 	data, err := vmessAEAD(sec, key)
@@ -450,18 +451,18 @@ func newVMessCodec(sec byte, key, iv []byte, option byte) (*vmessCodec, error) {
 	c.data = data
 	if option&(vmessOptionChunkMasking|vmessOptionGlobalPadding) != 0 {
 		sh := sha3.NewShake128()
-		_, _ = sh.Write(key)
 		_, _ = sh.Write(iv)
 		c.xof = sh
 		c.mask = option&vmessOptionChunkMasking != 0
 		c.pad = option&vmessOptionGlobalPadding != 0
 	}
 	if data != nil && option&vmessOptionAuthLength != 0 {
-		la, err := vmessAEAD(sec, vmessKDF16(key, []byte(kdfAuthLen)))
+		la, err := vmessAEAD(sec, vmessKDF16(authKey, []byte(kdfAuthLen)))
 		if err != nil {
 			return nil, err
 		}
 		c.lenAEAD = la
+		copy(c.lenNonce[:], authIV[:12])
 	}
 	return c, nil
 }
@@ -475,7 +476,7 @@ func (c *vmessCodec) encodeLen(n int) (wire, pad int, err error) {
 		pad = int(binary.BigEndian.Uint16(b[:]) & 0x3f)
 	}
 	wire = n + pad
-	if c.mask {
+	if c.mask && c.lenAEAD == nil {
 		var b [2]byte
 		if _, err := io.ReadFull(c.xof, b[:]); err != nil {
 			return 0, 0, err
@@ -494,7 +495,7 @@ func (c *vmessCodec) decodeLen(wire int) (n, pad int, err error) {
 		pad = int(binary.BigEndian.Uint16(b[:]) & 0x3f)
 	}
 	n = wire
-	if c.mask {
+	if c.mask && c.lenAEAD == nil {
 		var b [2]byte
 		if _, err := io.ReadFull(c.xof, b[:]); err != nil {
 			return 0, 0, err
@@ -527,6 +528,18 @@ func (c *vmessCodec) lenSize() int {
 	return 2 + c.lenAEAD.Overhead()
 }
 
+func (c *vmessCodec) nextLen() ([]byte, error) {
+	if c.lenWraps {
+		return nil, errors.New("vmess: connection reached its length chunk limit; reconnect")
+	}
+	binary.BigEndian.PutUint16(c.lenNonce[:2], c.lenCount)
+	if c.lenCount == 0xffff {
+		c.lenWraps = true
+	}
+	c.lenCount++
+	return c.lenNonce[:], nil
+}
+
 func (c *vmessCodec) overhead() int {
 	if c.data == nil {
 		return 0
@@ -535,12 +548,19 @@ func (c *vmessCodec) overhead() int {
 }
 
 func (c *vmessCodec) sealLen(n int) ([]byte, error) {
+	if c.lenAEAD != nil {
+		// Xray authenticates the wire size minus the length AEAD tag.
+		if n < c.lenAEAD.Overhead() {
+			return nil, errors.New("vmess: corrupt chunk length")
+		}
+		n -= c.lenAEAD.Overhead()
+	}
 	var lp [2]byte
 	binary.BigEndian.PutUint16(lp[:], uint16(n))
 	if c.lenAEAD == nil {
 		return lp[:], nil
 	}
-	nonce, err := c.next()
+	nonce, err := c.nextLen()
 	if err != nil {
 		return nil, err
 	}
@@ -562,7 +582,7 @@ func (c *vmessCodec) openLen(b []byte) (int, error) {
 	if c.lenAEAD == nil {
 		return int(binary.BigEndian.Uint16(b)), nil
 	}
-	nonce, err := c.next()
+	nonce, err := c.nextLen()
 	if err != nil {
 		return 0, err
 	}
@@ -570,7 +590,7 @@ func (c *vmessCodec) openLen(b []byte) (int, error) {
 	if err != nil || len(plain) != 2 {
 		return 0, errors.New("vmess: corrupt chunk length")
 	}
-	return int(binary.BigEndian.Uint16(plain)), nil
+	return int(binary.BigEndian.Uint16(plain)) + c.lenAEAD.Overhead(), nil
 }
 
 func (c *vmessCodec) openChunk(b []byte) ([]byte, error) {
@@ -613,7 +633,7 @@ func newVMessConn(c net.Conn, keys vmessKeys, security byte, option byte) (*vmes
 	}
 	v := &vmessConn{conn: c, keys: keys, security: security, option: option}
 	// Client -> server body uses the raw request body key/IV.
-	wr, err := newVMessCodec(security, keys.bodyKey[:], keys.bodyIV[:], option)
+	wr, err := newVMessCodec(security, keys.bodyKey[:], keys.bodyIV[:], option, keys.bodyKey[:], keys.bodyIV[:])
 	if err != nil {
 		return nil, err
 	}
@@ -656,8 +676,9 @@ func (v *vmessConn) response() error {
 	if err != nil || len(plain) != vmessRespHeaderLen || plain[0] != v.keys.respV {
 		return errRespMismatch
 	}
-	// Server -> client body keys are sha256(request body key/IV)[:16].
-	rd, err := newVMessCodec(v.security, wKey[:16], wIV[:16], v.option)
+	// Response payload keys are hashed; length authentication still uses the
+	// original request key/IV and its own independent nonce sequence.
+	rd, err := newVMessCodec(v.security, wKey[:16], wIV[:16], v.option, v.keys.bodyKey[:], v.keys.bodyIV[:])
 	if err != nil {
 		return err
 	}
@@ -681,23 +702,28 @@ func (v *vmessConn) Read(p []byte) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		if wire == 0 {
-			continue
-		}
 		n, pad, err := v.rd.decodeLen(wire)
 		if err != nil {
 			return 0, err
 		}
-		body := make([]byte, n+pad+v.rd.overhead())
+		if n == v.rd.overhead() {
+			return 0, io.EOF
+		}
+		if n < v.rd.overhead() {
+			return 0, errors.New("vmess: corrupt chunk length")
+		}
+		body := make([]byte, n)
 		if _, err := io.ReadFull(v.conn, body); err != nil {
 			return 0, err
+		}
+		if pad > 0 {
+			if _, err := io.CopyN(io.Discard, v.conn, int64(pad)); err != nil {
+				return 0, err
+			}
 		}
 		plain, err := v.rd.openChunk(body)
 		if err != nil {
 			return 0, err
-		}
-		if pad > 0 && len(plain) >= pad {
-			plain = plain[:len(plain)-pad]
 		}
 		if len(plain) > 0 {
 			v.rbuf = plain
@@ -716,10 +742,14 @@ func (v *vmessConn) Write(p []byte) (int, error) {
 	written := 0
 	for len(p) > 0 {
 		n := len(p)
-		if n > 0xffff {
-			n = 0xffff
+		limit := 0xffff - v.wr.overhead()
+		if v.wr.pad {
+			limit -= 63
 		}
-		wire, pad, err := v.wr.encodeLen(n)
+		if n > limit {
+			n = limit
+		}
+		wire, pad, err := v.wr.encodeLen(n + v.wr.overhead())
 		if err != nil {
 			return written, err
 		}
@@ -727,19 +757,18 @@ func (v *vmessConn) Write(p []byte) (int, error) {
 		if err != nil {
 			return written, err
 		}
-		payload := p[:n]
-		if pad > 0 {
-			payload = append(append([]byte(nil), payload...), make([]byte, pad)...)
-		}
-		body, err := v.wr.sealChunk(payload)
+		body, err := v.wr.sealChunk(p[:n])
 		if err != nil {
 			return written, err
 		}
 		buf := make([]byte, 0, len(lp)+len(body))
 		buf = append(buf, lp...)
 		buf = append(buf, body...)
-		if _, err := v.conn.Write(buf); err != nil {
+		buf = append(buf, make([]byte, pad)...)
+		if w, err := v.conn.Write(buf); err != nil {
 			return written, err
+		} else if w != len(buf) {
+			return written, io.ErrShortWrite
 		}
 		written += n
 		p = p[n:]

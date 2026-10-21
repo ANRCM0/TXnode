@@ -1,162 +1,138 @@
-# 剩余事项报告（txnode 数据面）
+# 剩余事项与验收状态（txnode 数据面）
 
-> 基线：`feat/txnode-kernel` @ `a6d0e96`（2026-10-20）
-> 互通实测：Xray 26.3.27 / Mihomo v1.19.32 / sing-box 1.14.3 / curl 8.5 / 官方 mieru 3.38.1
-> 结论：**29 个互通用例通过、0 失败、6 跳过**；本文只记录尚未完成或尚不能验证的事项。
+本表跟踪 S0–S4 的实现和实际验收。开发顺序及完整要求见
+[NEXT-DEVELOPMENT.zh.md](NEXT-DEVELOPMENT.zh.md)，严格互通入口见
+[INTEROP.md](INTEROP.md)。历史 `a6d0e96` 的“29 通过、6 跳过”不代表当前候选。
 
-本文与 `docs/INTEROP.md` 的分工：INTEROP 记录「已实测通过什么、怎么复现」，本文记录
-「还差什么、差在哪一步、下一步怎么做」。每条都带实测证据或代码位置，避免下一个人重复摸索。
+## 当前候选状态
 
----
+2026-10-21：分支 `feat/interop-acceptance-gates` 已编写以下 S0-S4 实现与验收入口。
+最近已取得功能结果的候选为 `454607f4ca999431bcb0af6b2bcf4a5def0eddaf`，
+Actions `39489699245` 的 Go/race、quick/full、runtime stability、七项故障、
+固定 Core C2 和镜像冒烟均通过，包含启动恢复、WS 端口更新及对应回归。
+完整互通为 36 个顶层、24 个子项通过和两项不适用。该提交的正式五组 CPU v2 A/B
+已通过：120/120 份样本与原始 CPU 证明核对有效，12/12 组比较在原阈值内；
+持续负载 1809.665 秒、38 轮、最高 1000 会话，业务错误为零且原资源预算通过。
+同 SHA 的 v2 S3 汇总 10 checks 全 true、`full_S3_accepted=true`。新增普通授权
+续期改变了 meter、协议读取与 Service 发布路径，须取得新提交的完整 Actions，
+不得沿用 `454607f4` 的通过状态。
 
-## 0. 总览
+`edd07db` 的 Go/race、严格 quick/full、七项故障、runtime stability、Core C2 与
+镜像冒烟已通过；`c2823dd` 补强逐 grant 字节断言和真实 Service VMess 后，
+Go job 在 VMess 首次 echo 失败，完整续期未执行。源码已修复本仓库 VMess outbound
+的 command key salt、长度认证 nonce/密钥、wire tag 和 clear padding，并新增
+真实 TCP 12 种组合及本仓库客户端到固定 Xray 服务端的反向互通门禁。
+严格清单现为 39 个顶层（37 个适用、两项不适用）、27 个子项，quick 为 8 个顶层。
+另修复 panel 重连测试等待点，使其等待客户端收到认证确认后再断言连接状态。
+这些变更仅经本地静态检查，必须由新提交重新完成全部门禁；旧失败记录保留。
 
-| # | 事项 | 类型 | 影响 | 优先级 |
-|---|---|---|---|---|
-| 1 | mieru v2 UDP 承载（`Transport=udp`） | 协议能力 | 用 UDP 承载的 mieru 节点不可用 | P1 |
-| 2 | 地址头 mux 的 UDP（smux/yamux `FlagUDP`） | 协议能力 | 开 mux 且走 UDP 的 sing-box 客户端不可用 | P2 |
-| 3 | mieru `traffic_pattern` 与低熵编码（type 10/11） | 协议能力 | 缺少流量整形；官方默认关闭 | P3 |
-| 4 | Mihomo TUIC 客户端差异 | 上游差异 | 仅 Mihomo 版 TUIC 不可用 | P3 |
-| 5 | 部分用例依赖外部条件 | 测试覆盖 | 本机/CI 不稳定可见 | P2 |
-| 6 | `usageinterval` 故障注入用例在慢盘上偶发失败 | 测试基建 | 整套 `go test` 偶发红 | P1 |
+随后 `14c5401` 的新增反向门禁暴露 authenticated length 的独立 wire 偏差：
+两端均缺少长度 AEAD 开销的减/加，不能由同仓库互通发现。`f9d74f2` 校准两端、
+加入独立 raw AEAD 向量和共享 Proxy 并发回归；HTTP/1 echo 夹具也先完整读取请求。
+该提交的 PR quick 已通过，最终提交仍须全量验收。
 
----
+`edd07db` 的正式 A/B 为 112/120 measured：旧侧 usage_v2 两份 EOF，另有六份
+events/download 因 meter `CAPACITY_REACHED` 失败（候选五组及旧侧一组）。
+原始状态表明积压在正常关闭前已触顶，store 未 degraded，不能将它归因于磁盘
+总容量。新增封桶后非阻塞唤醒既有 consumer，消除仅等 20ms 扫描的空闲延迟；
+不增加 meter/store 容量、不提前 ACK、不改变丢失和失败判定。此改进不能证明
+所有旧失败已定位或修复，仍须新提交正式实测。该轮 1810.789 秒、39 轮、最高
+1000 会话的持续负载通过，但其 S3 汇总保持 `full_S3_accepted=false`。
 
-## 1. mieru v2 UDP 承载（未实现）
+历史 `8f41aacb0796f7f3d1cc491e64cfb53665505a89` 的完整 S3 v1 验收已通过：
+120 份样本、12 组比较均在原阈值内，持续负载 1809.908 秒、38 轮。后继
+`08191208` 的 CPU v2 正式测量取得 118/120 份有效样本，旧基线 long/short 各有
+一份 EOF，整轮失败；候选侧 60 份完整，通过的 10 组比较不能替代整轮结果。
+该提交持续负载 1812.130 秒、40 轮通过，但新增启动夹具的 race 使 Go job 失败，
+此夹具竞争已在 `454607f4` 修正并通过 Go/race。保留旧失败和原测量阈值。
 
-**现状**：TCP 承载已互通（含 1 MiB 双向、空闲复用、拨号失败），`Transport=udp` 未通过。
+上一候选 `71abaa9` 的 30 分钟负载通过：1810.439 秒、39 轮承载生命周期、最高
+1000 会话，业务错误为零且原资源预算通过。正式 A/B 的 120/120 样本完整、字节核对
+通过；12 组中 events/long CPU/GiB 比率 1.05263158 越过 1.05，整轮仍未通过。
+`a8a008d` 的完整五组在 ordinary/upload CPU 比率 1.10 越界。这些 v1 失败结果保留。
+CPU v2 改用带 PID、nonce、序号、单调时间边界及分辨率证据的同进程 CPU 快照，
+新旧两侧使用相同工具；五组、预热、计量时间、并发和原阈值不变，不混合 v1/v2 样本。
 
-**已确证的协议差异**（`internal/dataplane/proto/mieru/v2_udp.go` 实验分支已回滚，结论保留）：
+Node 自己的 Machine 夹具已补齐真实 Provider mTLS、安装初始化/激活、HTTP 账户/
+购买/履约、recipient-render、签名授权与 UsageV2 的源码准备；Linux 静态编译、
+Python AST 和格式检查通过，完整运行未验收。原业务断言继续保留；固定 Core 的
+五项 admission 缺失以及 Node 自身的回执先于监听、授权刷新连接连续性、WS-only
+配置三项行为要求详见 `CORE-MACHINE-COMPATIBILITY.zh.md`。启动回执与仅端口变化的
+WS 更新已在 `454607f4` Go/race 通过。普通续期新增稳定 meter、原 token owner、
+严格封口与窄范围安全读取暂停源码；真实 VLESS/VMess TCP 同流续期、cutoff、unsupported
+回退和资格负向回归已编写，静态检查通过，待新提交 Actions。TLS/REALITY 等
+不透明承载继续重建，不能声称所有传输的连接连续性。不能将这些全部归因于 Core，
+也不能把源码准备或 inventory 检查当作完整 Machine 通过。
 
-1. 每包自带 nonce：`[nonce 24][metadata 32+tag][payload+tag][padding]`，没有流状态；
-2. **同一包内 metadata 与 payload 共用同一个 nonce**（流传输才逐记录 +1）。这条是实测出来的：
-   用 `nonce+1` 解 payload 失败、用 `nonce` 成功；
-3. 首包 payload 是 SOCKS5 CONNECT 请求，可解出目标地址；
-4. 我们回 `openSessionResponse` 后，客户端日志显示 `ATTACHED => ESTABLISHED`，
-   但随后**持续重传 open 请求**（tcCount 1→2→3，退避 2s/4s/6s），只回
-   `ackServerToClient` 不足以让它进入数据阶段，最终会话超时、SOCKS 建连失败。
+中间候选 `6f8ae3c54eaf2466915781b7bee676920e318281` 的 Actions `39470031165`
+已通过 Go/race、固定 mux 依赖的 race 回归、quick/full 严格互通、七项负载故障、
+镜像冒烟与固定 Core C2。完整互通为 36 个顶层用例和 24 个子用例通过、两项不适用，
+不能把不适用项加入通过数。mux 写出尾部竞争修复已包含在该提交中。
+独立 Core machine 仍失败；固定 Core 的 installation 准入与 Provider trust/Machine
+合约不兼容，完整 owner 链和后续适配要求见 `CORE-MACHINE-COMPATIBILITY.zh.md`。
+中间候选结果不代替最终源码的完整验收；最终报告保留实际 SHA、工作流与失败产物。
 
-**卡点**：包传输的确认语义未对齐——需要确定「哪些 seq 由 ACK 覆盖」「open 请求何时被视为已确认」，
-以及服务端回包该用哪个 seq。
+`f1451d5` 的 Actions `39465904761` 已完成 1810.668 秒持续负载，四档均达到
+100/250/500/1000 会话、39 轮承载节点生命周期变更，业务错误和饥饿 worker 均为零。
+固定资源预算通过：GC 后 heap 由 655760 增至 122008968 字节，存活对象由 2242
+增至 16617，FD 由 20 降至 12，goroutine 由 9 降至 4。该结果证明该提交的
+SS 紧凑历史缓存通过原预算，不能代替后续 mux 和 splice 修复的持续负载。
 
-**下一步（可执行）**：
+同一 `f1451d5` 的 A/B 已取得全部 120 份正式样本，普通下载 CPU/GiB 仍比旧基线
+高约 14.6%，性能 job 保持失败。`6f8ae3c` 的独立 profile 显示原生
+`spliceOne -> os.File.Fd -> SetBlocking` 约占 0.45 CPU 秒，旧侧没有这段热点；
+后续管道描述符缓存须由同参数、同阈值的新候选再次测量。
 
-1. 以官方 `github.com/enfein/mieru/v3@v3.38.1` 的 `pkg/protocol/underlay_packet.go` 为准，
-   读 `sendBuf` 的删除条件（`unAckSeq` 比较）与 `session.runOutputLoop` 的退避逻辑；
-2. 用官方客户端 + 本仓 `TXNODE_INTEROP_MIERU` 做逐包抓包（本仓已有 `tap` 思路：TCP/UDP 中继打印首字节），
-   对比「Xray 无法作参考（不支持 mieru）」，参考实现只能是官方 server；
-3. 更省事的对照：直接跑官方 mieru server 与官方 client 抓同一场景的字节序列，再复刻 ack/open 时序。
+`4055c7a` 的严格 quick/full、runtime stability 与七项负载故障通过；Go job 在测试前
+遇到模块代理 HTTP/2 下载错误，下游 Core/image gate 未执行，新增 pipe 回归尚未获
+该轮测试证据。其独立下载诊断中普通 CPU/GiB 比率约 1.0207、逐段闭包分配消失，
+事件模式仍约 1.1204；这些四份诊断不属于正式 120 份样本。
 
-**相关代码**：`internal/dataplane/proto/mieru/{v2.go,handler.go,udp.go}`；
-原生 v1 UDP 路径在 `udp.go`（`ListenUDP`/`handleDatagram`），可复用其 peer/sweep 结构。
+随后源码补齐兼容 splice 部分写后失败的实际计数，并仅对纯本地事件观察显式允许
+保留逐 I/O Begin/Complete 的零拷贝。带授权 collector 的路径不允许此优化。
+新增真实 pipe 的部分写/关闭/取消/EPIPE/零写与 hook 生命周期回归，下一候选须重新
+执行 Go/race、严格互通、Core C2、完整持续负载与原阈值 A/B。Go 模块预取仅增加
+三次有限传输重试，不跳过依赖或源码检查。
 
----
+另将 NativeCollector 完成时钟采样移入原 collector 锁，消除源码中的并发采样交错。
+原回退、到期、退休及 token 归属条件全部保留；等待锁后到期的实际尾部仅保留为
+不 eligible。新增固定时钟的有效完成和保守拒绝回归。旧 EOF 的 journal 未保留
+当时完整 last stamp，修复机制不能冒充旧失败的最终因果证明。
 
-## 2. 地址头 mux 的 UDP（明确关闭）
+`6efec53` 的 Go/race、quick/full、runtime stability、七项故障、镜像冒烟与固定
+Core C2 已通过；严格 full 仍为 36 个适用顶层、24 个子项通过及两项不适用。
+正式 A/B 在旧树构建时因 Xray 模块 HTTP/2 下载错误中止，尚无样本；独立候选
+events/download 的 coordinator 返回 evidence 错误，账量未确认。测量工具随后
+增加两侧相同的只读原 meter 状态快照，以及有界模块预取和锁文件摘要核对；
+失败仍为失败，不变更容量、等待、模式或验收阈值。
 
-**现状**：`internal/dataplane/mux` 的 `Packets`（`FlagUDP` 流）已实现，但内核层
-`serveMux` 只把 TCP 流转给 relay；UDP 流在 Mux.Cool/地址头 mux 中不承载。
+| 范围 | 已编写实现 | 待完成或待验收 |
+| --- | --- | --- |
+| S0 严格门禁 | 固定客户端/用例清单、quick/full、父子结果核对、意外 Skip 拒绝、SIGKILL 精确阶段握手 | 新候选 Go/race、严格矩阵、Core C2 均须通过；已支持链路的 EOF 不再跳过 |
+| S1 REALITY / Naive / TUIC | REALITY 自生成匹配密钥；Naive 信任根/SAN、协商填充帧和 h2 半关闭；TUIC TCP、UDP native/quic 对照和分片，UDP echo 保留 4096 字节断言 | 三类路径在中间候选通过；全部客户端仍须最终候选严格互通 |
+| S2-A smux/yamux UDP | 依固定 sing-mux 客户端版本对齐 packet 格式，复用 core 策略、限速、计量及撤权 | 新候选双向大包、父子关闭、实例隔离和精确计量的 Actions 结果 |
+| S2-B Mieru UDP / TCP 复用 | 有界 UDP 状态机、确认/重传/重组、nonce 与重放历史；TCP underlay 多 session、丢包缺口恢复及认证 FIN 尾部；新增官方客户端网络损伤/精确计量入口 | 普通官方 UDP、失败目标复用和显式整形在中间候选通过；丢包、乱序、重复、撤权密文重放及同端口 Reload/回滚须最终候选执行 |
+| S3 原生覆盖 | Service+Coordinator+observer、真实 UDP 周期、I/O 短写/失败；固定 Core machine 独立入口、真实授权夹具；启动回执与原租约 WS 端口 Reload；普通续期稳定 meter 与严格窗口交接 | 启动/WS 在 `454607f4` Go/race 通过；新续期须新提交 Actions，Service 联合回归限普通 VLESS/VMess TCP。Machine 仍被固定 Core admission 阻塞，完整断言未执行 |
+| S3 持续负载/故障 | 30 分钟 100/250/500/1000 会话工具；真实承载节点撤权/轮换/换证 Reload、限速取消、报告阻塞、慢盘和 SIGKILL 恢复；FD/heap/goroutine 诊断 | `454607f4` 七项 race 故障和 1809.665 秒、38 轮持续负载均在原预算内通过。最终候选仍须取得同 SHA 的完整窗口和故障证据 |
+| S3 新旧 A/B | 固定旧 `a1ad269` 与候选、同 runner/toolchain、三种模式、五组交替、上传/下载/短/长连接、分配窗口及相同 runtime 实际镜像构建；CPU v2 原始进程快照与独立 profile | `8f41aacb` v1 完整验收通过，`08191208` v2 因旧侧两份 EOF 失败；`454607f4` v2 120/120 原始证明、12/12 比较及精确 S3 汇总通过。续期新源码须重跑完整测量，不混用历史结果，阈值不变 |
+| S4 可选/运维 | Mieru 显式整形及低熵编码、严格未知配置拒绝；节点/进程范围连接 ID、受限诊断、迁移说明 | 官方客户端所有显式组合、跨重载关闭与诊断隐私须由新候选验收 |
 
-**已确证的事实**：用 sing-box 1.14.3 + mux(smux) 发 UDP，抓包得到流内 packet 头：
+## 支持范围与保留的不适用组合
 
-```
-03 | 目标地址(IPv4:port) | 源地址(IPv4:port) | LEN(2) | 数据
-```
+`TestInteropSingBoxMieru` 因固定 sing-box 二进制没有 Mieru outbound 而不适用，
+Mieru 使用官方客户端验收。`TestInteropXrayVLESSH2Removed` 因固定 Xray 已移除
+独立 h2 传输而不适用。这两项在清单中单独记录，不计为通过。
 
-把它指向 **Xray 26.3.27 参考服务端**时，服务端同样只回了 mux 头的 `0000`，
-**没有回任何数据**，客户端 8s 超时（`docs/INTEROP.md` 记录为此用例的 skip 原因）。
+Naive、Mihomo TUIC 和 smux/yamux UDP 已进入受支持矩阵，不能再用运行错误转为
+Skip。固定 curl 的 HTTP/2 CONNECT 仅覆盖其自身路径，不能替代 sing-box Naive
+客户端的填充帧、证书信任及错误 SAN 断言。
 
-**卡点**：没有可对齐的参考行为，无法判断服务端应答格式（是否带地址、是否带源地址回显）。
+## 覆盖与交付边界
 
-**下一步**：等 sing-box 侧文档/新版本，或读 `sing-mux` 的 packet-stream 实现后按实现写；
-在此之前保持「收到 UDP 流即回 `End`」，保证不串流、不静默错发。
+真实入口与断言映射见 [NATIVE-ACCEPTANCE-COVERAGE.zh.md](NATIVE-ACCEPTANCE-COVERAGE.zh.md)；
+负载和比较的参数、资源预算、噪声判定见 [NATIVE-PERFORMANCE.zh.md](NATIVE-PERFORMANCE.zh.md)。
+本地只允许源码、格式、语法和静态编译/诊断；功能、race、网络、容器及负载只在
+GitHub Actions 执行。
 
-**相关代码**：`internal/dataplane/mux/packets.go`（`[LEN][socks addr][payload]`）、
-`internal/dataplane/muxcool/{muxcool.go,xudp.go}`（Mux.Cool 侧已完成 UDP）。
-
----
-
-## 3. mieru `traffic_pattern` 与低熵编码（未实现）
-
-**现状**：`mieru.Options.TrafficPattern` 已被面板透传（`internal/kernel/txnode/spec.go`），
-但数据面**没有任何整形逻辑**，低熵编码（协议 type 10/11）也未实现。
-
-**影响**：默认关闭，普通部署不受影响；开了 `traffic_pattern` 的节点行为与参考实现不一致
-（padding/分片策略不同，抗审查强度下降）。
-
-**下一步**：
-1. 实现 `traffic_pattern` 的 padding 上下限与分片策略（参考 `docs/protocol.md` 的
-   `padding 0/1/2` 与 `mtu` 语义）；
-2. 低熵编码按文档的 4 种模式（32/40/48/56 位）实现 8 字节块打包与掩码旋转，
-   注意 `payload length` 含填充、`extracted payload length` 才是真实长度；
-3. 用例需要显式夹具（官方客户端默认关闭该功能）。
-
-**相关代码**：`internal/dataplane/proto/mieru/{v2.go,segment.go}`；
-面板字段见 `internal/kernel/txnode/spec.go:51`。
-
----
-
-## 4. Mihomo TUIC 客户端差异（上游）
-
-**现状**：sing-box 的 TUIC（TCP/UDP）通过；**Mihomo v1.19.32 的 TUIC 在 QUIC 建连后不发 v5 认证帧**，
-服务端没有任何认证记录，用例记为 `TUIC-mihomo` / `TUIC-1` 并 skip。
-
-**判断**：属于客户端实现差异（同参数下 sing-box 正常），不是服务端缺陷；但未经抓包逐帧确认。
-
-**下一步**：抓 Mihomo 的 QUIC 流，确认它是否使用了不同的 ALPN / 认证流布局；
-若确认为客户端 bug，则在本仓文档标注版本区间并保持 skip。
-
----
-
-## 5. 依赖外部条件的用例（覆盖度缺口）
-
-| 用例 | 跳过原因 | 补齐方式 |
-|---|---|---|
-| `TestInteropMihomoVLESSReality` | 需要 `TXNODE_INTEROP_REALITY_PUB` 才能构造 Mihomo 侧公钥 | CI 里生成固定 REALITY 密钥对并注入环境变量 |
-| `TestInteropSingBoxMieru` | sing-box 1.14.3 发布二进制没有 mieru outbound | 等上游支持，或改用官方 mieru 客户端（已覆盖） |
-| `TestInteropSingBoxNaive` | sing-box 的 naive outbound 依赖 Chromium cronet，发布二进制不带 | 用 curl（已覆盖 h2 CONNECT） |
-| `TestInteropXrayVLESSH2Removed` | Xray 26 已移除独立 h2 传输 | 无需补齐（上游移除） |
-
-另外**互通矩阵目前只在 nightly / dispatch / tag 跑**（`.github/workflows/ci-node.yml` 的 `interop` job），
-PR 门禁不跑。若希望 PR 即拦截协议回归，需要评估 30 分钟级耗时是否可接受。
-
----
-
-## 6. `usageinterval` 故障注入用例在慢盘上偶发失败（测试基建）
-
-**现象**：`TestBoundedIntervalSIGKILLRetainsOriginalSealedJournalAndNeverResumesTail`
-在整套 `go test ./internal/...` 运行时偶发失败（约 10s 超时类断言），单独运行稳定通过。
-
-**已做**：`TestNativePendingReadKeepsCompletedWritesBoundedUntilOriginalSessionDrain`
-此前因同一类问题（60s 租约在 1024 次持久化写入中途过期）加了「按实测吞吐判定环境不足则带诊断 skip」。
-
-**下一步**：给 SIGKILL 用例同样加环境判定（或把故障注入的等待改成事件驱动而非固定超时），
-避免在慢盘/高负载 CI 上误报。
-
-**相关代码**：`internal/usageinterval/{native_linux_test.go,crash_linux_test.go}`。
-
----
-
-## 7. 复现与验证入口
-
-```bash
-# 拉取固定版本客户端（版本 + SHA-256）
-scripts/fetch-interop-clients.sh .clients
-
-# 全量互通矩阵（29 通过 / 6 跳过）
-TXNODE_INTEROP_XRAY=$PWD/../.clients/xray/xray \
-TXNODE_INTEROP_MIHOMO=$PWD/../.clients/mihomo/mihomo \
-TXNODE_INTEROP_SINGBOX=$PWD/../.clients/singbox/sing-box \
-TXNODE_INTEROP_MIERU=$PWD/../.clients/mieru/mieru \
-go test ./internal/kernel/txnode/ -run TestInterop -v -timeout 900s
-
-# 单元测试
-go test ./internal/... -count=1
-```
-
-诊断工具约定（本轮用过、可复用）：
-
-- 在客户端与服务端之间插一个 TCP 中继，打印前几个字节的 hex，用于确认线上格式
-  （Mux.Cool 的 port-then-address、XUDP 的「一帧一分块」都是这样定位的）；
-- 客户端 `loggingLevel: TRACE`（mieru）/ `log.level: debug`（sing-box、Xray）可直接看到
-  段级收发，比读代码快。
+发布权限与 Core 采用单独记录在 [RELEASE-BLOCKERS.zh.md](RELEASE-BLOCKERS.zh.md)。
+S0–S4 的源码或 Actions 完成不代表分支已合并、GHCR 已发布、Core 已更新 pin 或已完成生产试运行。

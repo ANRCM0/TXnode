@@ -179,6 +179,7 @@ type DataplaneConfig struct {
 	RequireProxyProtocol bool   `yaml:"require_proxy_protocol"`
 	AutoOutIP            bool   `yaml:"auto_out_ip"`
 	StrictALPN           bool   `yaml:"strict_alpn"`
+	Diagnostics          bool   `yaml:"diagnostics"` // opt-in fixed-cardinality native runtime metrics
 
 	MaxFresh         int `yaml:"max_fresh"`         // unauthenticated connections, default 4096
 	HandshakeTimeout int `yaml:"handshake_timeout"` // seconds, default 10

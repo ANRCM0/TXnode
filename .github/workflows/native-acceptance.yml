@@ -1,0 +1,337 @@
+name: Native stability and performance evidence
+
+on:
+  workflow_call:
+    inputs:
+      candidate:
+        description: Immutable candidate commit
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      candidate:
+        description: Candidate commit or ref (empty uses workflow SHA)
+        required: false
+        type: string
+  schedule:
+    - cron: '43 20 * * *'
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GOTOOLCHAIN: local
+  CGO_ENABLED: '0'
+
+jobs:
+  source:
+    name: Resolve immutable candidate
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.source.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.candidate || github.sha }}
+          fetch-depth: 0
+      - id: source
+        name: Record candidate commit and tree
+        run: |
+          set -euo pipefail
+          test -z "$(git status --porcelain)"
+          mkdir -p artifacts/source
+          git rev-parse HEAD | tee artifacts/source/commit.txt
+          git rev-parse 'HEAD^{tree}' > artifacts/source/tree.txt
+          git status --porcelain --untracked-files=no > artifacts/source/status.txt
+          test ! -s artifacts/source/status.txt
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-source-${{ steps.source.outputs.sha }}
+          path: artifacts/source/
+          if-no-files-found: error
+
+  soak:
+    name: Native 30 minute TCP UDP mux soak
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+          cache-dependency-path: go.sum
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/interop-clients
+          key: interop-clients-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-interop-clients.sh') }}
+      - name: Fetch fixed client binaries
+        run: scripts/fetch-interop-clients.sh "$RUNNER_TEMP/interop-clients"
+      - name: Record source toolchain and runner evidence
+        env:
+          CANDIDATE_SHA: ${{ needs.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          mkdir -p artifacts/native-soak
+          git rev-parse HEAD > artifacts/native-soak/commit.txt
+          git rev-parse 'HEAD^{tree}' > artifacts/native-soak/tree.txt
+          go version > artifacts/native-soak/go-version.txt
+          uname -a > artifacts/native-soak/runner.txt
+          lscpu >> artifacts/native-soak/runner.txt
+          free -b >> artifacts/native-soak/runner.txt
+          sha256sum "$RUNNER_TEMP/interop-clients/singbox/sing-box" > artifacts/native-soak/client-sha256.txt
+      - name: Execute complete load window
+        env:
+          TXNODE_NATIVE_SOAK: '1'
+          TXNODE_NATIVE_ARTIFACTS: ${{ github.workspace }}/artifacts/native-soak
+          TXNODE_INTEROP_SINGBOX: ${{ runner.temp }}/interop-clients/singbox/sing-box
+        run: |
+          set -euo pipefail
+          ulimit -n 32768
+          go test -json ./internal/kernel/txnode -run '^TestNativeSessionSoak$' -count=1 -timeout=40m 2>artifacts/native-soak/stderr.log | tee artifacts/native-soak/events.jsonl
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          report = json.loads(Path('artifacts/native-soak/soak-summary.json').read_text())
+          if not report['accepted'] or report['elapsed_seconds'] < 1800 or len(report['phases']) != 4:
+              raise SystemExit('native soak acceptance incomplete')
+          PY
+      - name: Retain exact source load evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-soak-${{ needs.source.outputs.sha }}
+          path: artifacts/native-soak/
+          if-no-files-found: error
+
+  faults:
+    name: Native live load lifecycle durability and process faults
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+          cache-dependency-path: go.sum
+      - name: Record exact fault-suite source and runtime
+        env:
+          CANDIDATE_SHA: ${{ needs.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          mkdir -p artifacts/native-faults
+          git rev-parse HEAD > artifacts/native-faults/commit.txt
+          git rev-parse 'HEAD^{tree}' > artifacts/native-faults/tree.txt
+          go version > artifacts/native-faults/go-version.txt
+          uname -a > artifacts/native-faults/runner.txt
+      - name: Exercise mutations on the nodes carrying real traffic
+        run: |
+          set -euo pipefail
+          go test -race -json ./internal/kernel/txnode ./internal/service ./internal/usagebucket \
+            -run '^TestNative(ActiveLoadLifecycleFaults|LoadRateCancellation|UpstreamDisconnectKeepsLoadedPeerFlows|AuthenticatedShortWriteKeepsActualTail|LoadedSIGKILLRestartsWithOriginalUsagePeriod|LoadedAuthorizationExpiryDuringBlockedReport|RelayLoadSlowDiskRetainsExclusiveOwnerAndOriginalEvidence)$' \
+            -count=1 -timeout=10m 2>artifacts/native-faults/stderr.log | tee artifacts/native-faults/events.jsonl
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          required = {
+              'TestNativeActiveLoadLifecycleFaults',
+              'TestNativeLoadRateCancellation',
+              'TestNativeUpstreamDisconnectKeepsLoadedPeerFlows',
+              'TestNativeAuthenticatedShortWriteKeepsActualTail',
+              'TestNativeLoadedSIGKILLRestartsWithOriginalUsagePeriod',
+              'TestNativeLoadedAuthorizationExpiryDuringBlockedReport',
+              'TestNativeRelayLoadSlowDiskRetainsExclusiveOwnerAndOriginalEvidence',
+          }
+          events = [json.loads(line) for line in Path('artifacts/native-faults/events.jsonl').read_text().splitlines()]
+          passed = {event.get('Test') for event in events if event.get('Action') == 'pass'}
+          rejected = [event for event in events if event.get('Action') in ('skip', 'fail')]
+          summary = {'required': sorted(required), 'passed': sorted(required & passed), 'rejected': rejected,
+                     'accepted': required <= passed and not rejected}
+          Path('artifacts/native-faults/summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+          if not summary['accepted']:
+              raise SystemExit('native loaded fault acceptance incomplete')
+          PY
+      - name: Retain real relay and durable recovery evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-faults-${{ needs.source.outputs.sha }}
+          path: artifacts/native-faults/
+          if-no-files-found: error
+
+  performance-diagnostics:
+    name: Independent native legacy CPU profiles
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+          cache-dependency-path: go.sum
+      - name: Profile identical download paths outside the acceptance matrix
+        env:
+          CANDIDATE_SHA: ${{ needs.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --output artifacts/native-performance-diagnostics --diagnostics-only
+      - name: Retain independent CPU profiles even on diagnostic failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-performance-diagnostics-${{ needs.source.outputs.sha }}
+          path: |
+            artifacts/native-performance-diagnostics/report.json
+            artifacts/native-performance-diagnostics/report.md
+            artifacts/native-performance-diagnostics/prefetch-*.log
+            artifacts/native-performance-diagnostics/diagnostic-*/
+          if-no-files-found: error
+
+  performance:
+    name: Same runner legacy candidate A B
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.source.outputs.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+          cache-dependency-path: go.sum
+      - name: Build both revisions and alternate five measurement groups
+        env:
+          CANDIDATE_SHA: ${{ needs.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --output artifacts/native-performance
+      - name: Publish comparison to job summary
+        if: always()
+        run: |
+          if [[ -f artifacts/native-performance/report.md ]]; then
+            cat artifacts/native-performance/report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Retain exact source comparison evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-performance-${{ needs.source.outputs.sha }}
+          path: artifacts/native-performance/
+          if-no-files-found: error
+
+  acceptance:
+    name: Exact source S3 acceptance ledger
+    if: always()
+    needs: [source, soak, faults, performance]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: native-*-${{ needs.source.outputs.sha }}
+          path: evidence
+      - name: Require all measured scopes on the identical candidate
+        env:
+          CANDIDATE_SHA: ${{ needs.source.outputs.sha }}
+          SOAK_JOB: ${{ needs.soak.result }}
+          FAULTS_JOB: ${{ needs.faults.result }}
+          PERFORMANCE_JOB: ${{ needs.performance.result }}
+        run: |
+          python3 - <<'PY'
+          import json, math, os
+          from pathlib import Path
+          sha = os.environ['CANDIDATE_SHA']
+          root = Path('evidence')
+          checks = {name: os.environ[name + '_JOB'] == 'success' for name in ('SOAK', 'FAULTS', 'PERFORMANCE')}
+          def read(kind, name):
+              return json.loads((root / ('native-' + kind + '-' + sha) / name).read_text())
+          def valid_cpu(sample):
+              cpu = sample['cpu_measurement']
+              start, end = cpu['start'], cpu['end']
+              method = 'process-cputime-ns-v1'
+              fields = ('clock_id', 'pid', 'sequence', 'cpu_nanos', 'resolution_nanos',
+                        'monotonic_before_nanos', 'monotonic_after_nanos',
+                        'requested_monotonic_nanos', 'received_monotonic_nanos', 'round_trip_nanos')
+              if sample['status'] != 'measured' or sample['cpu_method'] != method or cpu['method'] != method:
+                  return False
+              if type(sample['bytes']) is not int or sample['bytes'] <= 0:
+                  return False
+              if any(type(cpu[field]) is not int for field in ('delta_nanos', 'resolution_nanos', 'monotonic_inner_elapsed_nanos', 'transfer_started_monotonic_nanos', 'transfer_completed_monotonic_nanos')):
+                  return False
+              if any(type(value) not in (int, float) or not math.isfinite(value) or value <= 0 for value in (sample['cpu_seconds_per_gib'], cpu['cpu_seconds_per_gib'])):
+                  return False
+              for number, snapshot in enumerate((start, end), 1):
+                  if snapshot['schema'] != 'txnode-process-cpu-snapshot/v1' or snapshot['method'] != method:
+                      return False
+                  if any(type(snapshot[field]) is not int for field in fields):
+                      return False
+                  if snapshot['clock_id'] != 2 or snapshot['pid'] <= 0 or snapshot['sequence'] != number or snapshot['cpu_nanos'] <= 0 or snapshot['resolution_nanos'] <= 0:
+                      return False
+                  if not snapshot['requested_monotonic_nanos'] <= snapshot['monotonic_before_nanos'] <= snapshot['monotonic_after_nanos'] <= snapshot['received_monotonic_nanos']:
+                      return False
+                  if snapshot['round_trip_nanos'] != snapshot['received_monotonic_nanos'] - snapshot['requested_monotonic_nanos']:
+                      return False
+              nonce = start['nonce']
+              if not isinstance(nonce, str) or len(nonce) != 64 or any(c not in '0123456789abcdef' for c in nonce) or nonce != end['nonce'] or start['pid'] != end['pid']:
+                  return False
+              delta = end['cpu_nanos'] - start['cpu_nanos']
+              elapsed = end['monotonic_before_nanos'] - start['monotonic_after_nanos']
+              if delta <= 0 or elapsed <= 0 or cpu['delta_nanos'] != delta or cpu['monotonic_inner_elapsed_nanos'] != elapsed:
+                  return False
+              if cpu['resolution_nanos'] != start['resolution_nanos'] or start['resolution_nanos'] != end['resolution_nanos']:
+                  return False
+              if not start['monotonic_after_nanos'] <= cpu['transfer_started_monotonic_nanos'] < cpu['transfer_completed_monotonic_nanos'] <= end['monotonic_before_nanos']:
+                  return False
+              expected = delta / 1_000_000_000 / (sample['bytes'] / 1073741824)
+              return math.isfinite(expected) and expected > 0 and sample['cpu_seconds_per_gib'] == cpu['cpu_seconds_per_gib'] and math.isclose(sample['cpu_seconds_per_gib'], expected, rel_tol=1e-12)
+          try:
+              soak = read('soak', 'soak-summary.json')
+              faults = read('faults', 'summary.json')
+              performance = read('performance', 'report.json')
+              checks['same_candidate'] = performance['candidate'] == sha and all((root / ('native-' + kind + '-' + sha) / 'commit.txt').read_text().strip() == sha for kind in ('soak', 'faults'))
+              checks['sustained_loaded_lifecycle'] = soak['accepted'] and soak['elapsed_seconds'] >= 1800 and len(soak['phases']) == 4 and all(p['lifecycle_cycles'] >= 8 and p['load_bearing_generations_recovered'] == p['lifecycle_cycles'] + 1 and p['expected_retired_disconnects'] == p['lifecycle_cycles'] * p['load_bearing_tls_workers'] for p in soak['phases'])
+              checks['loaded_faults'] = faults['accepted']
+              checks['equivalent_ab'] = performance['accepted'] and len(performance['comparisons']) == 12
+              checks['process_cpu_windows'] = performance['schema'] == 'txnode-native-performance/v2' and performance['cpu_method'] == 'process-cputime-ns-v1' and len(performance['samples']) >= 120 and all(valid_cpu(sample) for sample in performance['samples'])
+              checks['image_sizes'] = all(performance['runtime_images'][side]['uncompressed_bytes'] > 0 for side in ('legacy', 'candidate'))
+              checks['allocation_windows'] = len(performance['samples']) >= 120 and all(s.get('allocated_bytes_per_business_byte', -1) >= 0 and s.get('allocations_per_business_byte', -1) >= 0 for s in performance['samples'])
+          except (OSError, ValueError, KeyError, TypeError, ZeroDivisionError, OverflowError) as error:
+              checks['evidence_complete'] = False
+              checks['evidence_error'] = str(error)
+          accepted = all(value is True for value in checks.values())
+          result = {'schema': 'txnode-s3-acceptance/v2', 'candidate': sha, 'checks': checks, 'full_S3_accepted': accepted,
+                    'scope': 'fixed Linux Actions loopback profile: 30 minute staged TCP/UDP/mux, load-bearing TLS lifecycle, separate loaded faults, same-runner legacy sing-box versus native SOCKS A/B; no production or physical multi-host claim'}
+          Path('s3-acceptance.json').write_text(json.dumps(result, indent=2) + '\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('## Exact source S3 evidence\n\nCandidate: `' + sha + '`\n\n```json\n' + json.dumps(result, indent=2) + '\n```\n')
+          if not accepted:
+              raise SystemExit('S3 evidence incomplete, noisy, or outside fixed performance thresholds')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-s3-acceptance-${{ needs.source.outputs.sha }}
+          path: s3-acceptance.json
+          if-no-files-found: error

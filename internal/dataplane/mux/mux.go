@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/yamux"
@@ -84,12 +85,8 @@ func Sniff(c net.Conn) (kind byte, err error) {
 		if _, err := io.ReadFull(c, x[:]); err != nil {
 			return 0, err
 		}
-		if x[0] != 1 {
-			return 0, fmt.Errorf("mux: unsupported version")
-		}
-		var w [2]byte
-		if _, err := io.ReadFull(c, w[:]); err != nil {
-			return 0, err
+		if x[0] != 0 {
+			return 0, fmt.Errorf("mux: session padding is not supported")
 		}
 	}
 	switch hdr[1] {
@@ -154,35 +151,51 @@ var ErrH2 = errors.New("mux: the peer speaks HTTP/2")
 var H2Conn func(ctx context.Context, conn net.Conn, h Handler) error
 
 func serveSmux(ctx context.Context, sess *smux.Session, h Handler) error {
-	defer sess.Close()
+	ctx, cancel := context.WithCancel(ctx)
+	var children sync.WaitGroup
+	stop := context.AfterFunc(ctx, func() { _ = sess.Close() })
+	defer stop()
+	defer func() { cancel(); _ = sess.Close(); children.Wait() }()
 	for {
 		stream, err := sess.AcceptStream()
 		if err != nil {
 			return err
 		}
-		go handleStream(ctx, stream, h)
+		children.Add(1)
+		go func() { defer children.Done(); handleStream(ctx, stream, h) }()
 	}
 }
 
 func serveYamux(ctx context.Context, sess *yamux.Session, h Handler) error {
-	defer sess.Close()
+	ctx, cancel := context.WithCancel(ctx)
+	var children sync.WaitGroup
+	stop := context.AfterFunc(ctx, func() { _ = sess.Close() })
+	defer stop()
+	defer func() { cancel(); _ = sess.Close(); children.Wait() }()
 	for {
 		stream, err := sess.AcceptStream()
 		if err != nil {
 			return err
 		}
-		go handleStream(ctx, stream, h)
+		children.Add(1)
+		go func() { defer children.Done(); handleStream(ctx, stream, h) }()
 	}
 }
 
 func handleStream(ctx context.Context, stream net.Conn, h Handler) {
 	defer stream.Close()
+	_ = stream.SetReadDeadline(time.Now().Add(10 * time.Second))
 	flags, addr, err := ReadStreamRequest(stream)
 	if err != nil {
 		return
 	}
+	_ = stream.SetReadDeadline(time.Time{})
 	if flags&FlagUDP != 0 {
-		_ = h(ctx, &Session{Dest: addr, Packets: NewPackets(stream)})
+		packets := NewServerPackets(stream, flags, addr)
+		if flags&FlagAddr != 0 {
+			addr = socks.Addr{}
+		}
+		_ = h(ctx, &Session{Dest: addr, Packets: packets})
 		return
 	}
 	_ = h(ctx, &Session{Conn: stream, Dest: addr})

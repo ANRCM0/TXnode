@@ -25,7 +25,8 @@
 //
 // Body chunk (both directions):
 //
-//	length  : BE16(payload length), sealed when option bit 0x10 is set
+//	length  : BE16(payload + body tag + clear padding); authenticated lengths
+//	          subtract their AEAD tag size before sealing and add it after opening
 //	          (key = KDF16(bodyKey,"auth_len"), label 0x6e656c5f68747561)
 //	payload : sealed with the body AEAD, AD=nil
 //	nonce   : the 12-byte IV with bytes [0:2] replaced by BE16(counter); the
@@ -39,6 +40,7 @@ package vmess
 import (
 	"crypto/cipher"
 	"encoding/binary"
+	"errors"
 	"io"
 
 	"golang.org/x/crypto/sha3"
@@ -157,9 +159,16 @@ func (c *codec) maskSize(wire int) (int, error) {
 	return wire ^ int(binary.BigEndian.Uint16(b[:])), nil
 }
 
-// sealLen seals the two-byte payload length when the authenticated length
+// sealLen seals the two-byte adjusted wire length when the authenticated length
 // option is active.
 func (c *codec) sealLen(wire int) ([]byte, error) {
+	if c.lenAEAD != nil {
+		// Xray authenticates the wire size minus the length AEAD tag.
+		if wire < c.lenAEAD.Overhead() {
+			return nil, ErrCorruptChunk
+		}
+		wire -= c.lenAEAD.Overhead()
+	}
 	var lp [2]byte
 	binary.BigEndian.PutUint16(lp[:], uint16(wire))
 	if c.lenAEAD == nil {
@@ -197,7 +206,7 @@ func (c *codec) openLen(b []byte) (int, error) {
 	if err != nil || len(plain) != 2 {
 		return 0, ErrCorruptChunk
 	}
-	return int(binary.BigEndian.Uint16(plain)), nil
+	return int(binary.BigEndian.Uint16(plain)) + c.lenAEAD.Overhead(), nil
 }
 
 // openChunk opens the payload.
@@ -252,6 +261,7 @@ type vmessConn struct {
 	wmu  sync.Mutex
 	rmu  sync.Mutex
 	rbuf []byte
+	rerr error
 }
 
 // Write sends the response header (once) and then one or more chunks.
@@ -299,7 +309,11 @@ func (v *vmessConn) Write(p []byte) (int, error) {
 			// Padding is sent in clear after the sealed payload.
 			buf = append(buf, make([]byte, pad)...)
 		}
-		if _, err := v.conn.Write(buf); err != nil {
+		w, err := v.conn.Write(buf)
+		if err == nil && w != len(buf) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
 			return written, err
 		}
 		written += n
@@ -332,7 +346,10 @@ func (v *vmessConn) writeResponseHeader() error {
 	out := make([]byte, 0, len(sealedLen)+len(sealedHdr))
 	out = append(out, sealedLen...)
 	out = append(out, sealedHdr...)
-	_, err = v.conn.Write(out)
+	n, err := v.conn.Write(out)
+	if err == nil && n != len(out) {
+		err = io.ErrShortWrite
+	}
 	return err
 }
 
@@ -340,6 +357,9 @@ func (v *vmessConn) writeResponseHeader() error {
 func (v *vmessConn) Read(p []byte) (int, error) {
 	v.rmu.Lock()
 	defer v.rmu.Unlock()
+	if v.rerr != nil {
+		return 0, v.rerr
+	}
 	if v.rd == nil {
 		return v.conn.Read(p)
 	}
@@ -350,6 +370,9 @@ func (v *vmessConn) Read(p []byte) (int, error) {
 			return n, nil
 		}
 		if err := v.readChunk(); err != nil {
+			if !errors.Is(err, core.ErrReadPaused) {
+				v.rerr = err
+			}
 			return 0, err
 		}
 		if len(v.rbuf) == 0 {
@@ -362,8 +385,11 @@ func (v *vmessConn) Read(p []byte) (int, error) {
 // readChunk reads one chunk into v.rbuf (0xb45860).
 func (v *vmessConn) readChunk() error {
 	lb := make([]byte, v.rd.lenSize())
-	if _, err := io.ReadFull(v.conn, lb); err != nil {
-		return err
+	if n, err := io.ReadFull(v.conn, lb); err != nil {
+		if n == 0 {
+			return err
+		}
+		return partialFrameError(err)
 	}
 	pad, err := v.rd.nextPadding()
 	if err != nil {
@@ -391,11 +417,11 @@ func (v *vmessConn) readChunk() error {
 	n := wire - pad
 	sealed := make([]byte, n)
 	if _, err := io.ReadFull(v.conn, sealed); err != nil {
-		return err
+		return partialFrameError(err)
 	}
 	if pad > 0 {
 		if _, err := io.CopyN(io.Discard, v.conn, int64(pad)); err != nil {
-			return err
+			return partialFrameError(err)
 		}
 	}
 	plain, err := v.rd.openChunk(sealed)
@@ -404,6 +430,41 @@ func (v *vmessConn) readChunk() error {
 	}
 	v.rbuf = plain
 	return nil
+}
+
+// A zero-byte outer Read can still have consumed a length, ciphertext or pad.
+// Never let the relay retry such a frame under the next lease.
+func partialFrameError(err error) error {
+	if errors.Is(err, core.ErrReadPaused) {
+		return errors.New("vmess: read paused after frame consumption")
+	}
+	return err
+}
+
+func (v *vmessConn) ReadPauseSupported() bool {
+	_, ok := v.conn.(*core.ReadPauseConn)
+	return ok
+}
+
+func (v *vmessConn) PauseRead() error {
+	if reader, ok := v.conn.(core.ReadPauser); ok {
+		return reader.PauseRead()
+	}
+	return core.ErrReadPauseUnsupported
+}
+
+func (v *vmessConn) ResumeRead() error {
+	if reader, ok := v.conn.(core.ReadPauser); ok {
+		return reader.ResumeRead()
+	}
+	return core.ErrReadPauseUnsupported
+}
+
+func (v *vmessConn) ReadDeadline() time.Time {
+	if reader, ok := v.conn.(interface{ ReadDeadline() time.Time }); ok {
+		return reader.ReadDeadline()
+	}
+	return time.Time{}
 }
 
 func (v *vmessConn) Close() error                       { return v.conn.Close() }
