@@ -54,8 +54,6 @@ func TestKernelConnectionManagementPreservesOtherSessionsAndReloadOwnership(t *t
 	defer k.Stop()
 	first := socksConnectTB(t, ns.ServerPort, users[0].UUID, origin.Addr().String())
 	defer first.Close()
-	second := socksConnectTB(t, ns.ServerPort, users[0].UUID, origin.Addr().String())
-	defer second.Close()
 	echo := func(c net.Conn, text string) {
 		t.Helper()
 		_ = c.SetDeadline(time.Now().Add(3 * time.Second))
@@ -68,12 +66,27 @@ func TestKernelConnectionManagementPreservesOtherSessionsAndReloadOwnership(t *t
 		}
 	}
 	echo(first, "first")
+	firstPage, err := k.Connections(t.Context(), "", 1)
+	if err != nil || len(firstPage.Connections) != 1 || firstPage.Total != 1 || firstPage.Next != "" {
+		t.Fatalf("first connection identity: %+v %v", firstPage, err)
+	}
+	firstID := firstPage.Connections[0].ID
+	// Establish the first identity before a second handler can register a session.
+	second := socksConnectTB(t, ns.ServerPort, users[0].UUID, origin.Addr().String())
+	defer second.Close()
 	echo(second, "second")
 	page, err := k.Connections(t.Context(), "", 1)
 	if err != nil || len(page.Connections) != 1 || page.Total != 2 || page.Next == "" {
 		t.Fatalf("connection page: %+v %v", page, err)
 	}
-	firstID := page.Connections[0].ID
+	if page.Connections[0].ID != firstID {
+		t.Fatalf("first connection identity changed: %q != %q", page.Connections[0].ID, firstID)
+	}
+	nextPage, err := k.Connections(t.Context(), page.Next, 1)
+	if err != nil || len(nextPage.Connections) != 1 || nextPage.Total != 2 || nextPage.Next != "" || nextPage.Connections[0].ID == firstID {
+		t.Fatalf("second connection page: %+v %v", nextPage, err)
+	}
+	secondID := nextPage.Connections[0].ID
 	other := New(RuntimeConfig{})
 	if err := other.CloseConnection(t.Context(), firstID); !errors.Is(err, kernel.ErrConnectionNotFound) {
 		t.Fatal("ID escaped owning Node", err)
@@ -87,13 +100,15 @@ func TestKernelConnectionManagementPreservesOtherSessionsAndReloadOwnership(t *t
 	_ = first.SetReadDeadline(time.Now().Add(time.Second))
 	if n, err := first.Read(make([]byte, 1)); n != 0 || err == nil {
 		t.Fatal("closed session remained readable")
+	} else if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+		t.Fatal("closed session only timed out", err)
 	}
-	echo(second, "still-live")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := k.CloseConnection(ctx, page.Next); !errors.Is(err, context.Canceled) {
+	if err := k.CloseConnection(ctx, secondID); !errors.Is(err, context.Canceled) {
 		t.Fatal("canceled management request changed a session", err)
 	}
+	echo(second, "still-live")
 	d := k.RuntimeDiagnostics()
 	if d["config_generation"] != uint64(2) || d["reload_succeeded"] != uint64(1) || d["connection_close_requests"] != uint64(1) {
 		t.Fatal("diagnostic generation or close counters incorrect", d)
