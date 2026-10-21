@@ -1,6 +1,6 @@
 # 固定 Core 基线的 Machine 兼容门禁
 
-Node 的固定 Core 基线以 `compatibility/core.v1.json` 为准，当前候选为 `ANRCM0/TXBoard@553641029c0094480cd71105cb7b0a7efe9a9a8a`（Core PR #291）。这里说明源码合约、真实 owner 调用链和待验收条件；源码检查、语法检查、编译均不构成完整 Machine 功能验收。
+Node 的固定 Core 基线以 `compatibility/core.v1.json` 为准，当前候选为 `ANRCM0/TXBoard@553641029c0094480cd71105cb7b0a7efe9a9a8a`。该提交经 Core PR #291 完整检查后，于 2026-10-21 合并为 `2dc3e7b446e5c36f393fa6084fb8ad0d811b0d95`，固定提交保留在 main 历史中。这里说明源码合约、真实 owner 调用链和待验收条件；源码检查、语法检查、编译均不构成完整 Machine 功能验收。
 
 ## 从旧管理路径迁移到正式操作
 
@@ -27,7 +27,7 @@ Node 的固定 Core 基线以 `compatibility/core.v1.json` 为准，当前候选
 
 `api/app/Listeners/EnforceInstallationAuthority.php` 在原生安装下先检查真实 native/open，再对非准备命令执行封闭的 COMMANDS 检查。新候选把 `ws-server` 加入正式运行库存，未放入准备命令列表；未激活或 worker epoch 过期仍拒绝。
 
-Core 独立 PR #291 增加真实命令 listener 的未激活拒绝、激活成功及 stale worker 拒绝回归，并运行 API/MySQL、C2 和浏览器 Actions。Node PR #5 单独采用该精确候选，Node 夹具不修改 Core 应用或库存；整体合入前仍须取得 Core 自身与完整 Machine 的实际验收。
+Core 独立 PR #291 增加真实命令 listener 的未激活拒绝、激活成功及 stale worker 拒绝回归；精确提交的 API/MySQL、C2、浏览器与镜像检查均已通过，合并后检查单独跟踪。Node PR #5 单独采用该精确候选，Node 夹具不修改 Core 应用或库存；完整 Machine 仍须取得 Node 当前候选的实际验收。
 
 真实 WS owner 已有：`NodeWebSocketServer -> NodeWorker -> NativeNodeWebSocket -> TxNodeAuth`。NodeWorker 通过 ServerObserver/NodeSyncService 的事务后事件重读当前配置与成员关系；旧 token 在每次 heartbeat/node-scoped event 及服务端同步时重新检查。NodeRegistry 的 successor 清理避免旧连接抹掉后继状态。源码 owner 存在仍需真实进程验收。
 
