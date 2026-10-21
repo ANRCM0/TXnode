@@ -13,6 +13,8 @@ const (
 	RenderShadowrocket = "shadowrocket/v1"
 	RenderSurgeIOS     = "surge-ios/v1"
 	RenderSurgeMac     = "surge-mac/v1"
+	RenderStash        = "stash/v1"
+	RenderSurfboard    = "surfboard/v1"
 )
 
 var clientVersionRE = regexp.MustCompile(`^(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})\.(0|[1-9][0-9]{0,3})$`)
@@ -40,6 +42,10 @@ func ValidRenderFormat(format, version string) bool {
 		return major == 5 && minor >= 20
 	case RenderSurgeMac:
 		return major == 6 && minor >= 7
+	case RenderStash:
+		return version == "3.4.0"
+	case RenderSurfboard:
+		return version == "2.35.2"
 	default:
 		return false
 	}
@@ -47,9 +53,9 @@ func ValidRenderFormat(format, version string) bool {
 
 func ValidRenderProfile(format, profile string) bool {
 	switch format {
-	case RenderClash, RenderSurgeIOS, RenderSurgeMac:
+	case RenderClash, RenderSurgeIOS, RenderSurgeMac, RenderSurfboard:
 		return profile == "vmess-uuid/v1"
-	case RenderFormat, RenderClashMeta, RenderSingBox, RenderShadowrocket:
+	case RenderFormat, RenderClashMeta, RenderSingBox, RenderShadowrocket, RenderStash:
 		return profile == "vless-uuid/v1" || profile == "vmess-uuid/v1"
 	default:
 		return false
@@ -58,5 +64,5 @@ func ValidRenderProfile(format, profile string) bool {
 
 func CompatibleRenderNode(format string, node ConnectionNode) bool {
 	return validNode(node, node.Protocol+"-uuid/v1") && ValidRenderProfile(format, node.Protocol+"-uuid/v1") &&
-		(format != RenderClash || node.TLS == nil || len(node.TLS.ALPN) == 0)
+		((format != RenderClash && format != RenderStash && format != RenderSurfboard) || node.TLS == nil || len(node.TLS.ALPN) == 0)
 }

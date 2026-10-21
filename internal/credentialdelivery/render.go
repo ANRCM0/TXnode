@@ -57,6 +57,7 @@ type RenderPayload struct {
 	CredentialSHA256      string           `json:"credential_sha256"`
 	CredentialExpiresAt   int64            `json:"credential_expires_at"`
 	Nodes                 []ConnectionNode `json:"nodes"`
+	ClientTemplate        *ClientTemplate  `json:"client_template,omitempty"`
 }
 
 type RenderGrant struct {
@@ -154,7 +155,7 @@ func VerifyRenderGrant(envelope Envelope, trust Trust, now time.Time) (*RenderGr
 		p.IssuedAt < 0 || p.NotBefore < 0 || p.NotBefore > p.IssuedAt || p.NotBefore < p.IssuedAt-30 ||
 		p.ExpiresAt <= p.IssuedAt || p.ExpiresAt-p.IssuedAt > 30 ||
 		p.IssuedAt > now.Unix()+30 || p.NotBefore > now.Unix()+30 || p.ExpiresAt <= now.Unix() ||
-		p.Nodes == nil || len(p.Nodes) == 0 || len(p.Nodes) > MaxSubjects {
+		p.Nodes == nil || len(p.Nodes) == 0 || len(p.Nodes) > MaxSubjects || !ValidClientTemplate(p.ClientTemplate, p.FormatID) {
 		return nil, refusal("RENDER_INVALID")
 	}
 	recipient, err := decodeBase64(p.RecipientPublicKey, ed25519.PublicKeySize)

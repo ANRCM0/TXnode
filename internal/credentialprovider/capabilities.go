@@ -19,20 +19,34 @@ type CapabilityRequest struct {
 }
 
 type CapabilityResponse struct {
-	ContractVersion       string   `json:"contract_version"`
-	RequestID             string   `json:"request_id"`
-	ProviderID            string   `json:"provider_id"`
-	ProviderInstanceEpoch string   `json:"provider_instance_epoch"`
-	StoreVersion          int      `json:"store_version"`
-	Operations            []string `json:"operations"`
-	NodeDelivery          bool     `json:"node_delivery"`
-	SubscriptionRender    bool     `json:"subscription_render"`
-	Profiles              []string `json:"profiles"`
+	ContractVersion            string   `json:"contract_version"`
+	RequestID                  string   `json:"request_id"`
+	ProviderID                 string   `json:"provider_id"`
+	ProviderInstanceEpoch      string   `json:"provider_instance_epoch"`
+	StoreVersion               int      `json:"store_version"`
+	Operations                 []string `json:"operations"`
+	NodeDelivery               bool     `json:"node_delivery"`
+	SubscriptionRender         bool     `json:"subscription_render"`
+	Profiles                   []string `json:"profiles"`
+	SubscriptionTemplateEngine string   `json:"subscription_template_engine,omitempty"`
 }
 
 func withCapabilities(base http.Handler, store *Store, fingerprints []string, nodeDelivery, subscriptionRender bool) http.Handler {
 	allowed, _ := fingerprintSet(fingerprints)
+	templateAdmission := make(chan struct{}, 8)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/template-validate" {
+			select {
+			case templateAdmission <- struct{}{}:
+				defer func() { <-templateAdmission }()
+			default:
+				w.Header().Set("Cache-Control", "no-store")
+				writeDeliveryError(w, http.StatusServiceUnavailable, "REQUEST_CAPACITY_EXCEEDED")
+				return
+			}
+			validateTemplateRequest(w, r, store, allowed, subscriptionRender)
+			return
+		}
 		if r.URL.Path != "/capabilities" {
 			base.ServeHTTP(w, r)
 			return
@@ -76,8 +90,12 @@ func withCapabilities(base http.Handler, store *Store, fingerprints []string, no
 			writeDeliveryError(w, http.StatusConflict, "PROVIDER_BINDING_REJECTED")
 			return
 		}
+		engine := ""
+		if subscriptionRender {
+			engine = credentialdelivery.ClientTemplateEngine
+		}
 		response := CapabilityResponse{CapabilitiesContractVersion, request.RequestID, store.providerID, store.epoch, 2,
-			[]string{"issue", "query", "revoke", "rotate"}, nodeDelivery, subscriptionRender, []string{"vless-uuid/v1", "vmess-uuid/v1"}}
+			[]string{"issue", "query", "revoke", "rotate"}, nodeDelivery, subscriptionRender, []string{"vless-uuid/v1", "vmess-uuid/v1"}, engine}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(response)
 	})
