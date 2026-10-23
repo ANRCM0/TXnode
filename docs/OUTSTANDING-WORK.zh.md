@@ -4,6 +4,45 @@
 [NEXT-DEVELOPMENT.zh.md](NEXT-DEVELOPMENT.zh.md)，严格互通入口见
 [INTEROP.md](INTEROP.md)。历史 `a6d0e96` 的“29 通过、6 跳过”不代表当前候选。
 
+## 2026-10-24 验收补项与完成审计
+
+Mieru 的目标失败互通原来仅执行 TCP 承载。测试候选 `66f171d6` 将原断言分别在
+官方客户端 TCP/UDP 承载执行，并由严格清单要求两个子项。其完整功能运行
+`39979828676` 的互通实际为 37 个适用顶层、29 个子项通过，另两项不适用；
+但 Machine 在成员重新启用后的原 12 秒监听恢复窗口失败，整轮不能记为通过。
+
+PR #9 的独立诊断候选 `faeece51278bc9c144378c6084c8d2a26a8303bb`，tree
+`4e89bcc44abb6bb0147cc262904b943ebd447116`，已通过 PR CI `39983267140` 与
+完整功能 `39983274210`，并合并为 main `07d33c49`。本次 Machine 原 batch 与
+SQL 唯一 settled 行均为 6；旧 token 拒绝、新 token 恢复、原周期重放及成员恢复
+均通过。该候选没有包含新增 Mieru 子项，也没有证明前次超时的唯一原因。
+
+诊断仅在失败时记录固定阶段/原因、目标 tracked/done/backoff、固定失败类别、
+owner/context/共享 WS/监听状态和有界 wait-chain 标签。原生 discovery 装饰器
+仅观察实际成功结果的两个布尔值；不改变请求或返回值，不导出身份、凭据、原始
+错误、响应正文或堆栈。原 12 秒恢复、10 秒 join、15 秒节点退避及重放要求保留。
+
+同步该 main 后，Mieru 候选为 `b2f2c7ae9f4324080f0a99443fd46e85960ebf2d`，tree
+`ce1e7914dd8f78c903f91a5914697407d52cc202`。完整功能 `39989542571` 与 PR CI
+`39989547284` 均成功：Go/race、runtime stability、严格 quick/full、真实固定
+Core C2、镜像冒烟和完整 Machine 通过。full artifact `12517082074` 绑定该 SHA/tree，
+两个目标失败子项实际通过；Machine artifact `12517492453` 本次原 batch 与 SQL
+唯一 settled 行均为 5，不套用诊断候选的六批次。生产运行时相对 `94d49420`
+没有新增修改；本次未重跑相同运行时的正式 A/B 以选择通过结果。
+
+| 阶段 | 本轮审计结论 |
+|---|---|
+| S0 | 严格缺失/错误/Skip 门禁、quick/full、事件/observer/packet 和 SIGKILL 真实入口已实现；新候选仍按各自 Actions 接受 |
+| S1 | 固定版本 REALITY、Naive 与 Mihomo TUIC 已进入严格矩阵；两个上游不适用组合单列，不计通过 |
+| S2-A | smux/yamux UDP、统一 owner/路由/限速/计量、父子撤权及实例隔离已有真实用例 |
+| S2-B | 官方 UDP 承载、损伤/重复/撤权/重载已有验收；新增 UDP 目标失败补项已在本次完整候选通过 |
+| S3 | 负载、故障与 A/B 工具及原始报告齐备；最近正式 A/B 只有 111/120 measured，完整 S3 未通过 |
+| S4 | 显式 Mieru 整形/低熵、连接 ID 跨 Reload 关闭、受限诊断与配置/回滚说明已有实现和测试 |
+
+开发镜像交付、Core 采用、正式标签和生产部署继续分别记账；本次测试补项不改变
+下面正式 S3 的失败。历史 main `8ad0d395` 的实际独立镜像交付不等于本次 main
+已经发布，也不等于 Core 已采用。
+
 ## 2026-10-23 修复与最终运行时候选
 
 最终运行时候选为 `94d494202ba5f990494b692a4a67e237805f4cb7`，tree

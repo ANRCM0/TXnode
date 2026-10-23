@@ -17,10 +17,15 @@ full 用于 nightly/dispatch/tag；标签发布依赖 full 成功。源码中已
 - 四个下载客户端固定二进制 SHA-256。curl 使用 Ubuntu 24.04 的系统版本，检查版本及 HTTP/2 能力，记录实际二进制摘要；它不具有与下载客户端相同的二进制锁定保证。
 - 每次保留 `events.jsonl`、`stderr.log`、`summary.json`、`summary.md`，记录源码提交/树、清单摘要和客户端来源。已知缺口与不适用组合不计作通过。
 
-清单现有 39 个顶层用例（37 个适用、两项不适用），适用用例共 27 个声明子项；
+清单现有 39 个顶层用例（37 个适用、两项不适用），适用用例共 29 个声明子项；
 quick 选择其中 8 个顶层。新增 `TestInteropXrayVMessNativeOutbound` 使用本仓库
 outbound 连接固定 Xray 服务端，覆盖 AES-GCM、ChaCha20、none 的同流多次消息及
 跨帧请求；它与 Xray 客户端连接本仓库服务端的既有测试分别验收。
+`TestInteropMieruOfficialDialFailure` 现在分别要求 `TCP`、`UDP` 承载子项：
+真实认证 core 拨号记录 `ECONNREFUSED`，官方客户端收到完整 SOCKS REP=05，
+同一客户端随后仍能请求新的有效目标。两个子项任一缺失或失败均不能接受。
+新增组合的精确候选与完整运行结果见 `OUTSTANDING-WORK.zh.md`；下面 27 个子项
+为原有历史候选的实际结果。
 候选 `e5e98291ba59c55b514b54793c6d46edcc461be4` 的 Actions `39538582760`
 已通过 quick 8 顶层/5 子项和 full 37 顶层/27 子项；另两项不适用不计通过。
 full artifact 为 `12318408957`，summary 的状态为 `accepted-with-gaps`，明确保留两项

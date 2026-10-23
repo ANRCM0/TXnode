@@ -34,6 +34,16 @@ soak 实际 1810.902413957 秒、39 轮，四档达到 100/250/500/1000、业务
 不能绕过计量缺口。这些原文件复核与 111 份 measured 的 report window 复核范围
 分别记账，不记为 240 份原文件已全部下载。
 
+2026-10-24 对同一原始 legacy usage_v2/upload collector 状态的离线复核显示：
+一份已完成但不合格的 download 事件为 1 字节，完成时距离持久化窗口到期尚约
+78.16 秒；它的单操作 wall/elapsed 均不倒退，collector 未退休、没有 pending。
+依据固定旧源码，完成 elapsed 为 10.844819355 秒，低于构造器推得的保守单调
+deadline 下界 89 秒，且位于原 grant 内。因此可以按条件排除把拒绝守卫缩小到
+`c.last` 的 wall/monotonic 顺序比较。原内存 `c.last` 未持久化，仍不能证明两种
+时钟顺序出现差异的唯一原因，也不能把现行源码中锁内采时的回归结果倒用为旧
+基线已修复。没有修改 `a1ad269` 身份、容量、同步、ACK、负载或原阈值；这份
+分析不补计缺失的正式样本。
+
 | events/download | FirstGap sequence | FirstGap elapsed ns | DroppedEvents |
 |---|---:|---:|---:|
 | g1 legacy | 140417 | 6202608789 | 138898 |

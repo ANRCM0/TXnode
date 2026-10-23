@@ -400,7 +400,11 @@
         "full"
       ],
       "expected": "pass",
-      "owner": "native data plane protocol compatibility"
+      "owner": "native data plane protocol compatibility",
+      "subtests": [
+        "TCP",
+        "UDP"
+      ]
     },
     {
       "test": "TestInteropMieruOfficialBulk",

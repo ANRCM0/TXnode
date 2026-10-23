@@ -1,5 +1,15 @@
 # 原生验收覆盖映射
 
+2026-10-24：目标失败互通新增官方 Mieru UDP 承载，与原 TCP 承载分别执行正向
+控制、core 的 `ECONNREFUSED`、完整 SOCKS REP=05 和失败后的有效目标恢复。
+严格清单要求两个子项；完整矩阵现为 37 个适用顶层、29 个子项及两项不适用。
+候选 `66f171d6` 的两个子项通过，但同轮 Machine 成员恢复失败；诊断候选
+`faeece51` 的完整功能通过且本次重放/SQL 均为 6，不能据此解释旧失败。
+集成候选 `b2f2c7ae` 的完整功能 `39989542571` 与 PR CI `39989547284` 均已成功，
+本次 Machine 原 batch 与 SQL 唯一 settled 行均为 5。严格 full 的原始事件明确
+包含目标失败 TCP/UDP 两个子项通过，不能只由父用例结果推导覆盖。
+完整状态与源码树见 `OUTSTANDING-WORK.zh.md`。
+
 2026-10-23：最终运行时候选 `94d494202ba5f990494b692a4a67e237805f4cb7`
 的 PR `39967692881` 与完整功能 `39967685398` 成功，包含 Go/race、严格 quick/full、
 runtime stability、真实 Core C2、镜像冒烟与完整 Machine。Machine 本次按原始
@@ -61,11 +71,13 @@ Machine owner 请求、升级后 WS ready 等待和父 context 活跃时的 Serv
 | 原生 packet 周期 | 同文件的 `TestNativePacketPeriodKeepsUnsampledOldTailAndFreshBytesSeparate` | 真实 UDP 原周期 13 已采样 + 7 未采样尾部，切换后 57 字节；旧控制连接关闭，旧20/新57分段 | 不是任意 packet 承载协议的互通证明 |
 | 原生 I/O 错误边界 | `internal/dataplane/core/download_accounting_test.go`、`udp_accounting_test.go`、`chunk_hook_test.go` | 实际 relay copy 对短写、正字节伴错误、零成功写、取消限速及 packet 关闭完成 I/O 的计数 | 不恢复已移除内核的内部 wrapper；功能结果以候选 CI 为准 |
 | Mieru 官方 UDP 网络损伤 | `internal/kernel/txnode/mieru_packet_fault_linux_test.go` 的 `TestInteropMieruOfficialPacketFaults` | 有界代理在双向真实注入丢包、乱序和重复；core 与 NativeMeter 物理计数精确；撤权重放不复活、Reload/监听回滚恢复 | 本地物理观察不是 usage_v2 结算或持久化恢复；真实 UDP socket 绑定失败不承诺原 underlay 无中断 |
+| Mieru 官方目标失败恢复 | `internal/kernel/txnode/interop_compat_linux_test.go` 的 `TestInteropMieruOfficialDialFailure` | TCP/UDP 承载分别验证真实 core 拨号拒绝、完整 REP=05 与新目标恢复；严格清单要求两个子项 | 不能把单一顶层 PASS 当作两个承载均已执行；这条用例不单独证明失败路径的持久化结算或资源总预算 |
 | Machine mailbox 配置表示 | `internal/controlplane/mailbox_test.go`、`internal/service/native_config_reload_linux_test.go` | nil/空/非空配置在 Seed、Apply/Drain 后保留 JSON 表示；真实 Machine mailbox 交付端口更新，保持原签名 collector、兄弟流和 REST 阻断 | 当前候选 Go/race 已通过；未放宽仅端口变化的配置等价条件 |
 | relay 取消与 HTTP 生命周期 | `internal/dataplane/core/pipe_lifecycle_test.go`、严格 Naive h2 互通 | channel 控制 deadline watcher，copyPipe 返回前等待取消清理，禁止 handler 退役后的 deadline/close；第三方完整 Naive 链 | 当前候选 Go/race 和严格 full 已通过；不推导所有 net.Conn 实现的 deadline 都有有界耗时 |
 | 日志 canonical envelope | `internal/usagebucket/store_envelope_test.go` | BUCKET、全部控制类型、null 和转义字符的 envelope 与原 json.Marshal 逐字节相同，输入不变且 canonical decoder/digest 通过 | 当前候选 Go/race 已通过；编码优化不证明固定容量下全部事件性能样本无损 |
 | native 请求取消与 worker join | `internal/txboard/request_context_test.go`、`socket_test.go`、`internal/machine/context_test.go`、`internal/service/authorization_cancellation_linux_test.go` | 阻塞 Core/Provider 实际请求服从父 context、Service 自身租约终止取消刷新后 join、Machine 五种 owner 请求取消、升级后 WS ready 等待取消；原完成拒绝类型保留 | `e5e98291` Go/source guards 和完整 Machine 已通过；不能解释全部旧超时或证明磁盘同步可取消 |
 | Machine child 失败后的权威重查 | `internal/machine/child_failure_test.go`、完整 `TestNativeCoreMachineLive` | 真实 native HTTP 在有界通知后执行新的 discovery；严格 401 才停止 Machine，503 与成功重查保留 owner 和节点退避；重复通知仅占一个槽 | `94d49420` 完整 Go/race 与 Machine 通过；generic child 错误本身没有撤权权威，不保证所有网络/磁盘等待耗时 |
+| Machine 恢复失败现场 | 同一 Machine live 入口及 `recovery_diagnostic.py` / `test_preflight.py` | 原恢复窗口失败时输出固定 schema/阶段、布尔状态、类别与有界 wait-chain；精确字段、类型、标签及关系的负例拒绝 | 诊断候选一次通过不证明旧超时已修复；discovery 观测包含阶段内实际完成的请求，不证明每个完成请求均在重新启用后发起 |
 | 固定 Core machine 契约 | `internal/machine/native_core_machine_live_test.go`、`scripts/tests/node-native-machine/`，CI `core-machine` | 真实 Provider mTLS、native 安装/激活、账户/购买/履约、生产 Orchestrator、双 Node、共享 WS/503/后继心跳、设备事实、隔离、轮换与原使用量重放 | Node `e5e98291` 与 Core `5536410` 已在 Actions `39538582760` 完整通过，详见 `CORE-MACHINE-COMPATIBILITY.zh.md`；不证明独立完整财务对账、生产 PKI 或物理主机部署 |
 
 ## SIGKILL 夹具约束
