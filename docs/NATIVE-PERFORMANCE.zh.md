@@ -1,6 +1,6 @@
 # 原生持续负载与新旧性能证据
 
-日期：2026-10-21（Asia/Shanghai）。本文区分工具约定与具体 Actions 结果；源码实现
+日期：2026-10-23（Asia/Shanghai）。本文区分工具约定与具体 Actions 结果；源码实现
 本身不构成功能或生产验收。
 
 ## 入口与证据绑定
@@ -9,7 +9,82 @@
 
 所有功能、网络与负载执行仍限于 GitHub Actions。本地仅允许源码检查、Go 静态编译、格式和 AST 检查。缺少客户端、工具编译失败、实际负载不达标与证据不完整均不能记为通过。
 
-## 已完成运行的结果
+## 具体提交的运行结果
+
+最终运行时候选 `94d494202ba5f990494b692a4a67e237805f4cb7`，tree
+`72699fc5973bee9e006cd82ee9f2930bbeaa26f7`，完整 native Actions
+`39969066032` 已完成且失败。正式性能为 111/120 measured（旧侧 55/60、新侧
+56/60）；十项完整比较都满足原阈值。usage_v2/upload 的 g1 旧侧出现 measurement
+EOF，events/download 的 g1/g3/g4/g5 双侧共八份 shutdown-accounting 不完整，
+两项均保持 incomplete。ordinary/upload CPU `1.018597687348134`、ordinary/long
+CPU `1.0089442521725174`；不能由完整比较通过推导缺失比较通过。
+
+soak 实际 1810.902413957 秒、39 轮，四档达到 100/250/500/1000、业务错误为零；
+七项故障通过。正式 artifact `12509414091`、soak `12509324775` 和 S3
+`12510033035` 对应此 SHA。S3 的 `PERFORMANCE`、`equivalent_ab`、
+`evidence_complete` 为 false，缺失 CPU 字段使后续 image/allocation 检查没有生成，
+`full_S3_accepted=false`。111 份 measured report CPU window 均通过原 validator；
+未声称已下载并匹配 240 份原始 CPU 文件。其完整功能 Actions `39967685398` 已
+成功，Machine 本次原 batch/SQL 唯一 settled 行均为 5；功能不替代正式 S3。
+
+九份失败均已取得原始证据。g1 legacy usage_v2/upload 的四条连接记录
+`USAGE_INTERVAL_UNKNOWN`，并非进程在 measurement 时已经退出。八份 events
+均为 meter `CAPACITY_REACHED`，store 未降级；node-stop 与 coordinator-close
+两份 meter 相同。八份失败窗口的 16 份 CPU 原文件也与 report 匹配，但数值自洽
+不能绕过计量缺口。这些原文件复核与 111 份 measured 的 report window 复核范围
+分别记账，不记为 240 份原文件已全部下载。
+
+| events/download | FirstGap sequence | FirstGap elapsed ns | DroppedEvents |
+|---|---:|---:|---:|
+| g1 legacy | 140417 | 6202608789 | 138898 |
+| g1 candidate | 82305 | 3709239997 | 198976 |
+| g3 legacy | 67201 | 3115954314 | 207478 |
+| g3 candidate | 95361 | 4276214935 | 182796 |
+| g4 legacy | 183041 | 8292310276 | 86550 |
+| g4 candidate | 66689 | 3031895984 | 209504 |
+| g5 legacy | 181505 | 8307182288 | 85812 |
+| g5 candidate | 237569 | 10784446100 | 29540 |
+
+本轮正式 runner 为 Xeon Platinum 8573C。主机型号是执行环境记录，不单独解释
+容量缺口或证明磁盘、调度、编码中的唯一根因。原基线与候选均保留原容量、同步
+和 ACK；没有重复同一候选运行以选择通过结果。
+
+前一测试修正候选 `e1e2a96bc7915ad4a5b5648f207836e5f950e6b5` 的 Actions
+`39958140736` 已完成 120/120 measured，11 项比较达标，唯一 ordinary/long
+CPU/GiB `1.0642920938104765 > 1.05`。该比较吞吐
+`1.0000924227834154`、CV `0.06566531846344348`；全部比较的最大 CV
+`0.08904020850146029 < 0.10`。这是阈值越界，不能记为缺样本、events 容量失败或
+CV 未决。七项故障与 1809.607773683 秒、38 轮 soak 通过；S3 只有
+`PERFORMANCE`、`equivalent_ab` 为 false，其余八项为 true。
+
+其正式、soak、S3 artifacts 为 `12505247297`、`12505416903`、`12504514927`。
+全部 120 份 report CPU window 均通过原 validator。离线下载仅取得 68/240 份原始
+CPU snapshot 且逐字段匹配，16/40 份 event meter snapshot 均无 drop/gap；完整压缩包
+未成功下载，不能把这次部分原文件复核写成 240 份完整核验。
+
+独立 long profile 分支 `c9647a35` 的 `39962792221` 仅执行四份诊断，
+ordinary/events 两侧均 measured，`accepted=false`，不属于正式矩阵。ordinary
+pprof 总样本为旧侧 40 ms、新侧 50 ms，其中新侧 10 ms 指向 spliceOne callback
+中的 runtime.ifaceeq；采样量不足以证明上述正式越界的唯一原因。后继
+`01805796` 将 callback 改为比较具体 syscall.Errno，保留 EINTR/EAGAIN、其他错误、
+原部分写计数、hook、buffer 和持久化边界。其 `39965363544` 已完成 120/120
+measured，ordinary/long CPU 比率 `1.0325303858902604` 达标，唯一越界变为
+ordinary/upload CPU `1.0522877502360797 > 1.05`，对应吞吐
+`0.99982202118296`、CV `0.056566858352544096`。其余 11 项达标，soak
+1809.495551609 秒、38 轮及七项故障通过，S3 仍因 `PERFORMANCE`、
+`equivalent_ab` 为 false 而失败。全部 120 份 report CPU window 有效，本次没有
+下载 240 份原始 CPU 文件，不记为完整原文件复核。这些结果不移用为最终
+`94d49420` 的同 SHA 验收，也不能据此证明 errno 改动是两轮差异的唯一原因。
+诊断分支的工具改动没有合入候选，正式五组、原参数、容量、同步、ACK 及阈值
+保持不变。
+
+独立 upload 诊断分支 `2522145b151192774f6f031ea3bcb2f9f5602fd5` 的
+`39970404154` 仅将四个诊断 case 改为 upload，运行时与 `94d49420` 相同；其工具
+改动没有进入 PR。四份诊断均 measured，8 份原始 CPU snapshot 与 report 逐字段
+匹配，profile 摘要一致，`accepted=false`。ordinary 两侧各完成 980 次操作，
+CPU window 为旧侧 230674717 ns、新侧 224322087 ns，但 pprof 总样本仅为
+10 ms/20 ms，热点不足以解释中间候选的正式 upload 越界。该单次结果既不替代
+五组正式比较，也不触发放宽阈值或再次选择较优运行。
 
 2026-10-23 复核：main `8cebddbb` 的后续运行 `39694804417` 已取得完整 S3
 通过，正式 120/120 measured、十项 ledger checks 全 true。随后 `39872986575`
