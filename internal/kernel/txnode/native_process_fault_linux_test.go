@@ -28,10 +28,11 @@ import (
 )
 
 type nativeCrashProgress struct {
-	Stage string `json:"stage"`
-	Port  int    `json:"port,omitempty"`
-	Up    int64  `json:"up,omitempty"`
-	Down  int64  `json:"down,omitempty"`
+	Pending uint64 `json:"pending,omitempty"`
+	Stage   string `json:"stage"`
+	Port    int    `json:"port,omitempty"`
+	Up      int64  `json:"up,omitempty"`
+	Down    int64  `json:"down,omitempty"`
 }
 
 func nativeCrashSession() usagev2.Session {
@@ -60,7 +61,13 @@ func nativeCrashOpen(t *testing.T, root string, session usagev2.Session) (*usage
 
 func nativeCrashStart(t *testing.T, store *usageinterval.NativeStore, session usagev2.Session, revision, password string, port int) *Kernel {
 	t.Helper()
-	collector, err := store.NewCollector(session, nativeCrashWindow(session, revision), map[string]int{password: 7})
+	credentials := map[string]int{password: 7}
+	users := []model.UserSpec{{ID: 7, UUID: password}}
+	if len(session.Grants) > 1 {
+		credentials["native-crash-held"] = 8
+		users = append(users, model.UserSpec{ID: 8, UUID: "native-crash-held"})
+	}
+	collector, err := store.NewCollector(session, nativeCrashWindow(session, revision), credentials)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,11 +75,11 @@ func nativeCrashStart(t *testing.T, store *usageinterval.NativeStore, session us
 		time.Sleep(delay)
 	}
 	k := New(RuntimeConfig{MaxFresh: 128, DrainTimeout: time.Second, HandshakeTimeout: 3 * time.Second})
-	meter, ok := k.NewNativeMeter(collector, map[string]int{password: 7})
+	meter, ok := k.NewNativeMeter(collector, credentials)
 	if !ok || !k.SetNativeUsageTracker(meter) {
 		t.Fatal("process fault native meter refused")
 	}
-	if err := k.Start(&model.NodeSpec{Protocol: "socks", ListenIP: "127.0.0.1", ServerPort: port}, []model.UserSpec{{ID: 7, UUID: password}}, kernel.TLSCert{}); err != nil {
+	if err := k.Start(&model.NodeSpec{Protocol: "socks", ListenIP: "127.0.0.1", ServerPort: port}, users, kernel.TLSCert{}); err != nil {
 		t.Fatal(err)
 	}
 	return k
@@ -111,7 +118,7 @@ func TestNativeProcessLoadHelper(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if progress.Up >= minimum && progress.Down >= minimum {
+			if progress.Up >= minimum && progress.Down >= minimum && progress.Pending != 0 {
 				progress.Stage = "durable-load"
 				if err := encoder.Encode(progress); err != nil {
 					t.Fatal(err)
@@ -141,9 +148,12 @@ func nativeCrashDurableProgress(root string) (nativeCrashProgress, error) {
 		var envelope struct {
 			Payload struct {
 				Events []struct {
-					Done     bool `json:"done"`
-					Eligible bool `json:"eligible"`
-					Evidence struct {
+					Requested int64 `json:"requested_bytes,string"`
+					Done      bool  `json:"done"`
+					Eligible  bool  `json:"eligible"`
+					Evidence  struct {
+						Sequence  uint64 `json:"sequence,string"`
+						UserID    string `json:"user_id"`
 						Direction string `json:"direction"`
 						Bytes     int64  `json:"bytes,string"`
 					} `json:"evidence"`
@@ -154,7 +164,10 @@ func nativeCrashDurableProgress(root string) (nativeCrashProgress, error) {
 			return result, err
 		}
 		for _, event := range envelope.Payload.Events {
-			if event.Done && event.Eligible {
+			if !event.Done && event.Requested > 0 && event.Evidence.UserID == "8" && event.Evidence.Direction == "upload" {
+				result.Pending = event.Evidence.Sequence
+			}
+			if event.Done && event.Eligible && event.Evidence.UserID == "7" {
 				if event.Evidence.Direction == "upload" {
 					result.Up += event.Evidence.Bytes
 				} else if event.Evidence.Direction == "download" {
@@ -169,6 +182,9 @@ func nativeCrashDurableProgress(root string) (nativeCrashProgress, error) {
 func TestNativeLoadedSIGKILLRestartsWithOriginalUsagePeriod(t *testing.T) {
 	root := t.TempDir()
 	session := nativeCrashSession()
+	heldGrant := session.Grants[0]
+	heldGrant.UserID, heldGrant.AccessSubjectID = "8", "9"
+	session.Grants = append(session.Grants, heldGrant)
 	body, _ := json.Marshal(session)
 	if err := os.WriteFile(filepath.Join(root, "session.json"), body, 0o600); err != nil {
 		t.Fatal(err)
@@ -251,9 +267,16 @@ func TestNativeLoadedSIGKILLRestartsWithOriginalUsagePeriod(t *testing.T) {
 		return nativeCrashProgress{}
 	}
 	ready := await("ready")
+	// Finish the bounded handshake read before holding a normal relay Read.
+	held := socksConnectTB(t, ready.Port, "native-crash-held", origin.Addr().String())
+	defer held.Close()
+	if err := nativeFaultEcho(held, []byte("h")); err != nil {
+		t.Fatal(err)
+	}
 	var clients []net.Conn
 	var wg sync.WaitGroup
 	var completed, written atomic.Int64
+	written.Add(1) // The held user's completed byte remains in the original period.
 	errorsSeen := make(chan error, 8)
 	var killing atomic.Bool
 	for i := 0; i < 8; i++ {
@@ -356,10 +379,14 @@ func TestNativeLoadedSIGKILLRestartsWithOriginalUsagePeriod(t *testing.T) {
 	if up < checkpoint.Up || down < checkpoint.Down || up > written.Load() || down > written.Load() {
 		t.Fatalf("SIGKILL recovered bytes outside durable/actual bounds: checkpoint=%+v up=%d down=%d written=%d", checkpoint, up, down, written.Load())
 	}
+	pending, pendingErr := nativeCrashDurableProgress(filepath.Join(root, "native"))
+	if pendingErr != nil || pending.Pending != checkpoint.Pending {
+		t.Fatalf("original idle upload intent did not survive recovery: got=%+v want=%d err=%v", pending, checkpoint.Pending, pendingErr)
+	}
 	if store.QuarantinedCollectors() == 0 {
 		t.Fatal("active in-flight I/O vanished from crash quarantine")
 	}
-	if _, err := store.NewCollector(session, nativeCrashWindow(session, "1"), map[string]int{"native-crash-pass": 7}); err == nil {
+	if _, err := store.NewCollector(session, nativeCrashWindow(session, "1"), map[string]int{"native-crash-pass": 7, "native-crash-held": 8}); err == nil {
 		t.Fatal("same crashed signed revision reopened")
 	}
 	if err := store.Close(); err != nil {
@@ -381,13 +408,16 @@ func TestNativeLoadedSIGKILLRestartsWithOriginalUsagePeriod(t *testing.T) {
 		}
 	}
 	next := session
-	next.Grants = append([]usagev2.Grant(nil), session.Grants...)
+	next.Grants = append([]usagev2.Grant(nil), session.Grants[:1]...)
 	next.Grants[0].AuthSnapshotID = "12"
 	next.Grants[0].UsagePeriodID = "15"
 	k := nativeCrashStart(t, store, next, "2", "native-crash-pass-next", ready.Port)
 	defer k.Stop()
 	if socksCredentialAccepted(t, ready.Port, "native-crash-pass") {
 		t.Fatal("restart revived old credential")
+	}
+	if socksCredentialAccepted(t, ready.Port, "native-crash-held") {
+		t.Fatal("restart revived the retired idle user's credential")
 	}
 	c := socksConnectTB(t, ready.Port, "native-crash-pass-next", origin.Addr().String())
 	if err := nativeFaultEcho(c, []byte("new-period")); err != nil {
@@ -413,5 +443,5 @@ func TestNativeLoadedSIGKILLRestartsWithOriginalUsagePeriod(t *testing.T) {
 	if !foundNew {
 		t.Fatal("fresh traffic did not remain in its new period")
 	}
-	t.Logf("SIGKILL loaded completed=%d durable_up=%d durable_down=%d recovered_up=%d recovered_down=%d original_batches=%d", completed.Load(), checkpoint.Up, checkpoint.Down, up, down, len(identities))
+	t.Logf("SIGKILL loaded completed=%d durable_up=%d durable_down=%d recovered_up=%d recovered_down=%d original_batches=%d quarantined_user=8 pending_sequence=%d", completed.Load(), checkpoint.Up, checkpoint.Down, up, down, len(identities), checkpoint.Pending)
 }

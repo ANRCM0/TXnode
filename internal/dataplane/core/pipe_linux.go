@@ -123,8 +123,9 @@ func spliceOne(ctx context.Context, dst, src *net.TCPConn, count func(int64), ho
 	read := func(fd uintptr) bool {
 		for {
 			n, serr = unix.Splice(int(fd), nil, pwFD, nil, copyBuf, unix.SPLICE_F_MOVE|unix.SPLICE_F_NONBLOCK)
-			if serr != unix.EINTR {
-				return serr != unix.EAGAIN // wait for readability and retry
+			// Compare concrete errno values without interface equality in this hot callback.
+			if errno, ok := serr.(syscall.Errno); !ok || errno != unix.EINTR {
+				return !ok || errno != unix.EAGAIN // wait for readability and retry
 			}
 		}
 	}
@@ -197,8 +198,8 @@ func newSplicePipeDrainer(dstRC syscall.RawConn, pipeFD int, count func(int64)) 
 	write := func(fd uintptr) bool {
 		for {
 			written, werr = unix.Splice(pipeFD, nil, int(fd), nil, int(remaining), unix.SPLICE_F_MOVE|unix.SPLICE_F_NONBLOCK)
-			if werr != unix.EINTR {
-				return werr != unix.EAGAIN // socket buffer full: wait then retry
+			if errno, ok := werr.(syscall.Errno); !ok || errno != unix.EINTR {
+				return !ok || errno != unix.EAGAIN // socket buffer full: wait then retry
 			}
 		}
 	}

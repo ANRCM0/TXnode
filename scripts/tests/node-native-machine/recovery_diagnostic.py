@@ -1,0 +1,27 @@
+"""Strict public recovery evidence validation; never forwards unknown fields."""
+
+
+def valid_recovery(recovery):
+    booleans = {'context_cancelled', 'shared_ws_connected', 'target_listener_open', 'sibling_listener_open'}
+    counts = {'tracked_children', 'completed_children', 'failed_children'}
+    fields = booleans | counts | {'schema', 'stage', 'code', 'failure_classes', 'wait_chains'}
+    wait_labels = {'machine_children_join', 'machine_discovery', 'machine_child_start', 'machine_status',
+                   'startup_recovery', 'startup_setup', 'startup_usage', 'startup_collector', 'startup_replay_page',
+                   'service_run', 'authorization_join', 'authorization_worker', 'native_usage_close',
+                   'core_users_read', 'core_http', 'provider_resolve', 'shared_ws_connect', 'kernel_stop', 'worker_wait'}
+    failure_classes = {'other', 'authority_node', 'authority_machine', 'context_canceled',
+                       'context_deadline', 'provider', 'authorization', 'native_usage'}
+    return (
+        isinstance(recovery, dict) and set(recovery) == fields
+        and recovery['schema'] == 'txnode-machine-recovery-diagnostic/v1'
+        and recovery['stage'] == 'recovered' and recovery['code'] == 'fresh_readiness_failed'
+        and all(type(recovery[field]) is bool for field in booleans)
+        and all(type(recovery[field]) is int and 0 <= recovery[field] <= 2 for field in counts)
+        and recovery['completed_children'] <= recovery['tracked_children']
+        and isinstance(recovery['failure_classes'], list)
+        and len(recovery['failure_classes']) == recovery['failed_children']
+        and all(type(item) is str and item in failure_classes for item in recovery['failure_classes'])
+        and isinstance(recovery['wait_chains'], list) and len(recovery['wait_chains']) <= 16
+        and all(type(chain) is str and 1 <= len(chain.split('>')) <= 12
+                and all(label in wait_labels for label in chain.split('>')) for chain in recovery['wait_chains'])
+    )

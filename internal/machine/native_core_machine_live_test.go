@@ -95,6 +95,11 @@ func machineCoreWaitChains() []string {
 		{"internal/machine.(*Orchestrator).startNode(", "machine_child_start"},
 		{"internal/machine.(*Orchestrator).reportMachineStatusContext(", "machine_status"},
 		{"internal/service.(*Service).Run(", "service_run"},
+		{"internal/service.(*Service).recoverNativeStartup(", "startup_recovery"},
+		{"internal/service.(*Service).initialSetup(", "startup_setup"},
+		{"internal/service.(*Service).initNativeUsage(", "startup_usage"},
+		{"internal/service.(*Service).newNativeCollector(", "startup_collector"},
+		{"internal/usagev2.(*Reporter).DeliverNativeUnacknowledgedPage(", "startup_replay_page"},
 		{"internal/service.(*Service).closeAuthorization(", "authorization_join"},
 		{"internal/service.(*Service).requestAuthorizationSnapshot.func1(", "authorization_worker"},
 		{"internal/service.(*Service).closeNativeUsage(", "native_usage_close"},
@@ -145,6 +150,11 @@ func machineCoreChildren(o *Orchestrator) []<-chan struct{} {
 func machineCoreShutdownDiagnostic(t *testing.T, o *Orchestrator, children []<-chan struct{}, targetPort, siblingPort int) {
 	t.Helper()
 	o.mu.Lock()
+	classes := []string{}
+	for _, failure := range o.failures {
+		classes = append(classes, machineCoreFailureClass(failure.lastErr))
+	}
+	sort.Strings(classes)
 	terminal := o.terminalErr
 	cancelled := o.runCtx != nil && o.runCtx.Err() != nil
 	o.mu.Unlock()
@@ -159,6 +169,7 @@ func machineCoreShutdownDiagnostic(t *testing.T, o *Orchestrator, children []<-c
 	}
 	socket := o.currentWS()
 	data := map[string]any{"schema": "txnode-machine-shutdown-diagnostic/v1", "stage": "old-rejected", "code": "machine_join_timeout",
+		"failed_children": len(classes), "failure_classes": classes,
 		"terminal_cause_observed": terminal != nil, "terminal_machine_denial": typed && denial.Scope == controlerror.MachineScope,
 		"context_cancelled": cancelled, "tracked_children": len(children), "completed_children": done,
 		"shared_ws_connected": socket != nil && socket.IsConnected(), "target_listener_open": machineCoreListening(targetPort),
@@ -168,6 +179,74 @@ func machineCoreShutdownDiagnostic(t *testing.T, o *Orchestrator, children []<-c
 		t.Fatal("fixed shutdown diagnostic encoding failed")
 	}
 	t.Logf("NATIVE_MACHINE_SHUTDOWN_DIAGNOSTIC %s", body)
+}
+
+func machineCoreFailureClass(err error) string {
+	class := "other"
+	if denial, ok := controlerror.AsAuthorityDenial(err); ok {
+		class = "authority_node"
+		if denial.Scope == controlerror.MachineScope {
+			class = "authority_machine"
+		}
+	}
+
+	if class == "other" {
+		switch {
+		case errors.Is(err, context.Canceled):
+			class = "context_canceled"
+		case errors.Is(err, context.DeadlineExceeded):
+			class = "context_deadline"
+		default:
+			cause := err
+			for depth := 0; cause != nil && depth < 8; depth++ {
+				for _, prefix := range []struct{ prefix, label string }{{"NODE_CREDENTIAL_DELIVERY_", "provider"}, {"NODE_AUTHORIZATION_", "authorization"}, {"NATIVE_USAGE_", "native_usage"}} {
+					if strings.HasPrefix(cause.Error(), prefix.prefix) {
+						class = prefix.label
+						break
+					}
+				}
+				if class != "other" {
+					break
+				}
+				cause = errors.Unwrap(cause)
+			}
+		}
+	}
+	return class
+}
+
+// Publish only reviewed state labels; errors and runtime stacks remain private.
+func machineCoreRecoveryDiagnostic(t *testing.T, o *Orchestrator, targetPort, siblingPort int) {
+	t.Helper()
+	o.mu.Lock()
+	tracked, completed, cancelled, failures := len(o.nodes), 0, 0, len(o.failures)
+	classes := []string{}
+	for _, child := range o.nodes {
+		select {
+		case <-child.done:
+			completed++
+		default:
+		}
+	}
+	for _, failure := range o.failures {
+		class := machineCoreFailureClass(failure.lastErr)
+		classes = append(classes, class)
+	}
+	if o.runCtx != nil && o.runCtx.Err() != nil {
+		cancelled = 1
+	}
+	o.mu.Unlock()
+	sort.Strings(classes)
+	socket := o.currentWS()
+	data := map[string]any{"schema": "txnode-machine-recovery-diagnostic/v1", "stage": "recovered", "code": "fresh_readiness_failed",
+		"tracked_children": tracked, "completed_children": completed, "failed_children": failures, "failure_classes": classes,
+		"context_cancelled": cancelled == 1, "shared_ws_connected": socket != nil && socket.IsConnected(),
+		"target_listener_open": machineCoreListening(targetPort), "sibling_listener_open": machineCoreListening(siblingPort), "wait_chains": machineCoreWaitChains()}
+	body, err := json.Marshal(data)
+	if err != nil {
+		t.Fatal("fixed recovery diagnostic encoding failed")
+	}
+	t.Logf("NATIVE_MACHINE_RECOVERY_DIAGNOSTIC %s", body)
 }
 
 func (o *machineCoreObservedControlPlane) NewMachineSocket(url, token string, machineID int, ws config.WSConfig, kernel config.KernelConfig, onEvent func(machineEvent), onStatus func(bool)) machineSocket {
@@ -450,7 +529,6 @@ func TestNativeCoreMachineLive(t *testing.T) {
 	newMachine.Token = replacement.Token
 	newcfg.Machine = &newMachine
 	current, newcancel, newdone := start(&newcfg)
-	_ = current
 	t.Cleanup(func() {
 		newcancel()
 		select {
@@ -462,9 +540,16 @@ func TestNativeCoreMachineLive(t *testing.T) {
 			t.Error("fresh machine failed cleanup")
 		}
 	})
+	recoveryReady := false
+	defer func() {
+		if !recoveryReady {
+			machineCoreRecoveryDiagnostic(t, current, fixture.NewPort, fixture.Nodes[1].Port)
+		}
+	}()
 	machineCoreWait(t, newdone, 12*time.Second, func() bool {
 		return machineCoreListening(fixture.NewPort) && machineCoreListening(fixture.Nodes[1].Port)
 	})
+	recoveryReady = true
 	for _, tail := range tails {
 		machineCoreReplayed(t, tail, "current token listeners opened before original native submission was acknowledged")
 	}

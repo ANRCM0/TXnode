@@ -18,6 +18,7 @@ import uuid
 from tls_proxy import NativeTLSProxy
 from preflight import inspect as compatibility_preflight
 from native_setup import prepare as prepare_native, render_credentials
+from recovery_diagnostic import valid_recovery
 
 if len(sys.argv)!=4:raise SystemExit('usage: run.py API NODE NEW_EVIDENCE')
 api,node,evidence=(Path(p).resolve() for p in sys.argv[1:]);scripts=Path(__file__).resolve().parent
@@ -111,9 +112,9 @@ def failure_summary(category):
                 diagnostics['configuration'] = config_diagnostic
         shutdown_booleans = {'terminal_cause_observed', 'terminal_machine_denial', 'context_cancelled',
                              'shared_ws_connected', 'target_listener_open', 'sibling_listener_open'}
-        shutdown_fields = shutdown_booleans | {'schema', 'stage', 'code', 'tracked_children', 'completed_children', 'wait_chains'}
+        shutdown_fields = shutdown_booleans | {'schema', 'stage', 'code', 'tracked_children', 'completed_children', 'failed_children', 'failure_classes', 'wait_chains'}
         wait_labels = {'machine_children_join', 'machine_discovery', 'machine_child_start', 'machine_status',
-                       'service_run', 'authorization_join', 'authorization_worker', 'native_usage_close',
+                       'startup_recovery', 'startup_setup', 'startup_usage', 'startup_collector', 'startup_replay_page', 'service_run', 'authorization_join', 'authorization_worker', 'native_usage_close',
                        'core_users_read', 'core_http', 'provider_resolve', 'shared_ws_connect', 'kernel_stop', 'worker_wait'}
         for line in text.splitlines():
             marker = 'NATIVE_MACHINE_SHUTDOWN_DIAGNOSTIC '
@@ -128,6 +129,9 @@ def failure_summary(category):
                     and all(type(shutdown[field]) is bool for field in shutdown_booleans)
                     and type(shutdown['tracked_children']) is int and 0 <= shutdown['tracked_children'] <= 2
                     and type(shutdown['completed_children']) is int and 0 <= shutdown['completed_children'] <= shutdown['tracked_children']
+                    and type(shutdown['failed_children']) is int and 0 <= shutdown['failed_children'] <= 2
+                    and isinstance(shutdown['failure_classes'], list) and len(shutdown['failure_classes']) == shutdown['failed_children']
+                    and all(type(item) is str and item in {'other', 'authority_node', 'authority_machine', 'context_canceled', 'context_deadline', 'provider', 'authorization', 'native_usage'} for item in shutdown['failure_classes'])
                     and isinstance(shutdown['wait_chains'], list) and len(shutdown['wait_chains']) <= 16
                     and all(isinstance(chain, str) and 1 <= len(chain.split('>')) <= 12
                             and all(label in wait_labels for label in chain.split('>')) for chain in shutdown['wait_chains'])):
@@ -136,7 +140,23 @@ def failure_summary(category):
                     event['kind'] == 'http' and event['status'] == 401 and event.get('error_code') == 'NODE_UNAUTHORIZED'
                     and event.get('machine_id') == str(fixture['machine_id']) and event['monotonic_ns'] >= rotation_time
                     for event in proxy.event_snapshot())
+                endpoints = {'/txapi/node/v1/config': 'config', '/txapi/node/v1/users': 'users',
+                             '/txapi/node/v1/handshake': 'handshake', '/txapi/node/v1/machine/nodes': 'machine_nodes'}
+                shutdown['http_401_counts'] = {label: min(10000, sum(
+                    event.get('kind') == 'http' and event.get('status') == 401
+                    and event.get('machine_id') == str(fixture['machine_id'])
+                    and event.get('path') == path and event.get('monotonic_ns', 0) >= rotation_time
+                    for event in proxy.event_snapshot())) for path, label in endpoints.items()}
                 diagnostics['shutdown'] = shutdown
+        for line in text.splitlines():
+            marker = 'NATIVE_MACHINE_RECOVERY_DIAGNOSTIC '
+            if marker not in line:continue
+            encoded = line.split(marker, 1)[1]
+            if len(encoded) > 4096:continue
+            try:recovery = json.loads(encoded)
+            except (ValueError, TypeError):continue
+            if valid_recovery(recovery):
+                diagnostics['recovery'] = recovery
         source = (node / 'internal/machine/native_core_machine_live_test.go').read_text().splitlines()
         for match in re.finditer(r'native_core_machine_live_test\.go:([0-9]+):', text):
             line = int(match.group(1))

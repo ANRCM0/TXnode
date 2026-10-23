@@ -4,7 +4,85 @@
 [NEXT-DEVELOPMENT.zh.md](NEXT-DEVELOPMENT.zh.md)，严格互通入口见
 [INTEROP.md](INTEROP.md)。历史 `a6d0e96` 的“29 通过、6 跳过”不代表当前候选。
 
-## 当前工作与合并记录
+## 2026-10-23 修复与最终运行时候选
+
+最终运行时候选为 `94d494202ba5f990494b692a4a67e237805f4cb7`，tree
+`72699fc5973bee9e006cd82ee9f2930bbeaa26f7`。PR Actions `39967692881`
+与完整功能运行 `39967685398` 均成功：Go/race、runtime stability、严格 quick/full、
+真实固定 Core C2、镜像冒烟及完整 Machine 通过。full 为 37 个适用顶层和 27 个子项
+通过，两项明确不适用不计为通过。Machine 使用原 Core `5536410`，实际完成旧 token
+拒绝、新 token 启动、原周期重放和 VLESS/VMess 恢复；本次原始 batch 与 SQL 唯一
+settled 行均为 5，不沿用历史运行的六批次数字。
+
+同 SHA 的完整 native `39969066032` 最终失败。正式五组 A/B 为 111/120 measured
+（旧侧 55/60、新侧 56/60），十项完整比较满足原阈值；usage_v2/upload 的 g1 旧侧
+measurement 出现 EOF，events/download 的 g1/g3/g4/g5 双侧八份 shutdown-accounting
+不完整，这两项保持 incomplete。ordinary/upload、ordinary/long CPU 比率分别为
+`1.018597687348134`、`1.0089442521725174`，不能用十项通过补齐九份缺失样本。
+原 validator 接受全部 111 份 measured CPU window；没有将 report 复核写成全部
+240 份原始 CPU 文件下载完成。
+
+九份失败的原始证据已逐份核对：旧侧 upload 日志为 `USAGE_INTERVAL_UNKNOWN`，
+八份 events/download 的 meter 均为 `CAPACITY_REACHED`，store 均未降级，
+node-stop 与 coordinator-close 快照中的 meter 相同。它们不能解释成单纯退出清理
+错误，也不能在固定基线中悄悄修改周期或容量后继续沿用原比较身份。
+
+持续负载实际 1810.902413957 秒、39 轮，四档达到 100/250/500/1000 会话且业务
+错误为零；七项带流量故障 7/7 通过。S3 artifact `12510033035` 保持
+`full_S3_accepted=false`：`PERFORMANCE`、`equivalent_ab`、`evidence_complete`
+为 false，`evidence_error` 为缺少 `cpu_measurement`；其后的 image/allocation
+检查未生成，不能补称为通过。正式与 soak artifacts 为 `12509414091`、
+`12509324775`。当前不据功能与负载通过推导完整 S3、main、镜像发布或生产部署通过。
+
+本轮保留八条真实负载和原 64 KiB checkpoint，以独立用户完成一字节 echo 后的
+空闲连接建立真实未完成上传 Read intent；该字节纳入实际 I/O 上界，checkpoint
+仍只统计原用户。恢复必须保留同用户、同 sequence 的 intent，旧凭据拒绝、原周期、
+实际字节上界和原批次重放继续执行。故障 summary 独立 always-run，命令失败、
+证据缺失/截断、skip 或 package fail 均保持拒绝；Go CI 增加十次 race 重复回归。
+
+完整功能进一步暴露 Machine 退出后缺少及时权威重查：`01805796` 的两个 child
+先以 `native_usage` 类失败并关闭 listener，owner 没有 typed terminal cause，
+只观察到一次 config 401。子节点失败现以容量一、非阻塞通知唤醒 Run owner，
+由 owner 执行既有 discovery；只有该严格 native 请求确认的 Machine 拒绝才终止
+整机。普通 503/网络故障不制造撤权，原 15 秒节点退避、10 秒 join 和 12 秒新 token
+readiness 保留。新增真实 native HTTP 的 401/503/成功重查及有界通知回归纳入
+`94d49420` Go/race；完整 Machine 也已实际通过。公开失败诊断只保留固定类别、
+数量与四类端点 401 聚合，不导出凭据、响应正文、原始错误或 runtime stack。
+
+`e1e2a96b` 的正式运行 `39958140736` 为 120/120 measured，11 项达标，唯一
+ordinary/long CPU/GiB 比率 `1.0642920938104765 > 1.05`；吞吐比率
+`1.0000924227834154`、该比较 CV `0.06566531846344348`，不能改称噪声未决。
+soak 实际 1809.607773683 秒、38 轮、四档达到 100/250/500/1000 且业务错误为零；
+七项故障通过，但 S3 的 `PERFORMANCE`、`equivalent_ab` 为 false。独立 long profile
+在 splice callback 采到接口比较，样本量不足以证明唯一原因；后继仅改为直接比较
+syscall.Errno，保留 EINTR 重试、EAGAIN 等待、其他错误、部分写计数与 hook。
+原基线、容量、同步、ACK、五组参数与阈值均未变，最终效果仍由新运行接受。
+
+中间候选 `01805796` 的完整 native `39965363544` 同样为 120/120 measured；
+ordinary/long CPU `1.0325303858902604` 达标，唯一 ordinary/upload CPU
+`1.0522877502360797 > 1.05`，对应吞吐 `0.99982202118296`、CV
+`0.056566858352544096`。其余 11 项、1809.495551609 秒/38 轮 soak 和七项
+故障通过，S3 仍为 false。最终候选追加 Machine owner 修复，仍须记录自己的
+正式结果；不能把该历史阈值越界改成噪声未决或沿用为新候选通过。
+
+## 同一旧 main 的后续定时运行
+
+同一 main `8cebddbb70a9cc8dfada58a0d9cd5cf4b6051492` 的定时运行
+`39694804417` 已完成完整 S3：正式 A/B 120/120 measured、持续负载和七项故障通过，
+`full_S3_accepted=true`，十项 checks 均为 true。source artifact 的 commit/tree
+与该 main 一致，status 为空；下面旧 `e5e98291` 的 119/120 不代表更新运行的结果。
+
+随后定时运行 `39872986575` 的正式 A/B 仍为 120/120 measured，性能及持续负载
+通过，但带流量故障失败，独立 CPU 诊断中的两侧 events/download 也账量不完整。
+该轮 S3 为 false；故障 summary 缺失是测试失败后 shell 提前退出的下游结果。
+实际失败为 `TestNativeLoadedSIGKILLRestartsWithOriginalUsagePeriod` 的
+`active in-flight I/O vanished from crash quarantine`，不是编译或总超时。
+
+旧失败没有保留当时完整 journal。原握手缺少“杀进程时确有未完成 intent”的前提，
+修正此前提不能反推旧失败的唯一原因。完整 S3 曾通过与随后故障失败两条记录并存；
+独立诊断也不因正式 A/B 通过而删除。
+
+## 2026-10-21 合并与交付快照
 
 PR #5 已于 2026-10-21 合并为 main `112760455433de1f9556b030b42b7a774a928fd1`，
 tree `7cf10cc16c8dc299c60db4c691bba868c26fe063` 与最终 PR head `4b7af523` 相同；
@@ -14,7 +92,7 @@ tree `7cf10cc16c8dc299c60db4c691bba868c26fe063` 与最终 PR head `4b7af523` 相
 `ghcr.io/anrcm0/txnode:dev-sha-112760455433` 已推送，amd64/arm64 子摘要均经
 实际拉取及离线 capabilities 验证，`dev` 已提升到同一索引；发布产物为
 `12320338211`，完整摘要见 `RELEASE-BLOCKERS.zh.md`。后续文档提交不重建相同
-运行时。合并与开发镜像交付不抹除下面记录的正式 S3 阻塞。
+运行时。这些交付记录不改写下面历史候选的正式 S3 失败。
 
 2026-10-21：取消传播修复候选为 Node
 `e5e98291ba59c55b514b54793c6d46edcc461be4`，源码树
@@ -218,7 +296,7 @@ events/download 的 coordinator 返回 evidence 错误，账量未确认。测�
 增加两侧相同的只读原 meter 状态快照，以及有界模块预取和锁文件摘要核对；
 失败仍为失败，不变更容量、等待、模式或验收阈值。
 
-## 当前分阶段快照
+## 历史 `e5e98291` 分阶段快照
 
 以下功能结果对应 `e5e98291` 的 Actions `39538582760`；性能和持续负载单独记录。
 

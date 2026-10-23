@@ -1,10 +1,20 @@
 # 原生验收覆盖映射
 
+2026-10-23：最终运行时候选 `94d494202ba5f990494b692a4a67e237805f4cb7`
+的 PR `39967692881` 与完整功能 `39967685398` 成功，包含 Go/race、严格 quick/full、
+runtime stability、真实 Core C2、镜像冒烟与完整 Machine。Machine 本次按原始
+batch 核对 5 个唯一 settled SQL 行、旧 token 拒绝、新 token 协议恢复及原周期。
+同 SHA 的正式 S3 `39969066032` 已完成且失败：111/120 measured，九份不完整
+样本使 usage_v2/upload 和 events/download 保持 incomplete；十项完整比较达标。
+1810.902413957 秒/39 轮 soak 与七项带流量故障通过，S3 ledger 仍为 false。
+带流量 SIGKILL 的 durable pending sequence 握手和失败 summary 已实际执行，
+不能把功能、故障与 soak 通过推广为完整 S3 通过。
+
 本表依据仓库测试源码整理，区分测试已编写的断言与尚缺的跨层验收。测试文件存在、
 静态检查通过、历史 CI 通过均不能证明当前提交已经通过功能验收；功能、race、网络和
 互操作验证应在 GitHub Actions 对应提交运行，并记录实际 SHA、运行链接及结果。
 
-当前运行时候选 `e5e98291ba59c55b514b54793c6d46edcc461be4` 的 Actions
+2026-10-21 历史运行时候选 `e5e98291ba59c55b514b54793c6d46edcc461be4` 的 Actions
 `39538582760` 已通过 Go/source guards、runtime stability、严格 quick/full、
 七项故障、Core C2、镜像冒烟及完整 Machine。取消回归包含实际阻塞 Core/Provider、
 Machine owner 请求、升级后 WS ready 等待和父 context 活跃时的 Service 自身租约退出。
@@ -18,7 +28,7 @@ Machine owner 请求、升级后 WS ready 等待和父 context 活跃时的 Serv
 其同 SHA 的 Actions `39534639986` 已通过完整真实 Machine、Core C2 与镜像冒烟。
 后续完整运行 `39535513954` 的 Machine 在 token 轮换后的 10 秒终止等待失败；
 该失败与前一轮通过一并记录，不能将 Machine 认定为稳定通过。
-本表中的包级及 Service 测试均已纳入当前 `e5e98291` 的 Go/race；
+本表中的包级及 Service 测试已纳入历史 `e5e98291` 及最终 `94d49420` 的完整 Go/race；
 它们各自的断言边界继续有效，历史 `7c9cd91e` 不接受后加的取消测试。
 正式 S3、合并与注册表发布分别记录在 `OUTSTANDING-WORK.zh.md` 和
 `RELEASE-BLOCKERS.zh.md`，不能由测试源码或单一 job 的通过推导。
@@ -55,6 +65,7 @@ Machine owner 请求、升级后 WS ready 等待和父 context 活跃时的 Serv
 | relay 取消与 HTTP 生命周期 | `internal/dataplane/core/pipe_lifecycle_test.go`、严格 Naive h2 互通 | channel 控制 deadline watcher，copyPipe 返回前等待取消清理，禁止 handler 退役后的 deadline/close；第三方完整 Naive 链 | 当前候选 Go/race 和严格 full 已通过；不推导所有 net.Conn 实现的 deadline 都有有界耗时 |
 | 日志 canonical envelope | `internal/usagebucket/store_envelope_test.go` | BUCKET、全部控制类型、null 和转义字符的 envelope 与原 json.Marshal 逐字节相同，输入不变且 canonical decoder/digest 通过 | 当前候选 Go/race 已通过；编码优化不证明固定容量下全部事件性能样本无损 |
 | native 请求取消与 worker join | `internal/txboard/request_context_test.go`、`socket_test.go`、`internal/machine/context_test.go`、`internal/service/authorization_cancellation_linux_test.go` | 阻塞 Core/Provider 实际请求服从父 context、Service 自身租约终止取消刷新后 join、Machine 五种 owner 请求取消、升级后 WS ready 等待取消；原完成拒绝类型保留 | `e5e98291` Go/source guards 和完整 Machine 已通过；不能解释全部旧超时或证明磁盘同步可取消 |
+| Machine child 失败后的权威重查 | `internal/machine/child_failure_test.go`、完整 `TestNativeCoreMachineLive` | 真实 native HTTP 在有界通知后执行新的 discovery；严格 401 才停止 Machine，503 与成功重查保留 owner 和节点退避；重复通知仅占一个槽 | `94d49420` 完整 Go/race 与 Machine 通过；generic child 错误本身没有撤权权威，不保证所有网络/磁盘等待耗时 |
 | 固定 Core machine 契约 | `internal/machine/native_core_machine_live_test.go`、`scripts/tests/node-native-machine/`，CI `core-machine` | 真实 Provider mTLS、native 安装/激活、账户/购买/履约、生产 Orchestrator、双 Node、共享 WS/503/后继心跳、设备事实、隔离、轮换与原使用量重放 | Node `e5e98291` 与 Core `5536410` 已在 Actions `39538582760` 完整通过，详见 `CORE-MACHINE-COMPATIBILITY.zh.md`；不证明独立完整财务对账、生产 PKI 或物理主机部署 |
 
 ## SIGKILL 夹具约束

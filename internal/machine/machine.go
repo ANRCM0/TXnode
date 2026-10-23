@@ -60,10 +60,11 @@ type Orchestrator struct {
 
 	// runCtx is stored from Run() so that onMachineEvent can trigger rediscover
 	// for sync.nodes events without blocking the main loop.
-	runCtx      context.Context
-	runCancel   context.CancelCauseFunc
-	terminal    chan error
-	terminalErr error
+	runCtx       context.Context
+	runCancel    context.CancelCauseFunc
+	childFailure chan struct{}
+	terminal     chan error
+	terminalErr  error
 
 	// wantedNodes is the number of nodes the panel last told us to run. It is
 	// the denominator for the health snapshot.
@@ -158,6 +159,7 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 	o.runCtx = ctx
 	o.runCancel = cancel
 	o.terminal = make(chan error, 1)
+	o.childFailure = make(chan struct{}, 1)
 	o.mu.Unlock()
 	nodesResp, err := machineNodesContext(ctx, o.client)
 	if err != nil {
@@ -209,6 +211,11 @@ func (o *Orchestrator) Run(ctx context.Context) error {
 			cancel(err)
 			o.stopAll()
 			return err
+
+		case <-o.childFailure:
+			// Local failure prompts an authority recheck; node backoff still gates restart.
+			o.rediscover(ctx)
+			o.tryStartWS(ctx)
 
 		case <-discoveryTicker.C:
 			o.rediscover(ctx)
@@ -330,12 +337,17 @@ func (o *Orchestrator) recordFailure(nodeID int, err error, startedAt time.Time)
 	f.lastErr = err
 	f.nextRetry = time.Now().Add(backoffFor(f.count))
 	count, retryIn := f.count, time.Until(f.nextRetry)
+	notify := o.childFailure
 	o.mu.Unlock()
 
 	nlog.Core().Error("machine node exited with error",
 		"node_id", nodeID, "error", err,
 		"attempt", count, "retry_in", retryIn.Round(time.Second).String())
 	o.reportHealth()
+	select {
+	case notify <- struct{}{}:
+	default:
+	}
 }
 
 // clearFailure drops a node's backoff state after a clean run.

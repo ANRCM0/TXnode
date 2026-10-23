@@ -1,9 +1,11 @@
-"""Static inventory regressions; execute in Actions, never runtime acceptance."""
+"""Static inventory and public evidence policies; execute in Actions."""
+import copy
 import json
 import unittest
 from unittest.mock import patch
 
 import preflight
+from recovery_diagnostic import valid_recovery
 
 
 REVISION = 'd2e70b8c3896b8d9808595886cb544d133f179ee'
@@ -105,6 +107,29 @@ class MachinePreflightTest(unittest.TestCase):
         self.assertIn({'code': 'CORE_ADMISSION_INVENTORY_UNPARSEABLE'}, result['gaps'])
         self.assertEqual(result['required_contracts'], [])
 
+
+class RecoveryDiagnosticPolicy(unittest.TestCase):
+    def setUp(self):
+        self.good = dict(schema='txnode-machine-recovery-diagnostic/v1', stage='recovered',
+                         code='fresh_readiness_failed', tracked_children=2, completed_children=0,
+                         failed_children=1, failure_classes=['provider'], context_cancelled=False,
+                         shared_ws_connected=True, target_listener_open=False, sibling_listener_open=False,
+                         wait_chains=['startup_setup>startup_recovery'])
+
+    def test_fixed_safe_state_is_admitted(self):
+        self.assertTrue(valid_recovery(self.good))
+
+    def test_untrusted_fields_types_labels_and_bounds_are_rejected(self):
+        for change in ({'token': 'private'}, {'context_cancelled': 0}, {'tracked_children': True},
+                       {'completed_children': 3}, {'tracked_children': 1, 'completed_children': 2},
+                       {'failed_children': 3}, {'failure_classes': ['private-error']},
+                       {'failed_children': 2},
+                       {'wait_chains': ['private-stack']}, {'wait_chains': ['service_run'] * 17},
+                       {'wait_chains': ['>'.join(['service_run'] * 13)]}, {'stage': 'setup'}):
+            with self.subTest(change=change):
+                value = copy.deepcopy(self.good)
+                value.update(change)
+                self.assertFalse(valid_recovery(value))
 
 if __name__ == '__main__':
     unittest.main()
