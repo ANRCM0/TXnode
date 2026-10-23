@@ -437,7 +437,7 @@ def sample(binary, state, mode, workload, args, origin, cpu_profile=None, persis
 
 def diagnostics(output, report, args, origin):
     # Profiled samples are separate from all acceptance samples and ratios.
-    cases = [("ordinary", "download"), ("events", "download")]
+    cases = [("ordinary", "long"), ("events", "long")]
     if any(s["mode"] == "usage_v2" and s["workload"] == "short" and s["status"] != "measured" for s in report["samples"]):
         cases.append(("usage_v2", "short"))
     results = []
@@ -753,7 +753,7 @@ def main():
     if args.persistence_diagnostics_only:
         return 0 if report.get("collection_complete") is True and report["accepted"] is False else 1
     if args.diagnostics_only:
-        expected = {(mode, "download", side) for mode in ("ordinary", "events") for side in ("legacy", "candidate")}
+        expected = {(mode, "long", side) for mode in ("ordinary", "events") for side in ("legacy", "candidate")}
         observed = {(item["mode"], item["workload"], item["side"]) for item in report.get("diagnostics", [])}
         complete = report["status"] == "diagnostics-only" and len(report.get("diagnostics", [])) == 4 and observed == expected and all(
             item.get("profile_bytes", 0) > 0 and not item.get("diagnostic_error") and item.get("sample", {}).get("status") == "measured"
