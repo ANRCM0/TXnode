@@ -18,7 +18,8 @@
 `active in-flight I/O vanished from crash quarantine`，不是编译或总超时。
 
 `fix/loaded-sigkill-intent-handshake` 候选保留八条真实负载和原字节、周期、重放
-断言，另以独立用户的已认证空闲连接建立真实未完成上传 Read intent。子进程须在
+断言，另以独立用户完成一字节 echo 后的空闲连接建立真实未完成上传 Read intent。
+该字节纳入实际 I/O 上界，原 64 KiB checkpoint 仍只统计原负载用户。子进程须在
 原 durable checkpoint 之外报告已落盘 intent sequence，恢复后再核对同一 sequence；
 新授权移除该空闲用户。CI 增加十次带 race 的重复回归，故障命令失败时仍生成拒绝
 summary，保留原失败结论。以上新增断言仍待候选 Actions，不由本地静态检查接受。

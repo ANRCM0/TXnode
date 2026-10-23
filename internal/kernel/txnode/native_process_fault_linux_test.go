@@ -167,7 +167,7 @@ func nativeCrashDurableProgress(root string) (nativeCrashProgress, error) {
 			if !event.Done && event.Requested > 0 && event.Evidence.UserID == "8" && event.Evidence.Direction == "upload" {
 				result.Pending = event.Evidence.Sequence
 			}
-			if event.Done && event.Eligible {
+			if event.Done && event.Eligible && event.Evidence.UserID == "7" {
 				if event.Evidence.Direction == "upload" {
 					result.Up += event.Evidence.Bytes
 				} else if event.Evidence.Direction == "download" {
@@ -267,12 +267,16 @@ func TestNativeLoadedSIGKILLRestartsWithOriginalUsagePeriod(t *testing.T) {
 		return nativeCrashProgress{}
 	}
 	ready := await("ready")
-	// An idle authenticated stream holds a real upload Read intent until SIGKILL.
+	// Finish the bounded handshake read before holding a normal relay Read.
 	held := socksConnectTB(t, ready.Port, "native-crash-held", origin.Addr().String())
 	defer held.Close()
+	if err := nativeFaultEcho(held, []byte("h")); err != nil {
+		t.Fatal(err)
+	}
 	var clients []net.Conn
 	var wg sync.WaitGroup
 	var completed, written atomic.Int64
+	written.Add(1) // The held user's completed byte remains in the original period.
 	errorsSeen := make(chan error, 8)
 	var killing atomic.Bool
 	for i := 0; i < 8; i++ {
