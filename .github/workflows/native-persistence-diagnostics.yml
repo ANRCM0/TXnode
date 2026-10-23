@@ -1,16 +1,10 @@
-name: Independent native persistence diagnostics
+name: Independent native single CPU Actions profile
 
 on:
-  workflow_call:
-    inputs:
-      candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
-        required: true
-        type: string
   workflow_dispatch:
     inputs:
       candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
+        description: Immutable candidate SHA for a separate single CPU profile
         required: true
         type: string
 
@@ -27,54 +21,176 @@ env:
   CGO_ENABLED: '0'
 
 jobs:
-  persistence-diagnostics:
-    name: Unprofiled observer off on pairs (no S3 acceptance)
+  single-cpu:
+    name: Collect one single CPU profile without original S3 acceptance
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.candidate }}
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.0'
           cache-dependency-path: go.sum
-      - name: Verify immutable source and diagnostic contracts
+      - name: Verify unchanged measurement contracts
+        run: python3 -m unittest discover -s scripts -p 'test_native_cpu.py' -v
+      - name: Record the separate execution environment
         env:
           CANDIDATE_SHA: ${{ inputs.candidate }}
         run: |
           set -euo pipefail
-          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test -z "$(git status --porcelain)"
-          python3 -m unittest discover -s scripts -p 'test_native_cpu.py' -v
-      - name: Collect five alternating unprofiled observer pairs per side
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate }}
+          mkdir -p artifacts/native-single-cpu
+          python3 - <<'PY'
+          import hashlib, json, os, re, subprocess
+          from pathlib import Path
+          candidate = os.environ['CANDIDATE_SHA']
+          assert re.fullmatch('[0-9a-f]{40}', candidate)
+          def git(*args):
+              return subprocess.check_output(['git', *args], text=True).strip()
+          assert git('rev-parse', candidate + '^{commit}') == candidate
+          assert not git('status', '--porcelain', '--untracked-files=no')
+          changed = git('diff', '--name-only', candidate, 'HEAD').splitlines()
+          assert changed == ['.github/workflows/native-persistence-diagnostics.yml'], changed
+          allowed = sorted(os.sched_getaffinity(0))
+          assert allowed
+          paths = [Path('scripts/native-acceptance.py'),
+                   *sorted(Path('scripts').glob('native-acceptance-*.go.tmpl')),
+                   Path('go.mod'), Path('go.sum')]
+          plan = {
+              'schema': 'txnode-native-actions-affinity-plan/v1',
+              'profile': 'first-allowed-logical-cpu-original-runner-filesystem',
+              'candidate': candidate,
+              'candidate_tree': git('rev-parse', candidate + '^{tree}'),
+              'baseline': 'a1ad2695e1143269168c36a274283de3342e91c7',
+              'workflow_sha': os.environ['GITHUB_SHA'],
+              'workflow_tree': git('rev-parse', 'HEAD^{tree}'),
+              'source_changes': changed,
+              'original_affinity': allowed,
+              'selected_cpu': allowed[0],
+              'gomaxprocs_environment': os.environ.get('GOMAXPROCS'),
+              'groups': 5, 'sample_seconds': 10, 'warmup_seconds': 2,
+              'concurrency': 4,
+              'throughput_floor': 0.95, 'cpu_ceiling': 1.05,
+              'noise_cv_ceiling': 0.10,
+              'input_sha256': {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths},
+              'accepted': False, 'full_S3_accepted': False,
+              'scope': 'One predeclared independent environment profile; original S3 results remain separate. No filesystem mount, source patch, queue, sync, ACK, workload or threshold change.',
+          }
+          Path('artifacts/native-single-cpu/plan.json').write_text(json.dumps(plan, indent=2) + chr(10))
+          PY
+          {
+            date --iso-8601=ns
+            uname -a
+            go version
+            lscpu
+            free -b
+            findmnt -T "$GITHUB_WORKSPACE"
+            findmnt -T "$RUNNER_TEMP"
+            df -B1 "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+            cat /sys/devices/system/clocksource/clocksource0/current_clocksource
+            cat /proc/self/cgroup
+          } > artifacts/native-single-cpu/environment.txt
+      - name: Execute the unchanged five group tool on the selected CPU
+        id: measurement
+        continue-on-error: true
         run: |
           set -euo pipefail
-          python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --output artifacts/native-persistence-diagnostics --persistence-diagnostics-only --groups 5 --seconds 10 --warmup 2 --concurrency 4
-      - name: Publish diagnostic observations without an acceptance verdict
+          python3 - <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          root = Path('artifacts/native-single-cpu')
+          plan = json.loads((root / 'plan.json').read_text())
+          os.sched_setaffinity(0, {plan['selected_cpu']})
+          actual = sorted(os.sched_getaffinity(0))
+          assert actual == [plan['selected_cpu']]
+          driver = {'pid': os.getpid(), 'affinity': actual,
+                    'inheritance': 'exec retains affinity; child processes inherit the driver affinity',
+                    'command': [sys.executable, 'scripts/native-acceptance.py',
+                                '--candidate', plan['candidate'],
+                                '--output', str(root / 'performance'),
+                                '--groups', '5', '--seconds', '10',
+                                '--warmup', '2', '--concurrency', '4']}
+          (root / 'driver.json').write_text(json.dumps(driver, indent=2) + chr(10))
+          os.execv(sys.executable, driver['command'])
+          PY
+      - name: Retain the independent collection verdict
         if: always()
+        env:
+          MEASUREMENT_OUTCOME: ${{ steps.measurement.outcome }}
         run: |
-          if [[ -f artifacts/native-persistence-diagnostics/report.md ]]; then
-            cat artifacts/native-persistence-diagnostics/report.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Retain independent evidence including accounting failures
+          python3 - <<'PY'
+          import collections, hashlib, json, os
+          from pathlib import Path
+          root = Path('artifacts/native-single-cpu')
+          result = {'schema': 'txnode-native-actions-affinity-result/v1',
+                    'collection_complete': False, 'accepted': False,
+                    'full_S3_accepted': False,
+                    'measurement_step_outcome': os.environ['MEASUREMENT_OUTCOME'],
+                    'scope': 'Independent single CPU profile only; does not replace the original S3 ledger or combine with its soak.'}
+          try:
+              plan = json.loads((root / 'plan.json').read_text())
+              driver = json.loads((root / 'driver.json').read_text())
+              report_path = root / 'performance/report.json'
+              report = json.loads(report_path.read_text())
+              expected = {(g, side, mode, work) for g in range(1, 6)
+                          for side in ('legacy', 'candidate')
+                          for mode in ('ordinary', 'usage_v2', 'events')
+                          for work in ('upload', 'download', 'short', 'long')}
+              rows = report['samples']
+              observed = {(s['group'], s['side'], s['mode'], s['workload']) for s in rows}
+              assert len(rows) == 120 and observed == expected
+              assert report['candidate'] == plan['candidate']
+              assert report['candidate_tree'] == plan['candidate_tree']
+              assert report['baseline'] == plan['baseline']
+              assert report['tool_sha256'] == plan['input_sha256']['scripts/native-acceptance.py']
+              assert driver['affinity'] == [plan['selected_cpu']]
+              settings = report['settings']
+              for key in ('groups', 'sample_seconds', 'warmup_seconds', 'concurrency',
+                          'throughput_floor', 'cpu_ceiling', 'noise_cv_ceiling'):
+                  assert settings[key] == plan[key], key
+              for sample in rows:
+                  label = 'g%d-%s-%s-%s' % (sample['group'], sample['mode'], sample['workload'], sample['side'])
+                  raw = json.loads((root / 'performance' / label / 'sample.json').read_text())
+                  assert all(sample[k] == v for k, v in raw.items())
+                  assert set(sample) - set(raw) == {'group', 'side'}
+              result.update(collection_complete=True, candidate=report['candidate'],
+                            candidate_tree=report['candidate_tree'], baseline=report['baseline'],
+                            report_sha256=hashlib.sha256(report_path.read_bytes()).hexdigest(),
+                            measured=sum(s['status'] == 'measured' for s in rows),
+                            total=len(rows), raw_scoped_ab_accepted=report['accepted'],
+                            sample_states=dict(collections.Counter(s['status'] for s in rows)),
+                            comparisons=report['comparisons'])
+          except (OSError, ValueError, KeyError, TypeError, AssertionError) as error:
+              result['collection_error'] = type(error).__name__ + ': ' + str(error)
+          (root / 'result.json').write_text(json.dumps(result, indent=2) + chr(10))
+          summary = '# Independent single CPU Actions profile' + chr(10) * 2 + 'This profile remains separate from the original S3 ledger.' + chr(10) * 2
+          summary += '```json' + chr(10) + json.dumps(result, indent=2) + chr(10) + '```' + chr(10)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
+              stream.write(summary)
+          if not result['collection_complete']:
+              raise SystemExit('independent profile collection is incomplete')
+          PY
+      - name: Upload raw evidence even when accounting or collection fails
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-persistence-diagnostics-${{ inputs.candidate }}
+          name: native-actions-single-cpu-${{ inputs.candidate }}-${{ github.run_id }}
           path: |
-            artifacts/native-persistence-diagnostics/report.json
-            artifacts/native-persistence-diagnostics/report.md
-            artifacts/native-persistence-diagnostics/prefetch-*.log
-            artifacts/native-persistence-diagnostics/persistence-*/sample.json
-            artifacts/native-persistence-diagnostics/persistence-*/metadata.json
-            artifacts/native-persistence-diagnostics/persistence-*/server.log
-            artifacts/native-persistence-diagnostics/persistence-*/cpu-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/runtime-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/evidence.json
-            artifacts/native-persistence-diagnostics/persistence-*/bucket-after-*.json
+            artifacts/native-single-cpu/plan.json
+            artifacts/native-single-cpu/driver.json
+            artifacts/native-single-cpu/environment.txt
+            artifacts/native-single-cpu/result.json
+            artifacts/native-single-cpu/performance/report.json
+            artifacts/native-single-cpu/performance/report.md
+            artifacts/native-single-cpu/performance/prefetch-*.log
+            artifacts/native-single-cpu/performance/g*/sample.json
+            artifacts/native-single-cpu/performance/g*/metadata.json
+            artifacts/native-single-cpu/performance/g*/server.log
+            artifacts/native-single-cpu/performance/g*/evidence.json
+            artifacts/native-single-cpu/performance/g*/cpu-*.json
+            artifacts/native-single-cpu/performance/g*/runtime-*.json
+            artifacts/native-single-cpu/performance/g*/bucket-after-*.json
+            artifacts/native-single-cpu/performance/g*/native/
+            artifacts/native-single-cpu/performance/diagnostic-*/
           if-no-files-found: error
