@@ -21,6 +21,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -320,15 +321,21 @@ func (h *interopDialObserver) Handle(_ context.Context, record slog.Record) erro
 }
 
 func testMieruOfficialDialFailure(t *testing.T) {
+	for _, transport := range []string{"TCP", "UDP"} {
+		t.Run(transport, func(t *testing.T) { testMieruOfficialDialFailureTransport(t, transport) })
+	}
+}
+
+func testMieruOfficialDialFailureTransport(t *testing.T, transport string) {
 	origin := startInteropOrigin(t)
 	observer := &interopDialObserver{failures: make(chan interopDialFailure, 8)}
 	port := freePortTB(t)
 	node := New(RuntimeConfig{TrustedProxies: "private", MaxFresh: 64, HandshakeTimeout: 5 * time.Second, Logger: slog.New(observer)})
-	if err := node.Start(&model.NodeSpec{Protocol: "mieru", Transport: "tcp", ListenIP: "127.0.0.1", ServerPort: port}, []model.UserSpec{{ID: 1, UUID: "interop:secret"}}, kernel.TLSCert{}); err != nil {
+	if err := node.Start(&model.NodeSpec{Protocol: "mieru", Transport: strings.ToLower(transport), ListenIP: "127.0.0.1", ServerPort: port}, []model.UserSpec{{ID: 1, UUID: "interop:secret"}}, kernel.TLSCert{}); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(node.Stop)
-	client := startMieruOfficial(t, port, "TCP")
+	client := startMieruOfficial(t, port, transport)
 	target := origin.Listener.Addr().String()
 	if got := fetchThrough(t, client, target); got != "interop-ok" {
 		t.Fatalf("positive control=%q", got)
