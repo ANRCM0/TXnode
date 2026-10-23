@@ -4,7 +4,30 @@
 [NEXT-DEVELOPMENT.zh.md](NEXT-DEVELOPMENT.zh.md)，严格互通入口见
 [INTEROP.md](INTEROP.md)。历史 `a6d0e96` 的“29 通过、6 跳过”不代表当前候选。
 
-## 当前工作与合并记录
+## 2026-10-23 后续运行与修复候选
+
+同一 main `8cebddbb70a9cc8dfada58a0d9cd5cf4b6051492` 的定时运行
+`39694804417` 已完成完整 S3：正式 A/B 120/120 measured、持续负载和七项故障通过，
+`full_S3_accepted=true`，十项 checks 均为 true。source artifact 的 commit/tree
+与该 main 一致，status 为空；下面旧 `e5e98291` 的 119/120 不再代表当前最新性能结果。
+
+随后定时运行 `39872986575` 的正式 A/B 仍为 120/120 measured，性能及持续负载
+通过，但带流量故障失败，独立 CPU 诊断中的两侧 events/download 也账量不完整。
+该轮 S3 为 false；故障 summary 缺失是测试失败后 shell 提前退出的下游结果。
+实际失败为 `TestNativeLoadedSIGKILLRestartsWithOriginalUsagePeriod` 的
+`active in-flight I/O vanished from crash quarantine`，不是编译或总超时。
+
+`fix/loaded-sigkill-intent-handshake` 候选保留八条真实负载和原字节、周期、重放
+断言，另以独立用户的已认证空闲连接建立真实未完成上传 Read intent。子进程须在
+原 durable checkpoint 之外报告已落盘 intent sequence，恢复后再核对同一 sequence；
+新授权移除该空闲用户。CI 增加十次带 race 的重复回归，故障命令失败时仍生成拒绝
+summary，保留原失败结论。以上新增断言仍待候选 Actions，不由本地静态检查接受。
+
+旧失败没有保留当时完整 journal。原握手缺少“杀进程时确有未完成 intent”的前提，
+修正此前提不能反推旧失败的唯一原因。完整 S3 曾通过与随后故障失败两条记录并存；
+独立诊断也不因正式 A/B 通过而删除。
+
+## 2026-10-21 合并与交付快照
 
 PR #5 已于 2026-10-21 合并为 main `112760455433de1f9556b030b42b7a774a928fd1`，
 tree `7cf10cc16c8dc299c60db4c691bba868c26fe063` 与最终 PR head `4b7af523` 相同；

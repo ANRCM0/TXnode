@@ -179,6 +179,8 @@ jobs:
           }
       - name: Run full Node tests
         run: make test
+      - name: Repeat durable loaded SIGKILL intent handshakes
+        run: go test -race -v ./internal/kernel/txnode -run '^TestNativeLoadedSIGKILLRestartsWithOriginalUsagePeriod$' -count=10 -timeout=5m
       - name: Verify pinned mux write completion patches
         run: |
           set -euo pipefail
@@ -190,6 +192,8 @@ jobs:
         run: python3 -m unittest discover -s scripts -p 'test_interop_*.py' -v
       - name: Reject invalid process CPU measurement evidence
         run: python3 -m unittest discover -s scripts -p 'test_native_cpu.py' -v
+      - name: Reject failed or missing native fault evidence
+        run: python3 -m unittest discover -s scripts -p 'test_native_fault_summary.py' -v
       - name: Verify pinned Core Machine contract inspection
         run: python3 -m unittest discover -s scripts/tests/node-native-machine -p 'test_preflight.py' -v
       - name: Check independent Node image channels

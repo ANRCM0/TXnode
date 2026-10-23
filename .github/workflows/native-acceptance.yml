@@ -147,32 +147,17 @@ jobs:
           go version > artifacts/native-faults/go-version.txt
           uname -a > artifacts/native-faults/runner.txt
       - name: Exercise mutations on the nodes carrying real traffic
+        id: fault_run
         run: |
           set -euo pipefail
           go test -race -json ./internal/kernel/txnode ./internal/service ./internal/usagebucket \
             -run '^TestNative(ActiveLoadLifecycleFaults|LoadRateCancellation|UpstreamDisconnectKeepsLoadedPeerFlows|AuthenticatedShortWriteKeepsActualTail|LoadedSIGKILLRestartsWithOriginalUsagePeriod|LoadedAuthorizationExpiryDuringBlockedReport|RelayLoadSlowDiskRetainsExclusiveOwnerAndOriginalEvidence)$' \
             -count=1 -timeout=10m 2>artifacts/native-faults/stderr.log | tee artifacts/native-faults/events.jsonl
-          python3 - <<'PY'
-          import json
-          from pathlib import Path
-          required = {
-              'TestNativeActiveLoadLifecycleFaults',
-              'TestNativeLoadRateCancellation',
-              'TestNativeUpstreamDisconnectKeepsLoadedPeerFlows',
-              'TestNativeAuthenticatedShortWriteKeepsActualTail',
-              'TestNativeLoadedSIGKILLRestartsWithOriginalUsagePeriod',
-              'TestNativeLoadedAuthorizationExpiryDuringBlockedReport',
-              'TestNativeRelayLoadSlowDiskRetainsExclusiveOwnerAndOriginalEvidence',
-          }
-          events = [json.loads(line) for line in Path('artifacts/native-faults/events.jsonl').read_text().splitlines()]
-          passed = {event.get('Test') for event in events if event.get('Action') == 'pass'}
-          rejected = [event for event in events if event.get('Action') in ('skip', 'fail')]
-          summary = {'required': sorted(required), 'passed': sorted(required & passed), 'rejected': rejected,
-                     'accepted': required <= passed and not rejected}
-          Path('artifacts/native-faults/summary.json').write_text(json.dumps(summary, indent=2) + '\n')
-          if not summary['accepted']:
-              raise SystemExit('native loaded fault acceptance incomplete')
-          PY
+      - name: Retain an explicit verdict after successful or failed tests
+        if: always()
+        env:
+          FAULT_TEST_OUTCOME: ${{ steps.fault_run.outcome }}
+        run: python3 scripts/native-fault-summary.py artifacts/native-faults --test-outcome "$FAULT_TEST_OUTCOME"
       - name: Retain real relay and durable recovery evidence
         if: always()
         uses: actions/upload-artifact@v4
