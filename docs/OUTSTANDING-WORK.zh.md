@@ -43,6 +43,23 @@ Core C2、镜像冒烟和完整 Machine 通过。full artifact `12517082074` 绑
 下面正式 S3 的失败。历史 main `8ad0d395` 的实际独立镜像交付不等于本次 main
 已经发布，也不等于 Core 已采用。
 
+S3 后续独立诊断 `39995975714` 已在明确带采集钩子的旧源码副本中复现两次完成
+拒绝：5 份旧侧中 g2/g5 预热 EOF，实际上传各 32768 字节；唯一不满足条件均为
+`c.last` 的全局顺序，wall 少 5 ns、elapsed 多 5 ns，deadline/grant 尚余约 88 秒。
+当前源码的五份诊断完整。原 capture、补丁、模块锁及报告已离线交叉核对；不是
+正式 A/B，也不证明旧正式样本的唯一时钟机制。三方采时位置对照 `39997272907`
+同样完成：原旧侧 4/5 完整，g5 measurement 再次只有全局顺序拒绝（wall -7 ns、
+elapsed +33 ns）；仅移动旧采时位置的诊断副本和当前候选各 5/5 完整。对照保留
+所有拒绝条件，不构成原基线已修复或替换。当前源码的无 profiler 事件 OFF/ON
+配对 `39997913837` 已采集 20 份，但只有 7 份账量完整，13 份均为 meter 容量且
+store healthy；13 份失败的 node-stop/coordinator-close meter 一致。OFF 与 ON
+均失败，只有 g4 两侧各一对完整。六份 ON 失败的冻结 claim 中，剩余容量与
+FirstGap 前新增 sequence 精确相等；同 claim 最大阶段 wall 峰值分别为四份
+head_publish 与两份 record_file_sync_wall，不能据此推导唯一 syscall 原因或移用到旧正式
+样本。本次 40 份诊断 CPU 原文件、metadata 和源码摘要已核对，不能补齐正式样本。
+完整 S3 保持未通过；原基线身份、容量、同步、ACK、参数和阈值继续固定。详细边界见
+`NATIVE-PERFORMANCE.zh.md`。
+
 ## 2026-10-23 修复与最终运行时候选
 
 最终运行时候选为 `94d494202ba5f990494b692a4a67e237805f4cb7`，tree

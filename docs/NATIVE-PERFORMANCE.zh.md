@@ -256,6 +256,71 @@ CPU profiler 和启用 observer 不是失败的必要条件，不能据此计算
 after-ACK worker_gap 覆盖，也不能据较小的已采集阶段峰值排除启动/调度停顿。
 本轮没有为诊断而扩大队列/文件上限、合并同步步骤或提前 ACK。
 
+## 2026-10-24 独立完成时钟诊断
+
+正式旧基线的完成拒绝缺少原内存 `c.last`。独立工具候选
+`1554f896b3cda00379fa412d4b777d923aef00c5` 的 Actions `39995975714`、artifact
+`12520710393` 已完成五组交替 usage_v2/upload 诊断。源版本固定为旧
+`a1ad2695e1143269168c36a274283de3342e91c7` 和当前
+`067a082b875496ec676f2ac211e04605526926bc`；两份临时构建都在原 eligibility 判定之后、
+更新 `c.last` 之前增加同一个首次拒绝采集钩子。该钩子只记录固定的时钟、数值和
+条件，不记录用户标识或凭据；非拒绝路径不调用采集函数。构建元数据单列原源码、
+修改后源码、helper、补丁、公共 harness 及模块锁摘要，不能把诊断二进制称为未修改
+的旧基线。七项证据策略单测通过；本地只做 AST、Linux 静态编译和 vet。
+
+| 首次拒绝 | 阶段 / 实际上传字节 | 相对 `c.last` 的 wall / elapsed | 未满足条件 | 单调 deadline 尚余 |
+|---|---|---|---|---|
+| g2 legacy，sequence 314 | warmup / 32768 | -5 ns / +5 ns | 仅 global-order | 87.915588120 秒 |
+| g5 legacy，sequence 156 | warmup / 32768 | -5 ns / +5 ns | 仅 global-order | 88.757566727 秒 |
+
+这两份原始 capture 的单操作 wall/elapsed 均不倒退、grant 内、未退休且 deadline
+未到；按原表达式重算与拒绝位完全一致，随后客户端出现 EOF。旧侧其余三份与当前
+五份诊断完整，当前未捕到拒绝。五次有限观测不证明当前永不拒绝，也不能补计正式
+120 份样本。该 runner 记录 4 CPU、Go 1.26.0、clock source 为 tsc；这些环境字段
+不单独证明物理时钟、VDSO、虚拟化或调度的唯一原因。历史正式运行没有相同 capture，
+不能把这两次 -5/+5 ns 数值倒写到历史事件。
+
+为隔离采时位置，后继诊断工具 `867c39038bd7d0ec40088855cf44e31e19da5dab` 增加
+第三份 `legacy_serialized` 临时副本：只把旧 `CompleteIO` 的 now/stamp 观察移到原
+collector 锁内，原 eligibility、wall 回退、deadline、grant、实际字节、持久化和
+拒绝行为保留；测试要求还原该移动和采集钩子后与原源码逐字相同。五组三方 Actions
+`39997272907` 已完成，artifact `12520132744` 保留三份构建的源码覆盖摘要和五组
+原始文件。原旧侧 4/5 完整，g5 在 measurement 拒绝 32768 字节上传；仍只有
+global-order 不满足，wall 差 -7 ns、elapsed 差 +33 ns，单调 deadline 尚余
+87.251510109 秒。`legacy_serialized` 和当前候选各 5/5 完整且没有捕到拒绝。
+同一旧代码仅移动采时位置的有限对照支持该修正，但不证明所有环境下零故障，也不
+建立物理时钟机制的唯一归因。它是明确命名的诊断源码覆盖，不替换正式 `a1ad269`
+的身份或原失败；不把两轮不同 runner 的计数合并为故障概率或性能比率。
+
+事件侧八份最新正式失败快照的 `RetainedEventCapacity` 都是 1152；当前内核以
+`MaxEvents=128`、`MaxSealed=8` 建立 meter。65536 是 coordinator 的总登记上限，
+不能当作该单 meter 实际容量。store 未降级与 meter 填满并不矛盾。当前源码的独立
+无 profiler OFF/ON 配对 `39997913837`、artifact `12520822997` 已采集完整 20 份：
+7 份账量完整、13 份 meter `CAPACITY_REACHED` 且 store healthy；OFF 失败 7 份、
+ON 失败 6 份，13 份失败的 node-stop 与 coordinator-close meter 均相同。
+只有 g4 两侧各一对 OFF/ON 都完整，不能从其余八对计算有效开销比率，也不能据
+两对推导通用 observer 开销。实际 40 份原始 CPU snapshot 与该诊断报告逐字段匹配，
+源码、模板、模块锁及逐样本 metadata 也已核对；这不是正式 240 份 CPU 原文件的
+补全，更不能替换原正式矩阵。
+
+6 份 ON 失败的冻结环都在同一 claim 的下一次 after-ACK 首次观察缺口。原始
+before-write 快照中的剩余槽位，恰好等于至 FirstGap 的 sequence 增量；阶段峰值与
+该 claim 的 bucket/sequence 对齐，能够定位生产者填满有界队列时的写入窗口：
+
+| ON 失败 | claim bucket | 写入前剩余槽位 / 至缺口新增事件 | 同 claim 的最大阶段 wall |
+|---|---:|---:|---|
+| g1 legacy | 402 | 600 / 600 | record_file_sync_wall 96.574932 ms |
+| g2 legacy | 38 | 959 / 959 | head_publish 49.272499 ms |
+| g3 legacy | 196 | 525 / 525 | record_file_sync_wall 19.346781 ms |
+| g5 legacy | 1576 | 900 / 900 | head_publish 41.849943 ms |
+| g2 candidate | 432 | 1009 / 1009 | head_publish 63.006815 ms |
+| g3 candidate | 117 | 1008 / 1008 | head_publish 47.721738 ms |
+
+这些 wall 窗口仍包含调度等待及 observer 成本，不能独立归因于 rename 或
+fsync syscall，也不能把 OFF 的失败或更早正式运行指派给同一个峰值。关闭 profiler
+和关闭 observer 仍有失败，说明它们不是容量失败的必要条件。没有为本轮改变
+队列/文件上限、同步、ACK 或负载；完整 S3 继续保持未通过。
+
 ## 判定与保留物
 
 固定初始调查阈值为候选吞吐不低于旧基线的 95%，CPU/GiB 不高于 105%。5 组中任一侧吞吐或 CPU 的变异系数超过 10% 则为未决；时钟分辨率不足、缺少样本或模式失败则为未完成。越过阈值要求复现和说明，不自动断言根因。
