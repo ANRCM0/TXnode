@@ -1,16 +1,16 @@
-name: Independent native persistence diagnostics
+name: Independent native completion clock diagnostics
 
 on:
   workflow_call:
     inputs:
       candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
+        description: Full immutable runtime candidate SHA; diagnostic tool uses dispatch ref
         required: true
         type: string
   workflow_dispatch:
     inputs:
       candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
+        description: Full immutable runtime candidate SHA; diagnostic tool uses dispatch ref
         required: true
         type: string
 
@@ -28,13 +28,13 @@ env:
 
 jobs:
   persistence-diagnostics:
-    name: Unprofiled observer off on pairs (no S3 acceptance)
+    name: First rejected completion clock snapshots (no S3 acceptance)
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.candidate }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
@@ -46,35 +46,33 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           test -z "$(git status --porcelain)"
-          python3 -m unittest discover -s scripts -p 'test_native_cpu.py' -v
-      - name: Collect five alternating unprofiled observer pairs per side
+          git cat-file -e "$CANDIDATE_SHA^{commit}"
+          python3 -m unittest discover -s scripts -p 'test_native_clock_diagnostics.py' -v
+      - name: Collect five bounded instrumented upload pairs
         env:
           CANDIDATE_SHA: ${{ inputs.candidate }}
         run: |
           set -euo pipefail
-          python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --output artifacts/native-persistence-diagnostics --persistence-diagnostics-only --groups 5 --seconds 10 --warmup 2 --concurrency 4
+          python3 scripts/native-clock-diagnostics.py --candidate "$CANDIDATE_SHA" --output artifacts/native-clock-diagnostics
       - name: Publish diagnostic observations without an acceptance verdict
         if: always()
         run: |
-          if [[ -f artifacts/native-persistence-diagnostics/report.md ]]; then
-            cat artifacts/native-persistence-diagnostics/report.md >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f artifacts/native-clock-diagnostics/report.md ]]; then
+            cat artifacts/native-clock-diagnostics/report.md >> "$GITHUB_STEP_SUMMARY"
           fi
       - name: Retain independent evidence including accounting failures
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-persistence-diagnostics-${{ inputs.candidate }}
+          name: native-clock-diagnostics-${{ github.sha }}
           path: |
-            artifacts/native-persistence-diagnostics/report.json
-            artifacts/native-persistence-diagnostics/report.md
-            artifacts/native-persistence-diagnostics/prefetch-*.log
-            artifacts/native-persistence-diagnostics/persistence-*/sample.json
-            artifacts/native-persistence-diagnostics/persistence-*/metadata.json
-            artifacts/native-persistence-diagnostics/persistence-*/server.log
-            artifacts/native-persistence-diagnostics/persistence-*/cpu-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/runtime-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/evidence.json
-            artifacts/native-persistence-diagnostics/persistence-*/bucket-after-*.json
+            artifacts/native-clock-diagnostics/report.json
+            artifacts/native-clock-diagnostics/report.md
+            artifacts/native-clock-diagnostics/prefetch-*.log
+            artifacts/native-clock-diagnostics/build-*/*.json
+            artifacts/native-clock-diagnostics/build-*/*.patch
+            artifacts/native-clock-diagnostics/clock-*/sample.json
+            artifacts/native-clock-diagnostics/clock-*/server.log
+            artifacts/native-clock-diagnostics/clock-*/clock-rejection.json
           if-no-files-found: error

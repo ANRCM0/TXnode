@@ -1,0 +1,77 @@
+package usageinterval
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"time"
+)
+
+var nativeClockDiagnosticFirst sync.Once
+var nativeClockDiagnosticRoot = os.Getenv("TXNODE_NATIVE_CLOCK_DIAGNOSTIC_ROOT")
+
+func nativeClockDiagnosticWrite(value any) error {
+	body, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	name := filepath.Join(nativeClockDiagnosticRoot, "clock-rejection.json")
+	if err := os.WriteFile(name+".tmp", body, 0600); err != nil {
+		return err
+	}
+	return os.Rename(name+".tmp", name)
+}
+
+func init() {
+	if !filepath.IsAbs(nativeClockDiagnosticRoot) {
+		panic("native clock diagnostic requires a fresh absolute output directory")
+	}
+	if err := nativeClockDiagnosticWrite(map[string]any{
+		"schema": "txnode-native-clock-rejection/v1", "observed": false,
+	}); err != nil {
+		panic("native clock diagnostic could not arm output")
+	}
+}
+
+// This cold hook runs after the original eligibility decision, under its lock.
+func nativeClockDiagnosticRecord(c *NativeCollector, e *nativeEvent, last, at stamp, now time.Time) {
+	nativeClockDiagnosticFirst.Do(func() {
+		grant := c.grants[e.UserID]
+		value := struct {
+			Schema          string `json:"schema"`
+			Observed        bool   `json:"observed"`
+			Sequence        uint64 `json:"sequence,string"`
+			Direction       string `json:"direction"`
+			Bytes           int64  `json:"bytes,string"`
+			Requested       int64  `json:"requested,string"`
+			Started         stamp  `json:"started"`
+			Completed       stamp  `json:"completed"`
+			Last            stamp  `json:"last"`
+			DeadlineElapsed int64  `json:"deadline_elapsed_nanos,string"`
+			GrantIssued     int64  `json:"grant_issued_seconds,string"`
+			GrantExpires    int64  `json:"grant_expires_seconds,string"`
+			Retired         bool   `json:"retired"`
+			WallForward     bool   `json:"wall_forward"`
+			ElapsedForward  bool   `json:"elapsed_forward"`
+			GlobalOrder     bool   `json:"global_order_allowed"`
+			BeforeDeadline  bool   `json:"before_deadline"`
+			InsideGrant     bool   `json:"inside_grant"`
+			Eligible        bool   `json:"eligible"`
+		}{
+			Schema: "txnode-native-clock-rejection/v1", Observed: true,
+			Sequence: e.Sequence, Direction: e.Direction, Bytes: e.Bytes, Requested: e.Requested,
+			Started: e.Started, Completed: at, Last: last,
+			DeadlineElapsed: int64(c.deadline.Sub(c.origin)),
+			GrantIssued:     grant.IssuedAt, GrantExpires: grant.LeaseExpiresAt,
+			Retired:     c.state.Retired,
+			WallForward: at.Wall >= e.Started.Wall, ElapsedForward: at.Elapsed >= e.Started.Elapsed,
+			GlobalOrder:    at.Elapsed < last.Elapsed || at.Wall >= last.Wall,
+			BeforeDeadline: now.Before(c.deadline), InsideGrant: insideGrant(grant, at.Wall), Eligible: e.Eligible,
+		}
+		if err := nativeClockDiagnosticWrite(value); err != nil {
+			fmt.Fprintln(os.Stderr, "NATIVE_CLOCK_DIAGNOSTIC_WRITE_FAILED")
+		}
+	})
+}
