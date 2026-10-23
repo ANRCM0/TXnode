@@ -64,18 +64,30 @@ type machineCoreLiveSpool struct {
 
 // Observe the real callback without changing frames or draining the child mailbox.
 type machineCoreConfigObservation struct {
-	mu                                sync.Mutex
-	targetID, newPort                 int
-	received, dispatched, desiredPort bool
+	mu                                  sync.Mutex
+	targetID, newPort                   int
+	received, dispatched, desiredPort   bool
+	discoverySucceeded, discoveryTarget bool
 }
 type machineCoreObservedControlPlane struct {
 	machineControlPlane
 	observation *machineCoreConfigObservation
 }
 
-// Preserve the native context extension while decorating only socket callbacks.
+// Preserve native context calls and retain only fixed discovery outcome facts.
 func (o *machineCoreObservedControlPlane) GetMachineNodesContext(ctx context.Context) (*machineDiscovery, error) {
-	return machineNodesContext(ctx, o.machineControlPlane)
+	result, err := machineNodesContext(ctx, o.machineControlPlane)
+	if err == nil && result != nil {
+		o.observation.mu.Lock()
+		o.observation.discoverySucceeded, o.observation.discoveryTarget = true, false
+		for _, member := range result.Nodes {
+			if member.ID == o.observation.targetID {
+				o.observation.discoveryTarget = true
+			}
+		}
+		o.observation.mu.Unlock()
+	}
+	return result, err
 }
 func (o *machineCoreObservedControlPlane) HandshakeContext(ctx context.Context) (*machineHandshake, error) {
 	return machineHandshakeContext(ctx, o.machineControlPlane)
@@ -216,10 +228,25 @@ func machineCoreFailureClass(err error) string {
 }
 
 // Publish only reviewed state labels; errors and runtime stacks remain private.
-func machineCoreRecoveryDiagnostic(t *testing.T, o *Orchestrator, targetPort, siblingPort int) {
+func machineCoreRecoveryDiagnostic(t *testing.T, o *Orchestrator, targetPort, siblingPort, targetID int, stage string, observation *machineCoreConfigObservation) {
 	t.Helper()
 	o.mu.Lock()
 	tracked, completed, cancelled, failures := len(o.nodes), 0, 0, len(o.failures)
+	targetTracked, targetDone := false, false
+	if child := o.nodes[targetID]; child != nil {
+		targetTracked = true
+		select {
+		case <-child.done:
+			targetDone = true
+		default:
+		}
+	}
+	targetBackoff, targetFailure := false, "none"
+	if failure := o.failures[targetID]; failure != nil {
+		targetBackoff = time.Now().Before(failure.nextRetry)
+		targetFailure = machineCoreFailureClass(failure.lastErr)
+	}
+	terminal := o.terminalErr != nil
 	classes := []string{}
 	for _, child := range o.nodes {
 		select {
@@ -237,8 +264,13 @@ func machineCoreRecoveryDiagnostic(t *testing.T, o *Orchestrator, targetPort, si
 	}
 	o.mu.Unlock()
 	sort.Strings(classes)
+	observation.mu.Lock()
+	discoverySucceeded, discoveryTarget := observation.discoverySucceeded, observation.discoveryTarget
+	observation.mu.Unlock()
 	socket := o.currentWS()
-	data := map[string]any{"schema": "txnode-machine-recovery-diagnostic/v1", "stage": "recovered", "code": "fresh_readiness_failed",
+	data := map[string]any{"schema": "txnode-machine-recovery-diagnostic/v1", "stage": stage, "code": map[string]string{"recovered": "fresh_readiness_failed", "reenabled": "member_readiness_failed"}[stage],
+		"discovery_succeeded": discoverySucceeded, "discovery_target_present": discoveryTarget,
+		"target_tracked": targetTracked, "target_done": targetDone, "target_backoff": targetBackoff, "target_failure_class": targetFailure, "owner_terminal": terminal,
 		"tracked_children": tracked, "completed_children": completed, "failed_children": failures, "failure_classes": classes,
 		"context_cancelled": cancelled == 1, "shared_ws_connected": socket != nil && socket.IsConnected(),
 		"target_listener_open": machineCoreListening(targetPort), "sibling_listener_open": machineCoreListening(siblingPort), "wait_chains": machineCoreWaitChains()}
@@ -455,8 +487,18 @@ func TestNativeCoreMachineLive(t *testing.T) {
 	if len(removed) == 0 {
 		t.Fatal("withdrawn member traffic did not reach durable terminal storage")
 	}
+	configObservation.mu.Lock()
+	configObservation.discoverySucceeded, configObservation.discoveryTarget = false, false
+	configObservation.mu.Unlock()
 	machineCoreBarrier(t, directory, "disabled", map[string]any{"spools": removed, "target_stopped": true, "sibling_stream_continued": true})
+	memberReady := false
+	defer func() {
+		if !memberReady {
+			machineCoreRecoveryDiagnostic(t, orchestrator, fixture.NewPort, fixture.Nodes[1].Port, fixture.Nodes[0].ID, "reenabled", configObservation)
+		}
+	}()
 	machineCoreWait(t, done, 12*time.Second, func() bool { return machineCoreListening(fixture.NewPort) })
+	memberReady = true
 	for _, spool := range removed {
 		machineCoreReplayed(t, spool, "restored member opened before original native submission was acknowledged")
 	}
@@ -528,6 +570,9 @@ func TestNativeCoreMachineLive(t *testing.T) {
 	newMachine := *cfg.Machine
 	newMachine.Token = replacement.Token
 	newcfg.Machine = &newMachine
+	configObservation.mu.Lock()
+	configObservation.discoverySucceeded, configObservation.discoveryTarget = false, false
+	configObservation.mu.Unlock()
 	current, newcancel, newdone := start(&newcfg)
 	t.Cleanup(func() {
 		newcancel()
@@ -543,7 +588,7 @@ func TestNativeCoreMachineLive(t *testing.T) {
 	recoveryReady := false
 	defer func() {
 		if !recoveryReady {
-			machineCoreRecoveryDiagnostic(t, current, fixture.NewPort, fixture.Nodes[1].Port)
+			machineCoreRecoveryDiagnostic(t, current, fixture.NewPort, fixture.Nodes[1].Port, fixture.Nodes[0].ID, "recovered", configObservation)
 		}
 	}()
 	machineCoreWait(t, newdone, 12*time.Second, func() bool {
