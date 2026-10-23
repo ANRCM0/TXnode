@@ -20,6 +20,8 @@ BENCH = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BENCH)
 ANCHOR = "\t\tif at.Elapsed > c.last.Elapsed {\n"
 HOOK = "\t\tif !e.Eligible {\n\t\t\tnativeClockDiagnosticRecord(c, e, c.last, at, now)\n\t\t}\n"
+LEGACY_CLOCK = "\tnow := time.Now()\n\tat := stamp{now.UnixNano(), int64(now.Sub(c.origin))}\n\tc.mu.Lock()\n\tdefer c.mu.Unlock()\n"
+SERIALIZED_CLOCK = "\tc.mu.Lock()\n\tdefer c.mu.Unlock()\n\tnow := time.Now()\n\tat := stamp{now.UnixNano(), int64(now.Sub(c.origin))}\n"
 SCHEMA = "txnode-native-clock-rejection/v1"
 BOOLS = {"retired", "wall_forward", "elapsed_forward", "global_order_allowed", "before_deadline", "inside_grant", "eligible"}
 NUMBERS = {"sequence", "bytes", "requested", "deadline_elapsed_nanos", "grant_issued_seconds", "grant_expires_seconds"}
@@ -28,14 +30,16 @@ NUMBERS = {"sequence", "bytes", "requested", "deadline_elapsed_nanos", "grant_is
 def instrument(source, side):
     if source.count(ANCHOR) != 1 or source.count("e.Eligible = ") != 1 or "nativeClockDiagnosticRecord" in source:
         raise ValueError("completion source does not match the reviewed single-decision shape")
-    if side == "legacy":
-        expected = "\tnow := time.Now()\n\tat := stamp{now.UnixNano(), int64(now.Sub(c.origin))}\n\tc.mu.Lock()\n"
+    if side in ("legacy", "legacy_serialized"):
+        expected = LEGACY_CLOCK
     elif side == "candidate":
         expected = "\tc.mu.Lock()\n\tdefer c.mu.Unlock()\n\t// Serialize the wall/monotonic observation"
     else:
         raise ValueError("unknown diagnostic side")
     if source.count(expected) != 1:
         raise ValueError("unreviewed completion clock placement")
+    if side == "legacy_serialized":
+        source = source.replace(LEGACY_CLOCK, SERIALIZED_CLOCK)
     return source.replace(ANCHOR, HOOK + ANCHOR)
 
 
@@ -88,8 +92,14 @@ def validate_capture(value):
 
 
 def plan():
-    return [(group + 1, side) for group in range(5)
-            for side in (("legacy", "candidate") if group % 2 == 0 else ("candidate", "legacy"))]
+    result = []
+    sides = ("legacy", "legacy_serialized", "candidate")
+    for group in range(5):
+        order = sides[group % 3:] + sides[:group % 3]
+        if group % 2:
+            order = tuple(reversed(order))
+        result.extend((group + 1, side) for side in order)
+    return result
 
 
 def run(args):
@@ -107,14 +117,14 @@ def run(args):
               "tool_sha256": BENCH.digest(Path(__file__)), "go": BENCH.command(["go", "version"]),
               "machine": {"platform": platform.platform(), "cpu_count": os.cpu_count(),
                           "clock_source": clock_source.read_text().strip() if clock_source.exists() else "unavailable"},
-              "scope": "instrumented disposable builds; first rejected completion only; no BeginIO observation, throughput comparison, S3 or historical-run causality claim",
+              "scope": "instrumented disposable builds; legacy_serialized additionally moves only the old completion clock under its lock, preserving eligibility and persistence; first rejected completion only; no BeginIO observation, throughput comparison, S3 or historical-run causality claim",
               "settings": {"groups": 5, "seconds": 10, "warmup": 2, "concurrency": 4, "cpu_profiles": False},
               "builds": {}, "clock_samples": [], "samples": [], "comparisons": []}
     workspace = Path(tempfile.mkdtemp(prefix="txnode-native-clock-"))
     checkouts = []
     origin = None
     try:
-        for side, sha in (("legacy", BENCH.BASELINE), ("candidate", args.candidate)):
+        for side, sha in (("legacy", BENCH.BASELINE), ("legacy_serialized", BENCH.BASELINE), ("candidate", args.candidate)):
             checkout = workspace / side
             BENCH.command(["git", "worktree", "add", "--detach", str(checkout), sha])
             checkouts.append(checkout)
@@ -125,7 +135,8 @@ def run(args):
             instrumented = instrument(original, side)
             metadata = {"source_revision": sha, "source_tree": BENCH.command(["git", "rev-parse", sha + "^{tree}"]),
                         "source_native_sha256": BENCH.digest(native), "instrumented": True,
-                        "clock_placement": "before_collector_lock" if side == "legacy" else "inside_collector_lock"}
+                        "clock_placement": "before_collector_lock" if side == "legacy" else "inside_collector_lock",
+                        "counterfactual_clock_serialization": side == "legacy_serialized"}
             overlay = build_dir / "source-overlay.patch"
             overlay.write_text("".join(difflib.unified_diff(original.splitlines(True), instrumented.splitlines(True),
                                                          fromfile="native.go", tofile="native.go+clock-diagnostic")))
@@ -135,12 +146,13 @@ def run(args):
             harness = checkout / "cmd/native-ab"
             harness.mkdir()
             shutil.copyfile(ROOT / "scripts/native-acceptance-server.go.tmpl", harness / "main.go")
-            shutil.copyfile(ROOT / ("scripts/native-acceptance-%s.go.tmpl" % side), harness / "factory.go")
+            factory_side = "legacy" if side == "legacy_serialized" else side
+            shutil.copyfile(ROOT / ("scripts/native-acceptance-%s.go.tmpl" % factory_side), harness / "factory.go")
             shutil.copyfile(ROOT / "scripts/native-acceptance-bucket-diagnostic.go.tmpl", checkout / "internal/usagebucket/native_ab_diagnostic.go")
             metadata.update(instrumented_native_sha256=BENCH.digest(native), overlay_sha256=BENCH.digest(overlay),
                             helper_sha256=BENCH.digest(helper),
                             template_sha256={name: BENCH.digest(ROOT / "scripts" / name) for name in
-                                             ("native-acceptance-server.go.tmpl", "native-acceptance-%s.go.tmpl" % side,
+                                             ("native-acceptance-server.go.tmpl", "native-acceptance-%s.go.tmpl" % factory_side,
                                               "native-acceptance-bucket-diagnostic.go.tmpl")},
                             module_lock_sha256={name: BENCH.digest(checkout / name) for name in ("go.mod", "go.sum")})
             report["builds"][side] = metadata

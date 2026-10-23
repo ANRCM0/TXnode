@@ -69,11 +69,16 @@ class ClockCapturePolicyTests(unittest.TestCase):
 
 class ClockBuildPolicyTests(unittest.TestCase):
     def test_instrumentation_only_adds_one_cold_hook_before_last_stamp_update(self):
-        for side, sha in (("legacy", DIAGNOSTIC.BENCH.BASELINE), ("candidate", "HEAD")):
+        for side, sha in (("legacy", DIAGNOSTIC.BENCH.BASELINE), ("legacy_serialized", DIAGNOSTIC.BENCH.BASELINE), ("candidate", "HEAD")):
             source = DIAGNOSTIC.BENCH.command(["git", "show", sha + ":internal/usageinterval/native.go"]) + "\n"
             instrumented = DIAGNOSTIC.instrument(source, side)
             self.assertEqual(instrumented.count(DIAGNOSTIC.HOOK), 1)
-            self.assertEqual(instrumented.replace(DIAGNOSTIC.HOOK, ""), source)
+            restored = instrumented.replace(DIAGNOSTIC.HOOK, "")
+            if side == "legacy_serialized":
+                restored = restored.replace(DIAGNOSTIC.SERIALIZED_CLOCK, DIAGNOSTIC.LEGACY_CLOCK)
+                predicate = source.split("\t\te.Eligible = ", 1)[1].split(DIAGNOSTIC.ANCHOR, 1)[0]
+                self.assertIn("\t\te.Eligible = " + predicate + DIAGNOSTIC.HOOK, instrumented)
+            self.assertEqual(restored, source)
             self.assertIn(DIAGNOSTIC.HOOK + DIAGNOSTIC.ANCHOR, instrumented)
             for changed in (source.replace(DIAGNOSTIC.ANCHOR, ""), source + DIAGNOSTIC.ANCHOR, instrumented):
                 with self.subTest(side=side), self.assertRaises(ValueError):
@@ -81,12 +86,18 @@ class ClockBuildPolicyTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             DIAGNOSTIC.instrument(source, "legacy")
 
-    def test_five_pairs_are_bounded_and_reverse_order(self):
+    def test_five_three_way_groups_are_bounded_and_counterbalanced(self):
         plan = DIAGNOSTIC.plan()
-        self.assertEqual(len(plan), 10)
+        self.assertEqual(len(plan), 15)
         for group in range(1, 6):
             sides = [side for number, side in plan if number == group]
-            self.assertEqual(sides, ["legacy", "candidate"] if group % 2 else ["candidate", "legacy"])
+            self.assertEqual(set(sides), {"legacy", "legacy_serialized", "candidate"})
+            self.assertEqual(len(sides), 3)
+        old_before_modified = [next(i for i, (_, side) in enumerate(plan[(g-1)*3:g*3]) if side == "legacy") <
+                               next(i for i, (_, side) in enumerate(plan[(g-1)*3:g*3]) if side == "legacy_serialized")
+                               for g in range(1, 6)]
+        self.assertTrue(any(old_before_modified))
+        self.assertFalse(all(old_before_modified))
 
 
 if __name__ == "__main__":

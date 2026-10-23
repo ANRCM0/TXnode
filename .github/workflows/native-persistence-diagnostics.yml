@@ -49,7 +49,7 @@ jobs:
           test -z "$(git status --porcelain)"
           git cat-file -e "$CANDIDATE_SHA^{commit}"
           python3 -m unittest discover -s scripts -p 'test_native_clock_diagnostics.py' -v
-      - name: Collect five bounded instrumented upload pairs
+      - name: Collect five bounded three-way clock placement groups
         env:
           CANDIDATE_SHA: ${{ inputs.candidate }}
         run: |
