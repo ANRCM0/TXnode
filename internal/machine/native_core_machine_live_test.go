@@ -150,6 +150,11 @@ func machineCoreChildren(o *Orchestrator) []<-chan struct{} {
 func machineCoreShutdownDiagnostic(t *testing.T, o *Orchestrator, children []<-chan struct{}, targetPort, siblingPort int) {
 	t.Helper()
 	o.mu.Lock()
+	classes := []string{}
+	for _, failure := range o.failures {
+		classes = append(classes, machineCoreFailureClass(failure.lastErr))
+	}
+	sort.Strings(classes)
 	terminal := o.terminalErr
 	cancelled := o.runCtx != nil && o.runCtx.Err() != nil
 	o.mu.Unlock()
@@ -164,6 +169,7 @@ func machineCoreShutdownDiagnostic(t *testing.T, o *Orchestrator, children []<-c
 	}
 	socket := o.currentWS()
 	data := map[string]any{"schema": "txnode-machine-shutdown-diagnostic/v1", "stage": "old-rejected", "code": "machine_join_timeout",
+		"failed_children": len(classes), "failure_classes": classes,
 		"terminal_cause_observed": terminal != nil, "terminal_machine_denial": typed && denial.Scope == controlerror.MachineScope,
 		"context_cancelled": cancelled, "tracked_children": len(children), "completed_children": done,
 		"shared_ws_connected": socket != nil && socket.IsConnected(), "target_listener_open": machineCoreListening(targetPort),
@@ -173,6 +179,40 @@ func machineCoreShutdownDiagnostic(t *testing.T, o *Orchestrator, children []<-c
 		t.Fatal("fixed shutdown diagnostic encoding failed")
 	}
 	t.Logf("NATIVE_MACHINE_SHUTDOWN_DIAGNOSTIC %s", body)
+}
+
+func machineCoreFailureClass(err error) string {
+	class := "other"
+	if denial, ok := controlerror.AsAuthorityDenial(err); ok {
+		class = "authority_node"
+		if denial.Scope == controlerror.MachineScope {
+			class = "authority_machine"
+		}
+	}
+
+	if class == "other" {
+		switch {
+		case errors.Is(err, context.Canceled):
+			class = "context_canceled"
+		case errors.Is(err, context.DeadlineExceeded):
+			class = "context_deadline"
+		default:
+			cause := err
+			for depth := 0; cause != nil && depth < 8; depth++ {
+				for _, prefix := range []struct{ prefix, label string }{{"NODE_CREDENTIAL_DELIVERY_", "provider"}, {"NODE_AUTHORIZATION_", "authorization"}, {"NATIVE_USAGE_", "native_usage"}} {
+					if strings.HasPrefix(cause.Error(), prefix.prefix) {
+						class = prefix.label
+						break
+					}
+				}
+				if class != "other" {
+					break
+				}
+				cause = errors.Unwrap(cause)
+			}
+		}
+	}
+	return class
 }
 
 // Publish only reviewed state labels; errors and runtime stacks remain private.
@@ -189,36 +229,7 @@ func machineCoreRecoveryDiagnostic(t *testing.T, o *Orchestrator, targetPort, si
 		}
 	}
 	for _, failure := range o.failures {
-		class := "other"
-		if denial, ok := controlerror.AsAuthorityDenial(failure.lastErr); ok {
-			class = "authority_node"
-			if denial.Scope == controlerror.MachineScope {
-				class = "authority_machine"
-			}
-		}
-
-		if class == "other" {
-			switch {
-			case errors.Is(failure.lastErr, context.Canceled):
-				class = "context_canceled"
-			case errors.Is(failure.lastErr, context.DeadlineExceeded):
-				class = "context_deadline"
-			default:
-				cause := failure.lastErr
-				for depth := 0; cause != nil && depth < 8; depth++ {
-					for _, prefix := range []struct{ prefix, label string }{{"NODE_CREDENTIAL_DELIVERY_", "provider"}, {"NODE_AUTHORIZATION_", "authorization"}, {"NATIVE_USAGE_", "native_usage"}} {
-						if strings.HasPrefix(cause.Error(), prefix.prefix) {
-							class = prefix.label
-							break
-						}
-					}
-					if class != "other" {
-						break
-					}
-					cause = errors.Unwrap(cause)
-				}
-			}
-		}
+		class := machineCoreFailureClass(failure.lastErr)
 		classes = append(classes, class)
 	}
 	if o.runCtx != nil && o.runCtx.Err() != nil {
