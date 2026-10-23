@@ -114,10 +114,20 @@ class RecoveryDiagnosticPolicy(unittest.TestCase):
                          code='fresh_readiness_failed', tracked_children=2, completed_children=0,
                          failed_children=1, failure_classes=['provider'], context_cancelled=False,
                          shared_ws_connected=True, target_listener_open=False, sibling_listener_open=False,
-                         wait_chains=['startup_setup>startup_recovery'])
+                         wait_chains=['startup_setup>startup_recovery'], target_tracked=True, target_done=False,
+                         target_backoff=True, target_failure_class='provider', owner_terminal=False,
+                         discovery_succeeded=True, discovery_target_present=True)
 
     def test_fixed_safe_state_is_admitted(self):
         self.assertTrue(valid_recovery(self.good))
+
+    def test_member_readiness_stage_is_explicit(self):
+        value = dict(self.good, stage='reenabled', code='member_readiness_failed')
+        self.assertTrue(valid_recovery(value))
+        for change in ({'code': 'fresh_readiness_failed'}, {'target_failure_class': 'raw error'},
+                       {'target_done': True, 'target_tracked': False}, {'target_backoff': 1}, {'discovery_succeeded': 1},
+                       {'discovery_succeeded': False, 'discovery_target_present': True}):
+            self.assertFalse(valid_recovery(dict(value, **change)))
 
     def test_untrusted_fields_types_labels_and_bounds_are_rejected(self):
         for change in ({'token': 'private'}, {'context_cancelled': 0}, {'tracked_children': True},
