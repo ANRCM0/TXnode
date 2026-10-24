@@ -1,4 +1,4 @@
-name: Bounded native CPU and latency follow-up
+name: Frozen native ordinary upload CPU profiles
 
 on:
   workflow_dispatch:
@@ -16,13 +16,16 @@ env:
 
 jobs:
   reproduce:
-    name: Reproduce three fixed cells on frozen binaries
+    name: Profile ordinary upload on frozen binaries
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
       - name: Record the original runner context and require bounded tracing
         run: |
           set -euo pipefail
@@ -37,18 +40,18 @@ jobs:
           findmnt -T "$RUNNER_TEMP" > "$RUNNER_TEMP/native-follow-up-environment/filesystem.txt"
           strace -V > "$RUNNER_TEMP/native-follow-up-environment/strace.txt"
           git rev-parse HEAD > "$RUNNER_TEMP/native-follow-up-environment/tool-source.txt"
-      - name: Read the exact reference, reproduce untraced cases, then count syscalls separately
+      - name: Read the exact reference and collect six separate diagnostic profiles
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 scripts/native-cpu-latency-follow-up.py \
+          python3 scripts/native-upload-cpu-profile.py \
             --output "$RUNNER_TEMP/native-cpu-latency-follow-up" \
             --reference "$RUNNER_TEMP/native-cpu-latency-reference"
       - name: Retain finite diagnostic evidence without claiming S3 acceptance
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-cpu-latency-follow-up-${{ github.sha }}
+          name: native-upload-cpu-profile-${{ github.sha }}
           path: |
             ${{ runner.temp }}/native-cpu-latency-follow-up/
             ${{ runner.temp }}/native-follow-up-environment/
