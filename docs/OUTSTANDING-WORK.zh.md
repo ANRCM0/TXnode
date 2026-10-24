@@ -4,6 +4,34 @@
 [NEXT-DEVELOPMENT.zh.md](NEXT-DEVELOPMENT.zh.md)，严格互通入口见
 [INTEROP.md](INTEROP.md)。历史 `a6d0e96` 的“29 通过、6 跳过”不代表当前候选。
 
+## 2026-10-24 时钟勘误入口与窗口 profile
+
+经用户明确选择新增独立基线 `legacy-clock-serialized-v1`，固定旧侧提交
+`4904a193d4564cf67af55728da0b338ff3b1268f`。相对原 `a1ad269`，仅将
+CompleteIO 的两行采时移入原锁，全部拒绝条件及历史失败保留。默认验收继续
+使用原基线；勘误版需显式选择，源码校验、A/B 产物及 S3 身份独立记录，另需
+该旧源码上的原生 collector 回归/race 通过。入口实现不等于 Actions 已通过。
+
+窗口 profile `40102555123` / artifact `12563489354` 的十二份采集及原账量证明
+均完成，原始 CPU/runtime/profile 和窗口元数据已核对；两侧 CPU 样本权重
+5.15 / 5.18 秒，关闭后 ReadRecord 权重为零。两侧主要热点均为持久化 worker
+中的 JSON/摘要路径，目前不能将原几个毫秒的 CPU 差值归为唯一原因。它使用
+原 `a1ad269` / `90508592`、独立 55 秒窗口及诊断 harness，不进入正式比率。
+
+原正式 106/120、单 CPU 115/120 及全部原失败继续保留。勘误基线后续完整
+Actions、真实性能比较、S3、合并、发布与 Core 采用需要各自证据。
+
+首轮勘误 profile Actions `40105537448` 固定候选 `6deacea6` / 旧侧 `4904a193`，
+完整 A/B 为 119/120（旧侧 60/60、候选 59/60）；十一项比较达标，唯一缺口为
+g4 候选 events/download 的计量尾部。meter `CAPACITY_REACHED`、容量 1152，
+store healthy；不归为 store 硬容量耗尽，不补样本或重试选绿。1810.605879718 秒
+soak、39 次生命周期循环、四档会话及七项带负载故障通过，但最终 S3 账本仍为
+false。120 份 sample、240 份 CPU、240 份 runtime、四份二进制与原账本已核对。
+
+同一 `6deacea6` 的完整功能运行 `40105980034` 成功，full 为 37 顶层/29 子测试
+通过、2 项上游不可用单列，并执行 runtime stability、Core Machine/C2 和镜像
+冒烟。它与 PR CI `40105527049` 不代替仍失败的勘误 S3，完整计量缺口继续跟踪。
+
 ## 2026-10-24 长连接 CPU 调查补项
 
 独立 Actions `40059251852` / artifact `12547191583` 固定原 `90508592` / `a1ad269`

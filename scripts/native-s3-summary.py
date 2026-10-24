@@ -6,6 +6,8 @@ import math
 from pathlib import Path
 import re
 
+import native_baselines
+
 
 def valid_cpu(sample):
     cpu = sample['cpu_measurement']
@@ -48,7 +50,7 @@ def valid_cpu(sample):
     return math.isfinite(expected) and expected > 0 and sample['cpu_seconds_per_gib'] == cpu['cpu_seconds_per_gib'] and math.isclose(sample['cpu_seconds_per_gib'], expected, rel_tol=1e-12)
 
 
-CHECKS = ('same_candidate', 'sustained_loaded_lifecycle', 'loaded_faults',
+CHECKS = ('same_candidate', 'baseline_identity', 'sustained_loaded_lifecycle', 'loaded_faults',
           'equivalent_ab', 'process_cpu_windows', 'image_sizes', 'allocation_windows')
 EVIDENCE_ERRORS = (OSError, ValueError, KeyError, TypeError, AttributeError,
                    ZeroDivisionError, OverflowError)
@@ -57,7 +59,8 @@ SCOPE = ('fixed Linux Actions loopback profile: 30 minute staged TCP/UDP/mux, '
          'sing-box versus native SOCKS A/B; no production or physical multi-host claim')
 
 
-def summarize(root, candidate, outcomes):
+def summarize(root, candidate, outcomes, baseline_profile=native_baselines.DEFAULT_PROFILE):
+    baseline = native_baselines.identity(baseline_profile)
     checks = {name: outcomes.get(name) == 'success' for name in ('SOAK', 'FAULTS', 'PERFORMANCE')}
     checks.update(dict.fromkeys(CHECKS, False))
     errors = {}
@@ -74,15 +77,25 @@ def summarize(root, candidate, outcomes):
 
     if isinstance(candidate, str) and re.fullmatch('[0-9a-f]{40}', candidate):
         def read(kind, name):
-            return json.loads((root / ('native-' + kind + '-' + candidate) / name).read_text(encoding='utf-8'))
+            label = native_baselines.artifact_label(baseline_profile) if kind == 'performance' else ''
+            return json.loads((root / ('native-' + kind + '-' + label + candidate) / name).read_text(encoding='utf-8'))
 
         soak = record('soak_evidence', lambda: read('soak', 'soak-summary.json'))
         faults = record('faults_evidence', lambda: read('faults', 'summary.json'))
         performance = record('performance_evidence', lambda: read('performance', 'report.json'))
+
+        def baseline_tests():
+            directory = root / ('native-baseline-tests-' + native_baselines.artifact_label(baseline_profile) + candidate)
+            return (outcomes.get('BASELINE_TESTS') == 'success'
+                    and (directory / 'commit.txt').read_text(encoding='utf-8').strip() == baseline['commit']
+                    and (directory / 'tree.txt').read_text(encoding='utf-8').strip() == baseline['tree']
+                    and (directory / 'candidate.txt').read_text(encoding='utf-8').strip() == candidate)
+
         predicates = {
             'same_candidate': lambda: performance['candidate'] == candidate and all(
                 (root / ('native-' + kind + '-' + candidate) / 'commit.txt').read_text(encoding='utf-8').strip() == candidate
                 for kind in ('soak', 'faults')),
+            'baseline_identity': lambda: native_baselines.matches_report(performance, baseline_profile),
             'sustained_loaded_lifecycle': lambda: soak['accepted'] and soak['elapsed_seconds'] >= 1800 and len(soak['phases']) == 4 and all(
                 p['lifecycle_cycles'] >= 8 and p['load_bearing_generations_recovered'] == p['lifecycle_cycles'] + 1
                 and p['expected_retired_disconnects'] == p['lifecycle_cycles'] * p['load_bearing_tls_workers']
@@ -97,15 +110,17 @@ def summarize(root, candidate, outcomes):
                 s.get('allocated_bytes_per_business_byte', -1) >= 0 and s.get('allocations_per_business_byte', -1) >= 0
                 for s in performance['samples']),
         }
+        if baseline_profile == native_baselines.ERRATA_PROFILE:
+            predicates['errata_baseline_tests'] = baseline_tests
         # A missing CPU field must not prevent independent image/allocation checks.
-        for name in CHECKS:
+        for name in predicates:
             checks[name] = record(name, predicates[name]) is True
     else:
         errors['candidate'] = {'error': 'immutable_candidate_required'}
     checks['evidence_complete'] = not errors
     if errors:
         checks['evidence_error'] = ', '.join(errors)
-    return {'schema': 'txnode-s3-acceptance/v2', 'candidate': candidate, 'checks': checks,
+    return {'schema': 'txnode-s3-acceptance/v2', 'candidate': candidate, 'baseline_identity': baseline, 'checks': checks,
             'evidence_errors': errors, 'full_S3_accepted': all(value is True for value in checks.values()),
             'scope': SCOPE}
 
@@ -113,15 +128,19 @@ def summarize(root, candidate, outcomes):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidate', required=True)
+    parser.add_argument('--baseline-profile', choices=native_baselines.PROFILES, default=native_baselines.DEFAULT_PROFILE)
     parser.add_argument('--evidence', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--soak-job', required=True)
     parser.add_argument('--faults-job', required=True)
     parser.add_argument('--performance-job', required=True)
+    parser.add_argument('--baseline-test-job', default='skipped')
     parser.add_argument('--step-summary', type=Path)
     args = parser.parse_args()
     result = summarize(args.evidence, args.candidate,
-                       {'SOAK': args.soak_job, 'FAULTS': args.faults_job, 'PERFORMANCE': args.performance_job})
+                       {'SOAK': args.soak_job, 'FAULTS': args.faults_job, 'PERFORMANCE': args.performance_job,
+                        'BASELINE_TESTS': args.baseline_test_job},
+                       args.baseline_profile)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(result, indent=2)
     args.output.write_text(encoded + '\n', encoding='utf-8')

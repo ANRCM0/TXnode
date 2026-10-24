@@ -9,6 +9,94 @@
 
 所有功能、网络与负载执行仍限于 GitHub Actions。本地仅允许源码检查、Go 静态编译、格式和 AST 检查。缺少客户端、工具编译失败、实际负载不达标与证据不完整均不能记为通过。
 
+## 2026-10-24 独立时钟勘误基线
+
+经用户明确选择，新增 `legacy-clock-serialized-v1`，固定提交
+`4904a193d4564cf67af55728da0b338ff3b1268f`，tree
+`edfe6051a97952aba014bf874927bca8bc0b550d`。它直接以原 `a1ad269` 为父提交，
+唯一源码差异是将 `NativeCollector.CompleteIO` 的 `time.Now()` / `stamp`
+采时移到既有 `c.mu` 锁内。所有 eligibility、grant、deadline、退休、容量、
+持久化、同步和错误处理条件均原样保留；没有观察钩子或第三方代码升级。
+
+原 `original-a1ad269-v1` 继续为默认选项，历史失败和未决报告保持其原始身份。
+`native_baselines.py` 在构建前核对完整 SHA/tree、唯一父提交、唯一变更文件、
+逐字节两行移动和补丁摘要。勘误版必须显式选择
+`--baseline-profile legacy-clock-serialized-v1`；其 A/B、独立 profile 和 S3 artifact 名增加相同前缀，
+JSON 同时记录原提交、实际勘误提交和补丁身份。
+
+工作流 `native-acceptance.yml` 的 `baseline_profile` 输入支持这两个固定选项。
+勘误验收另要求该固定旧源码上的七项原生 collector 回归/race 测试成功，并将
+候选、旧源码 SHA/tree 绑定到该 job 的产物；原基线的该 job 为跳过，不记作已执行。
+S3 汇总拒绝身份缺失、原/勘误交叉或不匹配的 baseline build。五组、2 秒预热、
+10 秒测量、4 线程、完整 120 cell、队列、fsync、ACK 和 5%/10% 阈值保持。
+本节只声明新入口及源码差异；实际 Actions 结果需要单独记录，不因此宣称通过。
+
+### 勘误 profile 的首轮完整 Actions
+
+运行 `40105537448` 固定候选 `6deacea61c574f0a1fced95d6c65db2c150f0a72`，tree
+`3148d1895668e8989148ed7681ab39253da86a57`，显式选择上述固定 `4904a193` 勘误
+基线。没有设置 CPU affinity、GOMAXPROCS 或替换文件系统，原完整参数保持。
+最终为 failure，S3 账本如实拒绝；本轮不重试以选择通过结果。
+
+| 范围 | 实际结果 | artifact |
+|---|---|---|
+| 来源与补丁 | 固定 SHA/tree、唯一父提交/变更文件及逐字节采时移动均匹配 | `12564681684` |
+| 旧侧 collector | 七项原生 collector 回归/race 全部通过，无跳过或失败 | `12564413106` |
+| 带负载故障 | 七项实际负载故障全部通过，无跳过或失败 | `12564915060` |
+| 持续负载 | 1810.605879718 秒、39 次生命周期循环；100/250/500/1000 会话档位均达到，业务错误为零 | `12565162183` |
+| 完整 A/B | 119/120 measured，旧侧 60/60、候选 59/60；十一项达标、一项 incomplete | `12565696275` |
+| S3 账本 | `full_S3_accepted=false`，`PERFORMANCE` / `equivalent_ab` / `process_cpu_windows` 为 false | `12565316688` |
+
+唯一缺口为 g4 候选 events/download 的 shutdown-accounting。原始 node-stop 与
+coordinator-close 快照均保留 meter `CAPACITY_REACHED`，登记容量 1152，首个
+缺口 sequence 28673、实际 5 字节 upload；累计 dropped events 239476。store
+仍为 healthy、220 个文件及 19,683,325 字节，coordinator 最终另记录
+`STORE_EVIDENCE_INVALID`。这些状态不等于 store 硬容量耗尽或降级，也不能仅凭
+关闭后快照确定某次 fsync 的唯一责任；原正式样本未启用阶段 observer。
+
+完整下载并核对 120 份 sample、240 份 CPU、240 份 runtime、四份实际二进制，
+模块锁/模板/源码摘要及十二项比较重算均匹配。该失败样本有完整数值 CPU 和分配
+窗口，但原 CPU 谓词同时要求 `status=measured`，所以 CPU gate 仍拒绝它；
+`image_sizes`、`allocation_windows`、`evidence_complete` 均为 true，不能据此
+补足其计量尾部。重算的 S3 账本与归档 JSON 完全相同，原拒绝条件不变。
+
+同候选的 PR CI `40105527049` 与完整功能运行 `40105980034` 成功：Go/race、
+strict quick/full、runtime stability、固定 Core Machine/C2 及镜像冒烟均执行。
+full 原始事件按固定 manifest 重算为 37 个顶层、29 个子测试通过，2 个固定上游
+不可用组合单列。独立诊断四份 download、8 份 CPU/8 份 runtime 和四份 profile
+亦完成核对（`12564602515`），不进入正式 120 cell。
+
+本次十一项完整比较在本 profile 的原预算内，不消除原 `a1ad269` 的 106/120、
+单 CPU 115/120 或历史 CPU 调查结果，也不证明换了基线后所有环境均无拒绝。
+勘误 profile 自身仍未完整通过 S3；后续候选改动与交付必须继续绑定具体源码。
+
+## 2026-10-24 events/long 窗口调用栈
+
+整进程扩展采集 `40100710905` / artifact `12562712198` 复用原二进制，十二份
+profile 均完成。旧侧 3.92 秒、新侧 3.49 秒的 CPU 样本中，关闭后 `ReadRecord`
+分别占 0.99 / 1.05 秒；该阶段不在原 CPU 测量窗口内，不能据此解释正式比率。
+
+窗口限定补采 `40102555123` / artifact `12563489354` 使用独立工具
+`bde74a86acf16784c3be2214f9bb2c63a6521be1`，两侧仍为原 `a1ad269` / `90508592`。
+仅诊断 harness 的 profiler 启停移到原两次 CPU snapshot 外侧；生产源码、原
+snapshot 函数、nonce、字节证明和关闭后账量核对保留。两份新 harness 摘要明确
+区别于原冻结二进制。每侧六份交替、每份 2 秒预热及 55 秒测量、4 线程和 CPU 0，
+持久化 observer 关闭；55 秒及 profiler 参数属于诊断，不生成验收比率。
+
+| 窗口内互斥栈分类 | 旧侧 CPU 样本权重 | 新侧 CPU 样本权重 |
+|---|---:|---:|
+| 全部 | 5.15 秒 | 5.18 秒 |
+| Coordinator worker | 4.78 秒 | 4.65 秒 |
+| relay | 0.09 秒 | 0.14 秒 |
+| 独立后台 GC | 0.19 秒 | 0.32 秒 |
+| 其余 | 0.09 秒 | 0.07 秒 |
+
+十二份原始 profile 和窗口元数据、两份合并 profile、24 份 CPU / 24 份 runtime、
+源码/overlay/helper/模块锁及原账量证明均匹配；两侧达到采集前固定的至少 2 秒
+CPU 样本预算，关闭后 `ReadRecord` 样本权重为零。两侧主要热点均在事件持久化
+worker 的 JSON 编码与摘要校验；累计函数权重不可相加，带 profiler 的样本权重
+也不是原 CPU/GiB 的新旧验收比率。目前仍未确定原 5% 越界的唯一原因。
+
 ## 2026-10-24 main 的定时 Actions 结果
 
 定时运行 `40040191779` 固定 main `90508592b4c0b433eb9a71f367694a981aa958e1`，
@@ -299,7 +387,7 @@ events/download 容量失败，其余三个诊断 case 完成；诊断失败不�
 
 `scripts/native-acceptance.py` 在一个 Linux runner/job 中为以下版本创建临时隔离 checkout：
 
-- 旧基线：`a1ad2695e1143269168c36a274283de3342e91c7`，选择 sing-box 服务端。
+- 默认旧基线：`a1ad2695e1143269168c36a274283de3342e91c7`，选择 sing-box 服务端；独立时钟勘误版需显式选择并按前节身份记账。
 - 候选：工作流解析后的完整 SHA，选择唯一原生 txnode 服务端。
 
 两份源码均以固定 Go `1.26.0`、`GOTOOLCHAIN=local`、`CGO_ENABLED=0`、同一组 `-trimpath -ldflags=-s -w` 及既有 release build tags 编译。各 checkout 注入本候选版本携带的相同测量 server、只读 bucket 诊断 helper 和各自的 factory 适配；不修改原数据面或模块依赖。报告记录工具、模板、业务二进制和测量二进制摘要，避免将注入的测量入口冒充历史仓库的原生功能。每侧构建前最多三次模块预取，失败间隔五秒，保留完整日志及逐次退出码；耗尽仍为 incomplete，且预取改变任一已提交模块锁即失败。

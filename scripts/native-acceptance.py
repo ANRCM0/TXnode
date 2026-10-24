@@ -24,6 +24,8 @@ import tempfile
 import threading
 import time
 
+import native_baselines
+
 
 ROOT = Path(__file__).resolve().parent.parent
 BASELINE = "a1ad2695e1143269168c36a274283de3342e91c7"
@@ -620,10 +622,12 @@ def run(args):
     candidate = command(["git", "rev-parse", args.candidate + "^{commit}"])
     if len(candidate) != 40:
         raise ValueError("candidate must resolve to a commit")
+    baseline_identity = native_baselines.verify(getattr(args, "baseline_profile", native_baselines.DEFAULT_PROFILE))
+    baseline = baseline_identity["commit"]
     report = {"schema": "txnode-native-performance/v2", "cpu_method": CPU_METHOD,
-              "baseline": BASELINE, "candidate": candidate,
+              "baseline": baseline, "baseline_identity": baseline_identity, "candidate": candidate,
               "candidate_tree": command(["git", "rev-parse", candidate + "^{tree}"]),
-              "baseline_tree": command(["git", "rev-parse", BASELINE + "^{tree}"]),
+              "baseline_tree": baseline_identity["tree"],
               "tool_sha256": digest(Path(__file__)), "go": command(["go", "version"]),
               "template_sha256": {path.name: digest(path) for path in sorted((ROOT / "scripts").glob("native-acceptance-*.go.tmpl"))},
               "go_environment": command(["go", "env", "GOOS", "GOARCH", "GOTOOLCHAIN", "CGO_ENABLED"]),
@@ -651,7 +655,7 @@ def run(args):
     checkouts = []
     origin = None
     try:
-        for side, sha in (("legacy", BASELINE), ("candidate", candidate)):
+        for side, sha in (("legacy", baseline), ("candidate", candidate)):
             checkout = workspace / side
             command(["git", "worktree", "add", "--detach", str(checkout), sha])
             checkouts.append(checkout)
@@ -722,7 +726,7 @@ def run(args):
         if args.persistence_diagnostics_only:
             (output / "report.md").write_text(persistence_markdown(report))
         else:
-            lines = ["# Native / legacy performance", "", "Candidate: `%s`; baseline: `%s`." % (candidate, BASELINE), "", "Status: **%s**. Scoped A/B accepted: **%s**." % (report["status"], report["accepted"]), "", "| Mode | Workload | Status | Candidate / legacy throughput | Candidate / legacy CPU |", "|---|---|---|---:|---:|"]
+            lines = ["# Native / legacy performance", "", "Candidate: `%s`; baseline: `%s` (profile `%s`)." % (candidate, baseline, baseline_identity["profile"]), "", "Status: **%s**. Scoped A/B accepted: **%s**." % (report["status"], report["accepted"]), "", "| Mode | Workload | Status | Candidate / legacy throughput | Candidate / legacy CPU |", "|---|---|---|---:|---:|"]
             lines[6:6] = ["CPU method: `%s`; schema: `%s`. /proc CLK_TCK is secondary only." % (CPU_METHOD, report["schema"]), ""]
             for item in report["comparisons"]:
                 lines.append("| %s | %s | %s | %.4f | %.4f |" % (item["mode"], item["workload"], item["status"], item.get("throughput_candidate_over_legacy", 0), item.get("cpu_candidate_over_legacy", 0)))
@@ -739,6 +743,7 @@ def run(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", required=True)
+    parser.add_argument("--baseline-profile", choices=native_baselines.PROFILES, default=native_baselines.DEFAULT_PROFILE)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--groups", type=int, default=5)
     parser.add_argument("--seconds", type=int, default=10)

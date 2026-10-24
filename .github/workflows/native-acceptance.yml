@@ -7,12 +7,25 @@ on:
         description: Immutable candidate commit
         required: true
         type: string
+      baseline_profile:
+        description: Separately named immutable legacy baseline
+        required: false
+        default: original-a1ad269-v1
+        type: string
   workflow_dispatch:
     inputs:
       candidate:
         description: Candidate commit or ref (empty uses workflow SHA)
         required: false
         type: string
+      baseline_profile:
+        description: Original baseline or explicitly selected clock errata
+        required: false
+        default: original-a1ad269-v1
+        type: choice
+        options:
+          - original-a1ad269-v1
+          - legacy-clock-serialized-v1
       diagnostics_only:
         description: Run separate CPU and persistence diagnostics without S3 acceptance
         required: false
@@ -39,6 +52,9 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       sha: ${{ steps.source.outputs.sha }}
+      baseline_profile: ${{ steps.source.outputs.baseline_profile }}
+      baseline_label: ${{ steps.source.outputs.baseline_label }}
+      baseline_sha: ${{ steps.source.outputs.baseline_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,6 +62,8 @@ jobs:
           fetch-depth: 0
       - id: source
         name: Record candidate commit and tree
+        env:
+          BASELINE_PROFILE: ${{ inputs.baseline_profile || 'original-a1ad269-v1' }}
         run: |
           set -euo pipefail
           test -z "$(git status --porcelain)"
@@ -55,10 +73,60 @@ jobs:
           git status --porcelain --untracked-files=no > artifacts/source/status.txt
           test ! -s artifacts/source/status.txt
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          python3 scripts/native_baselines.py --profile "$BASELINE_PROFILE" --output artifacts/source/baseline.json
+          echo "baseline_profile=$BASELINE_PROFILE" >> "$GITHUB_OUTPUT"
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          import sys
+          sys.path.insert(0, 'scripts')
+          import native_baselines
+          baseline = json.loads(Path('artifacts/source/baseline.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('baseline_label=' + native_baselines.artifact_label(baseline['profile']) + '\n')
+              output.write('baseline_sha=' + baseline['commit'] + '\n')
+          PY
       - uses: actions/upload-artifact@v4
         with:
           name: native-source-${{ steps.source.outputs.sha }}
           path: artifacts/source/
+          if-no-files-found: error
+
+  errata-baseline-tests:
+    name: Exact clock errata baseline collector race tests
+    if: needs.source.outputs.baseline_profile == 'legacy-clock-serialized-v1'
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.source.outputs.baseline_sha }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+          cache-dependency-path: go.sum
+      - name: Retain original collector guards and recovery tests on the exact errata tree
+        env:
+          BASELINE_SHA: ${{ needs.source.outputs.baseline_sha }}
+          CANDIDATE_SHA: ${{ needs.source.outputs.sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$BASELINE_SHA"
+          mkdir -p artifacts/baseline-tests
+          git rev-parse HEAD > artifacts/baseline-tests/commit.txt
+          git rev-parse 'HEAD^{tree}' > artifacts/baseline-tests/tree.txt
+          printf '%s\n' "$CANDIDATE_SHA" > artifacts/baseline-tests/candidate.txt
+          go version > artifacts/baseline-tests/go-version.txt
+          go test -race -json -count=1 ./internal/usageinterval -run '^TestNative' -timeout=10m \
+            2>artifacts/baseline-tests/stderr.log | tee artifacts/baseline-tests/events.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-baseline-tests-${{ needs.source.outputs.baseline_label }}${{ needs.source.outputs.sha }}
+          path: artifacts/baseline-tests/
           if-no-files-found: error
 
   soak:
@@ -183,15 +251,16 @@ jobs:
       - name: Profile identical download paths outside the acceptance matrix
         env:
           CANDIDATE_SHA: ${{ needs.source.outputs.sha }}
+          BASELINE_PROFILE: ${{ needs.source.outputs.baseline_profile }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --output artifacts/native-performance-diagnostics --diagnostics-only
+          python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --baseline-profile "$BASELINE_PROFILE" --output artifacts/native-performance-diagnostics --diagnostics-only
       - name: Retain independent CPU profiles even on diagnostic failure
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-performance-diagnostics-${{ needs.source.outputs.sha }}
+          name: native-performance-diagnostics-${{ needs.source.outputs.baseline_label }}${{ needs.source.outputs.sha }}
           path: |
             artifacts/native-performance-diagnostics/report.json
             artifacts/native-performance-diagnostics/report.md
@@ -217,10 +286,11 @@ jobs:
       - name: Build both revisions and alternate five measurement groups
         env:
           CANDIDATE_SHA: ${{ needs.source.outputs.sha }}
+          BASELINE_PROFILE: ${{ needs.source.outputs.baseline_profile }}
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --output artifacts/native-performance
+          python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --baseline-profile "$BASELINE_PROFILE" --output artifacts/native-performance
       - name: Publish comparison to job summary
         if: always()
         run: |
@@ -231,14 +301,14 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-performance-${{ needs.source.outputs.sha }}
+          name: native-performance-${{ needs.source.outputs.baseline_label }}${{ needs.source.outputs.sha }}
           path: artifacts/native-performance/
           if-no-files-found: error
 
   acceptance:
     name: Exact source S3 acceptance ledger
     if: always() && inputs.diagnostics_only != true
-    needs: [source, soak, faults, performance]
+    needs: [source, soak, faults, performance, errata-baseline-tests]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
@@ -254,14 +324,17 @@ jobs:
           SOAK_JOB: ${{ needs.soak.result }}
           FAULTS_JOB: ${{ needs.faults.result }}
           PERFORMANCE_JOB: ${{ needs.performance.result }}
+          BASELINE_TEST_JOB: ${{ needs.errata-baseline-tests.result }}
+          BASELINE_PROFILE: ${{ needs.source.outputs.baseline_profile }}
         run: |
           python3 scripts/native-s3-summary.py \
-            --candidate "$CANDIDATE_SHA" --evidence evidence --output s3-acceptance.json \
+            --candidate "$CANDIDATE_SHA" --baseline-profile "$BASELINE_PROFILE" --evidence evidence --output s3-acceptance.json \
             --soak-job "$SOAK_JOB" --faults-job "$FAULTS_JOB" --performance-job "$PERFORMANCE_JOB" \
+            --baseline-test-job "$BASELINE_TEST_JOB" \
             --step-summary "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-s3-acceptance-${{ needs.source.outputs.sha }}
+          name: native-s3-acceptance-${{ needs.source.outputs.baseline_label }}${{ needs.source.outputs.sha }}
           path: s3-acceptance.json
           if-no-files-found: error
