@@ -293,9 +293,9 @@ observation=evidence/'native-observations.jsonl';observation.touch(mode=0o600)
 proxy=NativeTLSProxy(tls_port,http_port,ws_port,str(evidence/'server.pem'),str(evidence/'server.key'),str(observation))
 processes=[];logs=[];test=None
 
-def start(name,args,cwd):
+def start(name,args,cwd,process_env=None):
     path=evidence/(name+'.log');out=path.open('xb');os.chmod(path,0o600);logs.append(out)
-    process=subprocess.Popen(args,cwd=cwd,env=env,stdout=out,stderr=subprocess.STDOUT,start_new_session=True);processes.append(process);return process
+    process=subprocess.Popen(args,cwd=cwd,env=env if process_env is None else process_env,stdout=out,stderr=subprocess.STDOUT,start_new_session=True);processes.append(process);return process
 context=ssl.create_default_context(cafile=str(evidence/'ca.pem'))
 def request(path,method,payload,headers):
     body=None if payload is None else json.dumps(payload).encode()
@@ -348,7 +348,12 @@ try:
     native_activated=True
     artifact('fixture.json',fixture)
     env['CORE_INSTALLATION_EPOCH']='2'
-    http=start('core-http',[php,'-S','127.0.0.1:'+str(http_port),'-t','public','public/index.php'],api)
+    http_env=env|{'PHP_CLI_SERVER_WORKERS':'4'}
+    php_profile=json.loads(subprocess.check_output([php,'-r',
+        'echo json_encode(["version"=>PHP_VERSION,"opcache_loaded"=>extension_loaded("Zend OPcache"),"opcache_enable"=>ini_get("opcache.enable"),"opcache_enable_cli"=>ini_get("opcache.enable_cli")]);'],env=http_env,text=True))
+    artifact('fixture-http-profile.json',{'schema':'txnode-machine-http-profile/v1','php':php_profile,
+             'workers':'4','instrumented_clone':True,'accepted_for_S3':False})
+    http=start('core-http',[php,'-S','127.0.0.1:'+str(http_port),'-t','public','public/index.php'],api,http_env)
     worker=start('core-workerman',[php,'artisan','ws-server','start','--host=127.0.0.1','--port='+str(ws_port)],api)
     proxy.start()
     deadline=time.monotonic()+10

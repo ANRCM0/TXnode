@@ -1,4 +1,4 @@
-name: Independent Machine transport cause diagnostic
+name: Independent Machine concurrent PHP diagnostic
 'on':
   workflow_dispatch: {}
 permissions:
@@ -10,7 +10,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 jobs:
   machine-transport:
-    name: Instrumented Machine transport cause collection (no acceptance)
+    name: Instrumented Machine four PHP workers (no acceptance)
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     env:
@@ -107,7 +107,7 @@ jobs:
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: machine-transport-cause-${{ github.sha }}
+        name: machine-four-workers-${{ github.sha }}
         path: '${{ runner.temp }}/native-machine-evidence/sources.json
 
           ${{ runner.temp }}/native-machine-evidence/compatibility-preflight.json
@@ -117,5 +117,7 @@ jobs:
 
           ${{ runner.temp }}/machine-transport-source/instrumentation.json
 
-          ${{ runner.temp }}/machine-transport-source/transport-overlay.patch'
+          ${{ runner.temp }}/machine-transport-source/transport-overlay.patch
+
+          ${{ runner.temp }}/native-machine-evidence/fixture-http-profile.json'
         if-no-files-found: warn
