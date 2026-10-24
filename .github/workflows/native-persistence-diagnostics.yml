@@ -1,4 +1,4 @@
-name: Frozen native upload software CPU windows
+name: Decode retained native upload Go symbols
 
 on:
   workflow_dispatch:
@@ -16,38 +16,39 @@ env:
 
 jobs:
   reproduce:
-    name: Collect bounded software CPU windows from frozen binaries
+    name: Decode Go symbols from retained CPU windows
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Install perf and record the unchanged runner context
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.0'
+      - name: Record the static decoder and runner context
         run: |
           set -euo pipefail
-          sudo -n true
-          sudo -n apt-get update
-          sudo -n apt-get install -y linux-tools-common linux-tools-generic
           mkdir -p "$RUNNER_TEMP/native-follow-up-environment"
           uname -a > "$RUNNER_TEMP/native-follow-up-environment/uname.txt"
           lscpu > "$RUNNER_TEMP/native-follow-up-environment/lscpu.txt"
-          findmnt -T "$RUNNER_TEMP" > "$RUNNER_TEMP/native-follow-up-environment/filesystem.txt"
-          sysctl kernel.perf_event_paranoid kernel.kptr_restrict > "$RUNNER_TEMP/native-follow-up-environment/perf-policy.txt"
+          go version > "$RUNNER_TEMP/native-follow-up-environment/decoder-go.txt"
           git rev-parse HEAD > "$RUNNER_TEMP/native-follow-up-environment/tool-source.txt"
-      - name: Verify recording controls then collect six independent upload CPU windows
+      - name: Resolve retained instruction addresses using exact original binaries
         env:
           GH_TOKEN: ${{ github.token }}
+          GOTOOLCHAIN: local
+          CGO_ENABLED: '0'
         run: |
-          python3 scripts/native-upload-perf-diagnostic.py \
-            --output "$RUNNER_TEMP/native-upload-perf" \
-            --reference "$RUNNER_TEMP/native-upload-perf-reference"
+          python3 scripts/native-upload-perf-symbolize.py \
+            --output "$RUNNER_TEMP/native-upload-perf-symbols" \
+            --reference "$RUNNER_TEMP/native-upload-symbol-reference"
       - name: Retain finite diagnostic evidence without claiming S3 acceptance
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-upload-perf-${{ github.sha }}
+          name: native-upload-perf-symbols-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/native-upload-perf/
+            ${{ runner.temp }}/native-upload-perf-symbols/
             ${{ runner.temp }}/native-follow-up-environment/
           if-no-files-found: error
