@@ -44,6 +44,8 @@ jobs:
         options: --health-cmd="redis-cli ping" --health-interval 5s --health-retries 12
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
     - name: Record isolated diagnostic source
       run: 'python3 - <<''PY''
 
@@ -55,7 +57,7 @@ jobs:
 
         def git(*args):return subprocess.check_output([''git'',*args])
 
-        root=Path(os.environ[''RUNNER_TEMP''])/''native-machine-evidence''
+        root=Path(os.environ[''RUNNER_TEMP''])/''machine-transport-source''
 
         root.mkdir(parents=True,exist_ok=True)
 
