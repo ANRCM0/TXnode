@@ -1,6 +1,6 @@
 # 原生持续负载与新旧性能证据
 
-日期：2026-10-23（Asia/Shanghai）。本文区分工具约定与具体 Actions 结果；源码实现
+日期：2026-10-24（Asia/Shanghai）。本文区分工具约定与具体 Actions 结果；源码实现
 本身不构成功能或生产验收。
 
 ## 入口与证据绑定
@@ -9,7 +9,86 @@
 
 所有功能、网络与负载执行仍限于 GitHub Actions。本地仅允许源码检查、Go 静态编译、格式和 AST 检查。缺少客户端、工具编译失败、实际负载不达标与证据不完整均不能记为通过。
 
-## 具体提交的运行结果
+## 2026-10-24 main 的定时 Actions 结果
+
+定时运行 `40040191779` 固定 main `90508592b4c0b433eb9a71f367694a981aa958e1`，
+tree `935e2d2f17c4d723ad025361216c697b8b818ccf`，最终结论为 failure。
+本次核验沿用已经启动的每日运行，没有手动重试以选择通过结果；正式工作流、旧
+`a1ad269`、五组参数、容量、同步、ACK 及原阈值均保持不变。
+
+| 范围 | 本次实际结果 | artifact |
+|---|---|---|
+| 持续负载 | 1810.552856540 秒、39 次生命周期循环；100/250/500/1000 会话档位均达到、业务错误为零 | `12539938013` |
+| 真实带负载故障 | 七项原始 Go JSON case 全部通过，源码 SHA/tree 与本次候选一致 | `12539191326` |
+| 正式 A/B | 106/120 measured，旧侧 51/60、新侧 55/60；七项达标、四项 incomplete、一项 unresolved | `12539504349` |
+| S3 账本 | `full_S3_accepted=false`；`PERFORMANCE`、`equivalent_ab`、`evidence_complete` 为 false | `12540346123` |
+
+四份旧侧 usage_v2 失败分别为 g1 short measurement、g1 long warmup、g3 upload
+warmup 和 g4 upload measurement，原日志均为 `USAGE_INTERVAL_UNKNOWN`。四份
+持久化 native envelope 的 payload digest 均匹配，各有一个已完成且不合格的 upload，
+实际字节为 1024/32768/32768/32768，均不超过原请求量。collector 未退休、无 I/O
+error，单操作 wall/elapsed 不倒退，仍在原 grant 内；至保守的单调 deadline 下界
+仍至少余 80.96 秒。依原源码逐项排除后指向全局顺序守卫；本次未捕获内存 `c.last`，
+不能把推定写成直接时钟对 capture，也不据此改写前一轮的 1 字节 download 证据。
+
+另十份失败均为 events/download：五组双侧全部 meter `CAPACITY_REACHED`、store
+未降级，单 meter 登记容量仍为 1152。原正式样本没有启用阶段 observer，不能借用
+其他诊断的阶段 wall 峰值解释它们的唯一原因。
+
+usage_v2/download 的五组样本两侧均完整，但 throughput 比率
+`0.9397034945178865`、CPU 比率 `1.0016318773549537`，最大 CV
+`0.2683557663955059 > 0.10`，按原判定为 unresolved，不记为已确认的性能退化或
+通过。四项 incomplete 为 usage_v2/upload、short、long 与 events/download。
+
+已完整下载本次正式性能 artifact：120 份原始 sample.json 与报告一致；116 个
+CPU/分配量窗口对应的 232 份 CPU 与 232 份 runtime 原文件逐字段及算式匹配，
+另外两份中断样本只留下起始 snapshot。四份下载的业务/夹具二进制 SHA-256 均
+与各自 build metadata 一致；十二项比较使用原工具纯计算重算一致。完整压缩包
+下载不等于 240 个 CPU 文件齐备，116 个数值窗口也不补足十份计量失败。
+
+S3 账本仍因缺少 `cpu_measurement` 提前终止后续 image/allocation 检查；没有生成
+的检查不能记为通过。独立 CPU profile job 的四份 download 诊断均 measured
+（artifact `12538649028`），不计入这 120 份正式样本。下节 `94d49420` 的
+111/120 保留为其所属源码的历史结果，本次 main 的正式结果为 106/120。
+
+## 2026-10-24 独立单 CPU Actions profile
+
+独立分支 `diagnose/native-single-cpu-actions` 的工具提交
+`7bcc42e91c55e4b382075d44ed2948f74502467b`，tree
+`4136b5e15f899d65dbade8ae7790df1877fff0f3`，仅改变实验工作流；生产源码、
+原测量脚本、公共模板和模块锁均与候选 `90508592` 相同。一次性 Actions
+`40041704618` / artifact `12540691528` 已完成，不替换上述默认调度的正式结果。
+
+执行前的 plan 固定原五组、2 秒预热、10 秒测量、4 线程及全部原阈值；从 driver
+允许的 `[0,1,2,3]` 中确定性选择 CPU 0，实际 exec driver affinity 为 `[0]`，
+子进程按内核规则继承，没有独立采样每个子线程的 affinity。没有设置
+`GOMAXPROCS` 或自行改变现有 ext4 挂载；原队列、fsync 和私有 ACK 保留。
+plan、driver、环境及报告摘要均已交叉核对。原 job 为 AMD EPYC 9V74，本 job 为
+Xeon Platinum 8573C，runner ID 也不同，不能从两个 job 的差异推导 CPU affinity
+是时钟或容量差异的唯一原因。
+
+本次 115/120 measured（旧侧 55/60、候选 60/60），五份缺口均为旧侧
+events/download 的 meter `CAPACITY_REACHED`，store healthy。usage_v2 本次两侧
+均完整，不构成原旧基线已修复或今后不再拒绝的证明。十二项比较中九项达标，
+一项 incomplete，另两项按原 5% 阈值要求 investigate：
+
+| 独立 profile 比较 | throughput 新/旧 | CPU/GiB 新/旧 | 最大 CV |
+|---|---:|---:|---:|
+| ordinary/long | 0.9999899371 | 1.1188543557 | 0.0592052522 |
+| events/long | 0.9994738247 | 1.0738371596 | 0.0764985171 |
+
+两项 CV 均低于原 10% 噪声上限，不能按噪声未决或样本缺失处理，也不能用候选
+60/60 覆盖旧侧缺口及这两项越界。所有 120 份 sample、240 份 CPU 和 240 份
+runtime 原文件，以及 CPU/分配量算式、源码/模板/模块摘要和十二项比较均匹配；
+本 artifact 未保留四份业务/夹具二进制，不声称独立重算它们的 binary hash。
+
+采集 job 的 success 仅表示完整收集及验证 120 个 cell；其 measurement step 为
+failure，原报告 `accepted=false`，独立 envelope 也保留
+`collection_complete=true`、`accepted=false` 和 `full_S3_accepted=false`。
+本 profile 没有自己的 30 分钟 soak，不与默认 job 的 soak 拼接成一次通过。
+实验工作流不合入 main，原始默认与单 CPU 两份失败结果都保留。
+
+## 2026-10-23 最终运行时候选的历史结果
 
 最终运行时候选 `94d494202ba5f990494b692a4a67e237805f4cb7`，tree
 `72699fc5973bee9e006cd82ee9f2930bbeaa26f7`，完整 native Actions

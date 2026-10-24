@@ -4,6 +4,36 @@
 [NEXT-DEVELOPMENT.zh.md](NEXT-DEVELOPMENT.zh.md)，严格互通入口见
 [INTEROP.md](INTEROP.md)。历史 `a6d0e96` 的“29 通过、6 跳过”不代表当前候选。
 
+## 2026-10-24 Actions 执行环境复核
+
+main `90508592b4c0b433eb9a71f367694a981aa958e1` 的定时 native Actions
+`40040191779` 已完成，正式 A/B 为 106/120 measured（旧侧 51/60、新侧 55/60），
+完整 S3 仍为 false。本次没有手动重试同一正式运行来挑选通过结果。四份旧侧
+usage_v2 发生 `USAGE_INTERVAL_UNKNOWN`，十份 events/download 触及原 1152
+事件容量且 store healthy；七项比较达标、四项缺样本、一项 usage_v2/download
+因 CV `0.2683557663955059 > 0.10` 未决，不能称为已确认退化。
+
+四份拒绝的原 native envelope digest、实际字节和 grant/deadline 已逐项核对，原
+条件排除指向全局顺序守卫，但本次没有内存 `c.last` capture。120 份 sample 与
+报告相符，116 个 CPU/分配量窗口对应 232 份 CPU 和 232 份 runtime 原文件；
+四份下载的二进制摘要匹配。持续负载为 1810.552856540 秒、39 次生命周期循环，
+四档达到 100/250/500/1000、业务错误为零；七项带负载故障实际通过。
+正式、soak、S3 artifacts 分别为 `12539504349`、`12539938013`、
+`12540346123`。历史 `94d49420` 的 111/120 与本次 106/120 分别保留。
+
+同一候选的独立单 CPU profile `40041704618` / artifact `12540691528` 为
+115/120 measured，旧侧 55/60、候选 60/60；五份失败全部为旧侧
+events/download 的 meter 容量。该 profile 的 ordinary/long 与 events/long
+CPU/GiB 比率分别为 `1.1188543556860076`、`1.0738371596011695`，对应 CV
+`0.059205252205926616`、`0.07649851709072823`，按原规则为越界调查项。
+九项比较达标、一项 incomplete，不把这两项当噪声或旧侧缺口处理。
+
+driver affinity 从原 `[0,1,2,3]` 固定为 `[0]`，原 fsync、容量、ACK 和阈值
+保留；240 份 CPU 与 240 份 runtime 原文件均与报告及算式匹配。两个 job 的
+runner ID/主机型号不同，不能把结果差异单独归因于 affinity。采集 job success
+与测量 step failure、原报告 `accepted=false` 分别记录，不与正式 soak 拼接为
+完整 S3。实验工具 `7bcc42e9` 仅在独立分支，生产源码及正式工作流不变。
+
 ## 2026-10-24 验收补项与完成审计
 
 Mieru 的目标失败互通原来仅执行 TCP 承载。测试候选 `66f171d6` 将原断言分别在
@@ -36,7 +66,7 @@ Core C2、镜像冒烟和完整 Machine 通过。full artifact `12517082074` 绑
 | S1 | 固定版本 REALITY、Naive 与 Mihomo TUIC 已进入严格矩阵；两个上游不适用组合单列，不计通过 |
 | S2-A | smux/yamux UDP、统一 owner/路由/限速/计量、父子撤权及实例隔离已有真实用例 |
 | S2-B | 官方 UDP 承载、损伤/重复/撤权/重载已有验收；新增 UDP 目标失败补项已在本次完整候选通过 |
-| S3 | 负载、故障与 A/B 工具及原始报告齐备；最近正式 A/B 只有 111/120 measured，完整 S3 未通过 |
+| S3 | 负载、故障与 A/B 工具及原始报告齐备；main `90508592` 最近正式 A/B 为 106/120 measured，完整 S3 未通过；`94d49420` 的 111/120 为历史结果 |
 | S4 | 显式 Mieru 整形/低熵、连接 ID 跨 Reload 关闭、受限诊断与配置/回滚说明已有实现和测试 |
 
 开发镜像交付、Core 采用、正式标签和生产部署继续分别记账；本次测试补项不改变
