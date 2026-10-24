@@ -1,4 +1,4 @@
-name: Frozen native upload software CPU windows
+name: Native hardware CPU counter capability
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ env:
 
 jobs:
   reproduce:
-    name: Collect bounded software CPU windows from frozen binaries
+    name: Read hardware counter capability on a finite fixture
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -35,19 +35,15 @@ jobs:
           findmnt -T "$RUNNER_TEMP" > "$RUNNER_TEMP/native-follow-up-environment/filesystem.txt"
           sysctl kernel.perf_event_paranoid kernel.kptr_restrict > "$RUNNER_TEMP/native-follow-up-environment/perf-policy.txt"
           git rev-parse HEAD > "$RUNNER_TEMP/native-follow-up-environment/tool-source.txt"
-      - name: Verify recording controls then collect six independent upload CPU windows
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Record whether hardware cycles and instructions are available
         run: |
-          python3 scripts/native-upload-perf-diagnostic.py \
-            --output "$RUNNER_TEMP/native-upload-perf" \
-            --reference "$RUNNER_TEMP/native-upload-perf-reference"
+          python3 scripts/native-hardware-perf-probe.py --output "$RUNNER_TEMP/native-hardware-perf-capability"
       - name: Retain finite diagnostic evidence without claiming S3 acceptance
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-upload-perf-${{ github.sha }}
+          name: native-hardware-perf-capability-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/native-upload-perf/
+            ${{ runner.temp }}/native-hardware-perf-capability/
             ${{ runner.temp }}/native-follow-up-environment/
           if-no-files-found: error
