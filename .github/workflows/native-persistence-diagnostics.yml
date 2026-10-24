@@ -1,4 +1,4 @@
-name: Native software perf capability probe
+name: Decode retained native perf probe
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ env:
 
 jobs:
   reproduce:
-    name: Probe software CPU profiling capabilities
+    name: Decode the exact retained probe without recording
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -35,15 +35,17 @@ jobs:
           findmnt -T "$RUNNER_TEMP" > "$RUNNER_TEMP/native-follow-up-environment/filesystem.txt"
           sysctl kernel.perf_event_paranoid kernel.kptr_restrict > "$RUNNER_TEMP/native-follow-up-environment/perf-policy.txt"
           git rev-parse HEAD > "$RUNNER_TEMP/native-follow-up-environment/tool-source.txt"
-      - name: Record and decode a finite software CPU probe
+      - name: Decode original probe data after checking exact archive and tool hashes
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          python3 scripts/native-perf-probe.py --output "$RUNNER_TEMP/native-perf-probe"
+          python3 scripts/native-perf-decode-supplement.py --output "$RUNNER_TEMP/native-perf-decode-supplement"
       - name: Retain finite diagnostic evidence without claiming S3 acceptance
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-perf-probe-${{ github.sha }}
+          name: native-perf-decode-supplement-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/native-perf-probe/
+            ${{ runner.temp }}/native-perf-decode-supplement/
             ${{ runner.temp }}/native-follow-up-environment/
           if-no-files-found: error
