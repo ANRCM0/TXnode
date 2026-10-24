@@ -1,80 +1,85 @@
-name: Independent native persistence diagnostics
-
-on:
-  workflow_call:
-    inputs:
-      candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
-        required: true
-        type: string
-  workflow_dispatch:
-    inputs:
-      candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
-        required: true
-        type: string
-
+name: Independent S3 ledger rejection replay
+'on':
+  workflow_dispatch: {}
 permissions:
   contents: read
-
+  actions: read
 defaults:
   run:
     shell: bash
-
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  GOTOOLCHAIN: local
-  CGO_ENABLED: '0'
-
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 jobs:
-  persistence-diagnostics:
-    name: Unprofiled observer off on pairs (no S3 acceptance)
+  ledger-replay:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.candidate }}
-          fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.0'
-          cache-dependency-path: go.sum
-      - name: Verify immutable source and diagnostic contracts
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate }}
-        run: |
-          set -euo pipefail
-          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test -z "$(git status --porcelain)"
-          python3 -m unittest discover -s scripts -p 'test_native_cpu.py' -v
-      - name: Collect five alternating unprofiled observer pairs per side
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate }}
-        run: |
-          set -euo pipefail
-          python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --output artifacts/native-persistence-diagnostics --persistence-diagnostics-only --groups 5 --seconds 10 --warmup 2 --concurrency 4
-      - name: Publish diagnostic observations without an acceptance verdict
-        if: always()
-        run: |
-          if [[ -f artifacts/native-persistence-diagnostics/report.md ]]; then
-            cat artifacts/native-persistence-diagnostics/report.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Retain independent evidence including accounting failures
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-persistence-diagnostics-${{ inputs.candidate }}
-          path: |
-            artifacts/native-persistence-diagnostics/report.json
-            artifacts/native-persistence-diagnostics/report.md
-            artifacts/native-persistence-diagnostics/prefetch-*.log
-            artifacts/native-persistence-diagnostics/persistence-*/sample.json
-            artifacts/native-persistence-diagnostics/persistence-*/metadata.json
-            artifacts/native-persistence-diagnostics/persistence-*/server.log
-            artifacts/native-persistence-diagnostics/persistence-*/cpu-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/runtime-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/evidence.json
-            artifacts/native-persistence-diagnostics/persistence-*/bucket-after-*.json
-          if-no-files-found: error
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - uses: actions/download-artifact@v4
+      with:
+        name: native-soak-90508592b4c0b433eb9a71f367694a981aa958e1
+        run-id: 40040191779
+        github-token: ${{ github.token }}
+        path: evidence/native-soak-90508592b4c0b433eb9a71f367694a981aa958e1
+    - uses: actions/download-artifact@v4
+      with:
+        name: native-faults-90508592b4c0b433eb9a71f367694a981aa958e1
+        run-id: 40040191779
+        github-token: ${{ github.token }}
+        path: evidence/native-faults-90508592b4c0b433eb9a71f367694a981aa958e1
+    - uses: actions/download-artifact@v4
+      with:
+        name: native-performance-90508592b4c0b433eb9a71f367694a981aa958e1
+        run-id: 40040191779
+        github-token: ${{ github.token }}
+        path: evidence/native-performance-90508592b4c0b433eb9a71f367694a981aa958e1
+    - uses: actions/download-artifact@v4
+      with:
+        name: native-s3-acceptance-90508592b4c0b433eb9a71f367694a981aa958e1
+        run-id: 40040191779
+        github-token: ${{ github.token }}
+        path: evidence/archived-ledger
+    - name: Replay original failure and independently evaluate every fixed check
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: "python3 - <<'PY'\nfrom pathlib import Path\nimport ast,hashlib,json,os,subprocess,sys,textwrap,urllib.request\n\
+        candidate='90508592b4c0b433eb9a71f367694a981aa958e1'\nfixed='9f3ff8deff30c396721b6e81962a36e456923964'\noriginal='ea26568a5f687770f71a7d4fa7492f31fe9331f7'\n\
+        run_id=40040191779\nroot=Path(os.environ['RUNNER_TEMP'])/'s3-ledger-replay';root.mkdir()\ndef git(*a):return subprocess.check_output(['git',*a])\n\
+        def digest(b):return hashlib.sha256(b).hexdigest()\ndef api(path):\n    request=urllib.request.Request('https://api.github.com/repos/ANRCM0/TXnode/'+path,\n\
+        \        headers={'Authorization':'Bearer '+os.environ['GITHUB_TOKEN'],'Accept':'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'})\n\
+        \    with urllib.request.urlopen(request,timeout=30)as response:return json.load(response)\nrun=api('actions/runs/'+str(run_id));assert\
+        \ run['head_sha']==candidate and run['status']=='completed'\njobs=api('actions/runs/'+str(run_id)+'/jobs?per_page=100')['jobs']\n\
+        names={'SOAK':'Native 30 minute TCP UDP mux soak','FAULTS':'Native live load lifecycle durability and process faults','PERFORMANCE':'Same\
+        \ runner legacy candidate A B'}\noutcomes={key:next(j['conclusion']for j in jobs if j['name']==name)for key,name in\
+        \ names.items()}\nassert outcomes=={'SOAK':'success','FAULTS':'success','PERFORMANCE':'failure'},outcomes\narchive=json.loads(Path('evidence/archived-ledger/s3-acceptance.json').read_text())\n\
+        assert all(archive['checks'][key]==(value=='success')for key,value in outcomes.items())\nfiles=['scripts/native-s3-summary.py','scripts/test_native_s3_summary.py']\n\
+        for name in files:assert Path(name).read_bytes()==git('show',fixed+':'+name)\nunit=subprocess.run([sys.executable,'-m','unittest','discover','-s','scripts','-p','test_native_s3_summary.py','-v'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=45)\n\
+        (root/'unit.log').write_bytes(unit.stdout)\nassert unit.returncode==0 and 'Ran 7 tests'in unit.stdout.decode(),unit.stdout.decode()\n\
+        workflow=git('show',original+':.github/workflows/native-acceptance.yml').decode()\nsection=workflow.split('  acceptance:\\\
+        n',1)[1]\nold=textwrap.dedent(section.split(\"          python3 - <<'PY'\\n\",1)[1].split('\\n          PY',1)[0])\n\
+        ast.parse(old)\nold_path=root/'original-verifier.py';old_path.write_text(old+'\\n')\nenv=dict(os.environ);env.update(CANDIDATE_SHA=candidate,GITHUB_STEP_SUMMARY=str(root/'original-summary.md'))\n\
+        for key,value in outcomes.items():env[key+'_JOB']=value\nprior=subprocess.run([sys.executable,str(old_path)],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=30)\n\
+        (root/'original.log').write_bytes(prior.stdout)\nold_result=json.loads(Path('s3-acceptance.json').read_text())\n(root/'original-s3-acceptance.json').write_text(json.dumps(old_result,indent=2)+'\\\
+        n')\nassert prior.returncode!=0 and old_result==archive\nassert old_result['checks']['evidence_error']==\"'cpu_measurement'\"\
+        \nassert all(name not in old_result['checks']for name in ['process_cpu_windows','image_sizes','allocation_windows'])\n\
+        command=[sys.executable,'scripts/native-s3-summary.py','--candidate',candidate,'--evidence','evidence','--output',str(root/'fixed-s3-acceptance.json'),'--soak-job',outcomes['SOAK'],'--faults-job',outcomes['FAULTS'],'--performance-job',outcomes['PERFORMANCE'],'--step-summary',str(root/'fixed-summary.md')]\n\
+        after=subprocess.run(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=30)\n(root/'fixed.log').write_bytes(after.stdout)\n\
+        new_result=json.loads((root/'fixed-s3-acceptance.json').read_text())\nassert after.returncode!=0 and new_result['full_S3_accepted']is\
+        \ False\nexpected={'SOAK':True,'FAULTS':True,'PERFORMANCE':False,'same_candidate':True,'sustained_loaded_lifecycle':True,'loaded_faults':True,'equivalent_ab':False,'process_cpu_windows':False,'image_sizes':True,'allocation_windows':False,'evidence_complete':False}\n\
+        assert all(new_result['checks'][key]is value for key,value in expected.items()),new_result\nassert new_result['evidence_errors']=={'process_cpu_windows':{'error':'KeyError','field':'cpu_measurement'}}\n\
+        input_files=[Path('evidence')/('native-'+kind+'-'+candidate)/name for kind,name in [('soak','soak-summary.json'),('faults','summary.json'),('performance','report.json')]]\n\
+        proof={'schema':'txnode-s3-ledger-replay/v1','measurement_source':candidate,'measurement_run':run_id,'original_tool_source':original,'fixed_tool_source':fixed,'fixed_tool_tree':git('rev-parse',fixed+'^{tree}').decode().strip(),'workflow_source':git('rev-parse','HEAD').decode().strip(),'original_inline_sha256':digest((old+'\\\
+        n').encode()),'source_sha256':{name:digest(Path(name).read_bytes())for name in files},'input_sha256':{str(p):digest(p.read_bytes())for\
+        \ p in input_files},'source_job_outcomes':outcomes,'original_matches_archived_ledger':True,'original_exit_code':prior.returncode,'fixed_exit_code':after.returncode,'fixed_expected_checks':expected,'unit_tests':7,'full_S3_accepted':False,'scope':'Read-only\
+        \ replay of the identical archived failure in Actions. No load, soak, A/B sampling, source substitution, threshold\
+        \ change or acceptance repair.'}\n(root/'proof.json').write_text(json.dumps(proof,indent=2)+'\\n')\nprint(json.dumps({'original_matches_archive':True,'fixed_expected_checks':expected,'unit_tests':7,'full_S3_accepted':False}))\n\
+        PY"
+    - name: Retain both rejecting ledgers and exact replay provenance
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: native-s3-ledger-replay-${{ github.sha }}
+        path: ${{ runner.temp }}/s3-ledger-replay/
+        if-no-files-found: error
