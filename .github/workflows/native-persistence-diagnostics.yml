@@ -1,80 +1,55 @@
-name: Independent native persistence diagnostics
-
-on:
-  workflow_call:
-    inputs:
-      candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
-        required: true
-        type: string
-  workflow_dispatch:
-    inputs:
-      candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
-        required: true
-        type: string
-
+name: Independent PHP fixture concurrency proof
+'on':
+  workflow_dispatch: {}
 permissions:
   contents: read
-
 defaults:
   run:
     shell: bash
-
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  GOTOOLCHAIN: local
-  CGO_ENABLED: '0'
-
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 jobs:
-  persistence-diagnostics:
-    name: Unprofiled observer off on pairs (no S3 acceptance)
+  php-concurrency:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 8
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.candidate }}
-          fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.0'
-          cache-dependency-path: go.sum
-      - name: Verify immutable source and diagnostic contracts
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate }}
-        run: |
-          set -euo pipefail
-          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test -z "$(git status --porcelain)"
-          python3 -m unittest discover -s scripts -p 'test_native_cpu.py' -v
-      - name: Collect five alternating unprofiled observer pairs per side
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate }}
-        run: |
-          set -euo pipefail
-          python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --output artifacts/native-persistence-diagnostics --persistence-diagnostics-only --groups 5 --seconds 10 --warmup 2 --concurrency 4
-      - name: Publish diagnostic observations without an acceptance verdict
-        if: always()
-        run: |
-          if [[ -f artifacts/native-persistence-diagnostics/report.md ]]; then
-            cat artifacts/native-persistence-diagnostics/report.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Retain independent evidence including accounting failures
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-persistence-diagnostics-${{ inputs.candidate }}
-          path: |
-            artifacts/native-persistence-diagnostics/report.json
-            artifacts/native-persistence-diagnostics/report.md
-            artifacts/native-persistence-diagnostics/prefetch-*.log
-            artifacts/native-persistence-diagnostics/persistence-*/sample.json
-            artifacts/native-persistence-diagnostics/persistence-*/metadata.json
-            artifacts/native-persistence-diagnostics/persistence-*/server.log
-            artifacts/native-persistence-diagnostics/persistence-*/cpu-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/runtime-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/evidence.json
-            artifacts/native-persistence-diagnostics/persistence-*/bucket-after-*.json
-          if-no-files-found: error
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.2'
+        coverage: none
+    - name: Compare original serial environment with the bounded worker pool
+      run: "python3 - <<'PY'\nfrom pathlib import Path\nimport ast,hashlib,json,os,subprocess,sys\ncandidate='79ef3f4330549ea5d6a8af4e7d025ad8fce89f18'\n\
+        original='8735d7ac01a45360900d93fa0d38721caf0f33e8'\nroot=Path(os.environ['RUNNER_TEMP'])/'php-concurrency-proof'\n\
+        root.mkdir()\ndef git(*args):return subprocess.check_output(['git',*args])\ndef digest(data):return hashlib.sha256(data).hexdigest()\n\
+        helper='scripts/tests/node-native-machine/php_server.py'\ntest='scripts/tests/node-native-machine/php_server_test.py'\n\
+        old_run=git('show',original+':scripts/tests/node-native-machine/run.py')\nold_ast=ast.parse(old_run)\nold_start=next(n\
+        \ for n in old_ast.body if isinstance(n,ast.FunctionDef)and n.name=='start')\nassert any(isinstance(n,ast.Call)and\
+        \ isinstance(n.func,ast.Attribute)and n.func.attr=='Popen'and any(k.arg=='env'and isinstance(k.value,ast.Name)and\
+        \ k.value.id=='env'for k in n.keywords)for n in ast.walk(old_start))\nassert any(isinstance(n,ast.Call)and isinstance(n.func,ast.Name)and\
+        \ n.func.id=='start'and len(n.args)==3 and isinstance(n.args[0],ast.Constant)and n.args[0].value=='core-http'for n\
+        \ in ast.walk(old_ast))\nfiles={p:git('show',candidate+':'+p)for p in [helper,test]}\nfor p,data in files.items():assert\
+        \ Path(p).read_bytes()==data\nidentity=b'def core_http_environment(environment):\\n    return dict(environment)\\\
+        n'\nenv=dict(os.environ);env.pop('PHP_CLI_SERVER_WORKERS',None)\nresults={}\nfor mode in ['single','fixed']:\n   \
+        \ directory=root/mode;directory.mkdir()\n    (directory/'php_server_test.py').write_bytes(files[test])\n    (directory/'php_server.py').write_bytes(identity\
+        \ if mode=='single'else files[helper])\n    proc=subprocess.run([sys.executable,'-m','unittest','discover','-s',str(directory),'-p','php_server_test.py','-v'],env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=45)\n\
+        \    (root/(mode+'.log')).write_bytes(proc.stdout)\n    text=proc.stdout.decode(errors='replace')\n    if mode=='single':\n\
+        \        matched=proc.returncode!=0 and 'TimeoutError: timed out'in text and 'Ran 1 test'in text and 'test_busy_request_does_not_block_an_independent_request'in\
+        \ text\n    else:matched=proc.returncode==0 and 'Ran 1 test'in text and '\\nOK\\n'in text\n    results[mode]={'exit_code':proc.returncode,'expected_result_observed':matched}\n\
+        proof={'schema':'txnode-machine-php-concurrency-proof/v1','candidate':candidate,'candidate_tree':git('rev-parse',candidate+'^{tree}').decode().strip(),'tool_source':git('rev-parse','HEAD').decode().strip(),'original':original,'original_run_sha256':digest(old_run),'candidate_sha256':{p:digest(v)for\
+        \ p,v in files.items()},'single_environment_adapter_sha256':digest(identity),'single_mode':'Replicates original unchanged\
+        \ child environment through an identity adapter under the new network harness; not an old source-file execution.','results':results,'accepted_for_S3':False,'scope':'Same\
+        \ runner, PHP version, request barrier and two-second independent-request deadline; only child PHP worker environment\
+        \ differs. No Core or Node production workload is replaced.'}\n(root/'result.json').write_text(json.dumps(proof,indent=2)+'\\\
+        n')\nassert all(v['expected_result_observed']for v in results.values()),results\nprint(json.dumps(results))\nPY"
+    - name: Retain synthetic network proof
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: machine-php-concurrency-${{ github.sha }}
+        path: '${{ runner.temp }}/php-concurrency-proof/*.log
+
+          ${{ runner.temp }}/php-concurrency-proof/result.json'
+        if-no-files-found: error
