@@ -1,4 +1,4 @@
-name: Frozen native ordinary upload CPU profiles
+name: Native software perf capability probe
 
 on:
   workflow_dispatch:
@@ -16,43 +16,34 @@ env:
 
 jobs:
   reproduce:
-    name: Profile ordinary upload on frozen binaries
+    name: Probe software CPU profiling capabilities
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.0'
-      - name: Record the original runner context and require bounded tracing
+      - name: Install perf and record the unchanged runner context
         run: |
           set -euo pipefail
           sudo -n true
-          if ! command -v strace >/dev/null; then
-            sudo -n apt-get update
-            sudo -n apt-get install -y strace
-          fi
+          sudo -n apt-get update
+          sudo -n apt-get install -y linux-tools-common linux-tools-generic
           mkdir -p "$RUNNER_TEMP/native-follow-up-environment"
           uname -a > "$RUNNER_TEMP/native-follow-up-environment/uname.txt"
           lscpu > "$RUNNER_TEMP/native-follow-up-environment/lscpu.txt"
           findmnt -T "$RUNNER_TEMP" > "$RUNNER_TEMP/native-follow-up-environment/filesystem.txt"
-          strace -V > "$RUNNER_TEMP/native-follow-up-environment/strace.txt"
+          sysctl kernel.perf_event_paranoid kernel.kptr_restrict > "$RUNNER_TEMP/native-follow-up-environment/perf-policy.txt"
           git rev-parse HEAD > "$RUNNER_TEMP/native-follow-up-environment/tool-source.txt"
-      - name: Read the exact reference and collect six separate diagnostic profiles
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Record and decode a finite software CPU probe
         run: |
-          python3 scripts/native-upload-cpu-profile.py \
-            --output "$RUNNER_TEMP/native-cpu-latency-follow-up" \
-            --reference "$RUNNER_TEMP/native-cpu-latency-reference"
+          python3 scripts/native-perf-probe.py --output "$RUNNER_TEMP/native-perf-probe"
       - name: Retain finite diagnostic evidence without claiming S3 acceptance
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-upload-cpu-profile-${{ github.sha }}
+          name: native-perf-probe-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/native-cpu-latency-follow-up/
+            ${{ runner.temp }}/native-perf-probe/
             ${{ runner.temp }}/native-follow-up-environment/
           if-no-files-found: error
