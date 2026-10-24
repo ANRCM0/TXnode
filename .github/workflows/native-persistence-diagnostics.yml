@@ -1,80 +1,48 @@
-name: Independent native persistence diagnostics
-
-on:
-  workflow_call:
-    inputs:
-      candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
-        required: true
-        type: string
-  workflow_dispatch:
-    inputs:
-      candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
-        required: true
-        type: string
-
+name: Independent single CPU long-workload investigation
+'on':
+  workflow_dispatch: {}
 permissions:
   contents: read
-
+  actions: read
 defaults:
   run:
     shell: bash
-
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
   GOTOOLCHAIN: local
   CGO_ENABLED: '0'
-
 jobs:
-  persistence-diagnostics:
-    name: Unprofiled observer off on pairs (no S3 acceptance)
+  long-cpu:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.candidate }}
-          fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.0'
-          cache-dependency-path: go.sum
-      - name: Verify immutable source and diagnostic contracts
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate }}
-        run: |
-          set -euo pipefail
-          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test -z "$(git status --porcelain)"
-          python3 -m unittest discover -s scripts -p 'test_native_cpu.py' -v
-      - name: Collect five alternating unprofiled observer pairs per side
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate }}
-        run: |
-          set -euo pipefail
-          python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --output artifacts/native-persistence-diagnostics --persistence-diagnostics-only --groups 5 --seconds 10 --warmup 2 --concurrency 4
-      - name: Publish diagnostic observations without an acceptance verdict
-        if: always()
-        run: |
-          if [[ -f artifacts/native-persistence-diagnostics/report.md ]]; then
-            cat artifacts/native-persistence-diagnostics/report.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Retain independent evidence including accounting failures
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-persistence-diagnostics-${{ inputs.candidate }}
-          path: |
-            artifacts/native-persistence-diagnostics/report.json
-            artifacts/native-persistence-diagnostics/report.md
-            artifacts/native-persistence-diagnostics/prefetch-*.log
-            artifacts/native-persistence-diagnostics/persistence-*/sample.json
-            artifacts/native-persistence-diagnostics/persistence-*/metadata.json
-            artifacts/native-persistence-diagnostics/persistence-*/server.log
-            artifacts/native-persistence-diagnostics/persistence-*/cpu-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/runtime-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/evidence.json
-            artifacts/native-persistence-diagnostics/persistence-*/bucket-after-*.json
-          if-no-files-found: error
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - uses: actions/setup-go@v5
+      with:
+        go-version: 1.26.0
+        cache-dependency-path: go.sum
+    - uses: actions/download-artifact@v4
+      with:
+        name: native-actions-single-cpu-90508592b4c0b433eb9a71f367694a981aa958e1-40041704618
+        run-id: 40041704618
+        github-token: ${{ github.token }}
+        path: ${{ runner.temp }}/long-cpu-reference
+    - name: Record unchanged-host environment and diagnostic tool
+      run: "set -euo pipefail\nif ! command -v strace; then\n  sudo apt-get update -qq\n  sudo apt-get install -y strace\n\
+        fi\nsudo -n true\nmkdir \"$RUNNER_TEMP/long-cpu-environment\"\nuname -a > \"$RUNNER_TEMP/long-cpu-environment/environment.txt\"\
+        \nlscpu >> \"$RUNNER_TEMP/long-cpu-environment/environment.txt\"\nfindmnt -T \"$RUNNER_TEMP\" >> \"$RUNNER_TEMP/long-cpu-environment/environment.txt\"\
+        \nstrace -V >> \"$RUNNER_TEMP/long-cpu-environment/environment.txt\"\n"
+    - name: Reproduce only the two CPU cases then collect bounded syscall summaries
+      run: python3 scripts/native-long-cpu-investigation.py --output "$RUNNER_TEMP/native-long-cpu" --reference-directory
+        "$RUNNER_TEMP/long-cpu-reference"
+    - name: Retain diagnostic observations without an acceptance claim
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: native-long-cpu-${{ github.sha }}
+        path: '${{ runner.temp }}/native-long-cpu/
+
+          ${{ runner.temp }}/long-cpu-environment/'
+        if-no-files-found: error
