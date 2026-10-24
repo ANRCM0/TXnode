@@ -320,10 +320,10 @@ func (c *NativeCollector) CompleteIO(op *Operation, direction string, n int64, i
 		c.failed.Store(true)
 		return ErrUnknown
 	}
-	now := time.Now()
-	at := stamp{now.UnixNano(), int64(now.Sub(c.origin))}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	now := time.Now()
+	at := stamp{now.UnixNano(), int64(now.Sub(c.origin))}
 	for i := range c.state.Events {
 		e := &c.state.Events[i]
 		if e.Sequence != op.sequence {
