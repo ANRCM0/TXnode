@@ -18,7 +18,7 @@ import uuid
 from tls_proxy import NativeTLSProxy
 from preflight import inspect as compatibility_preflight
 from native_setup import prepare as prepare_native, render_credentials
-from recovery_diagnostic import valid_recovery
+from recovery_diagnostic import FAILURE_CLASSES, valid_recovery
 
 if len(sys.argv)!=4:raise SystemExit('usage: run.py API NODE NEW_EVIDENCE')
 api,node,evidence=(Path(p).resolve() for p in sys.argv[1:]);scripts=Path(__file__).resolve().parent
@@ -131,7 +131,7 @@ def failure_summary(category):
                     and type(shutdown['completed_children']) is int and 0 <= shutdown['completed_children'] <= shutdown['tracked_children']
                     and type(shutdown['failed_children']) is int and 0 <= shutdown['failed_children'] <= 2
                     and isinstance(shutdown['failure_classes'], list) and len(shutdown['failure_classes']) == shutdown['failed_children']
-                    and all(type(item) is str and item in {'other', 'authority_node', 'authority_machine', 'context_canceled', 'context_deadline', 'provider', 'authorization', 'native_usage'} for item in shutdown['failure_classes'])
+                    and all(type(item) is str and item in FAILURE_CLASSES for item in shutdown['failure_classes'])
                     and isinstance(shutdown['wait_chains'], list) and len(shutdown['wait_chains']) <= 16
                     and all(isinstance(chain, str) and 1 <= len(chain.split('>')) <= 12
                             and all(label in wait_labels for label in chain.split('>')) for chain in shutdown['wait_chains'])):
