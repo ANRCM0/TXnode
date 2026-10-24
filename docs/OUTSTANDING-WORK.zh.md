@@ -4,6 +4,46 @@
 [NEXT-DEVELOPMENT.zh.md](NEXT-DEVELOPMENT.zh.md)，严格互通入口见
 [INTEROP.md](INTEROP.md)。历史 `a6d0e96` 的“29 通过、6 跳过”不代表当前候选。
 
+## 2026-10-25 候选记录编码复用
+
+运行时候选 `613d6a36357d0a4888fe9be3ac7faec29a948861` 在 journal writer 中
+复用收据校验已经生成的 canonical bucket JSON。完整调用链仍为原 meter claim
+进入单一 Coordinator worker，再由 `Store.persistClaim` 在原 writeMu 下创建
+私有快照，`persistRecord` 执行全部原 record 校验并复用该字节，随后按原顺序
+完成摘要、文件/目录同步、head 发布及清理，返回原 durableReceipt，再由原
+Coordinator 执行 private ACK。读取/恢复兼容入口 `validateRecord` 调用同一
+完整校验；record schema、字节格式、校验条件及顺序、容量、fsync 和 ACK 保持。
+
+精确候选的 PR CI `40113103424` 和完整功能 `40114164643` 均成功；后者实际
+执行 Go/race、runtime stability、strict quick/full、固定 Core C2/Machine 和
+镜像冒烟。full 原始事件为 37 顶层/29 子测试通过、2 项不适用；Machine 九份
+原批次重放与九行唯一 SQL 记录一致，不代表独立完整财务对账或生产 PKI 认证。
+
+独立编码诊断 `40113618442` / artifact `12567223820` 的三项根回归/race、
+39 个子用例全部通过。五组交替原始算法/复用算法的 128-event 准备耗时中位
+324845 -> 209500 ns/op，1-event 为 8253 -> 7990；代价为每 record 多一次分配，
+分别多 2438 / 1409 B/op。这是同一候选内的局部 wall benchmark，不是 CPU/GiB
+或完整 S3 通过。诊断 workflow/driver 留在独立分支。
+
+完整 native Actions `40114161320` 已全部成功，使用原五组参数、阈值和固定
+`4904a193` 勘误基线。完整 A/B 为 120/120 measured（双方各 60），十二项比较
+全部满足原阈值；最小吞吐比率 0.99865、最大 CPU/GiB 比率 1.02806，最大 CV
+0.05366。持续负载 1812.103511547 秒、40 次带负载生命周期循环，四档均达到
+100/250/500/1000 会话，TCP/UDP/mux 错误和饥饿 worker 均为零；回收后的原
+goroutine/FD/heap/存活对象预算通过。七项带负载故障和七项旧侧 collector/race
+均通过，无 skip/fail。
+
+原始 120 份 sample、240 份 CPU、240 份 runtime、四份二进制、362 份 soak
+资源记录、源码/模板/模块锁及全部 artifact ZIP 摘要已核对。重算的最终账本
+与 artifact `12569830105` 完全一致，十三项 checks 均为 true，
+`full_S3_accepted=true`。完整数字及产物 ID 见 `NATIVE-PERFORMANCE.zh.md`。
+
+该通过严格限定于显式 `legacy-clock-serialized-v1` 的固定 Linux Actions
+回环范围。上一轮勘误 119/120、原基线 106/120 及单 CPU 115/120 的失败继续
+保留，不改写原 `a1ad269` 为已通过，也不证明所有环境均无容量缺口。最终 PR
+文档 head、合并后 main 和实际镜像发布仍需分别记账；Core 采用、正式标签、
+物理多机及生产试运行未由此验收。
+
 ## 2026-10-24 时钟勘误入口与窗口 profile
 
 经用户明确选择新增独立基线 `legacy-clock-serialized-v1`，固定旧侧提交
