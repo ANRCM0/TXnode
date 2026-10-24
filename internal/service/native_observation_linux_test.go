@@ -361,7 +361,7 @@ func TestNativePacketPeriodKeepsUnsampledOldTailAndFreshBytesSeparate(t *testing
 }
 
 func TestNativeObservationStorageFailureKeepsActualTrafficAndStopsRetrying(t *testing.T) {
-	for _, mode := range []string{"observer_capacity", "observer_unwritable", "event_capacity", "disabled"} {
+	for _, mode := range []string{"observer_capacity", "observer_unwritable", "event_capacity", "event_capacity_before_attach", "disabled"} {
 		t.Run(mode, func(t *testing.T) {
 			tcp, _ := nativeObservationOrigins(t)
 			port := authorityPort(t)
@@ -369,7 +369,8 @@ func TestNativeObservationStorageFailureKeepsActualTrafficAndStopsRetrying(t *te
 			s := authorityService(t, p)
 			s.eventOwner = &usagebucket.ProcessOwner{}
 			s.cfg.UsageObserver.Enabled = mode != "disabled"
-			s.cfg.UsageEventStore.Enabled = mode == "event_capacity"
+			eventCapacity := mode == "event_capacity" || mode == "event_capacity_before_attach"
+			s.cfg.UsageEventStore.Enabled = eventCapacity
 			s.cfg.UsageObserver.Directory = filepath.Join(t.TempDir(), "observations")
 			s.cfg.UsageEventStore.Directory = filepath.Join(t.TempDir(), "events")
 			if mode == "observer_capacity" {
@@ -382,13 +383,28 @@ func TestNativeObservationStorageFailureKeepsActualTrafficAndStopsRetrying(t *te
 				}
 				s.cfg.UsageObserver.Directory = blocked
 			}
-			if mode == "event_capacity" {
+			if eventCapacity {
 				s.cfg.UsageEventStore.MaxBytes = 1
+			}
+			factoryCalls := 0
+			if mode == "event_capacity_before_attach" {
+				s.eventFactory = func(dir string, store usagebucket.StoreOptions, options usagebucket.CoordinatorOptions) (*usagebucket.Coordinator, error) {
+					factoryCalls++
+					consumer, err := usagebucket.NewAsyncCoordinator(dir, store, options)
+					if err != nil {
+						return nil, err
+					}
+					nativeObservationWait(t, func() bool { return consumer.Status().Closed })
+					return consumer, nil
+				}
 			}
 			s.initUsageObserver()
 			s.initLocalEventConsumer()
 			defer s.closeUsageObserver()
 			defer s.closeLocalEventConsumer()
+			if mode == "event_capacity_before_attach" && s.eventConsumerState != "LOCAL_ATTACH_REFUSED" {
+				t.Fatal("fixture did not fail the worker before attachment", s.eventConsumerState)
+			}
 			s.lastConfig = p.bootstrap.Config
 			s.updateUserState(p.bootstrap.Users, srcBootstrap)
 			if !s.startKernel(s.lastConfig, p.bootstrap.Users) {
@@ -417,10 +433,18 @@ func TestNativeObservationStorageFailureKeepsActualTrafficAndStopsRetrying(t *te
 				if s.usageObserverMetrics()["state"] != "storage_unavailable" {
 					t.Fatal("unwritable observer failure hidden")
 				}
-			case "event_capacity":
+			case "event_capacity", "event_capacity_before_attach":
 				nativeObservationWait(t, func() bool { return s.localEventConsumer().Status().Closed })
-				if s.localEventMetrics()["state"] != "stopped" {
-					t.Fatal("event storage failure hidden", s.localEventMetrics())
+				metrics := s.localEventMetrics()
+				if metrics["state"] != "stopped" || metrics["reason"] != "STORE_CAPACITY_REACHED" {
+					t.Fatal("event storage failure hidden", metrics)
+				}
+				original := s.localEventConsumer()
+				for i := 0; i < 3; i++ {
+					s.initLocalEventConsumer()
+				}
+				if s.localEventConsumer() != original || (mode == "event_capacity_before_attach" && factoryCalls != 1) {
+					t.Fatal("failed event consumer was retried", factoryCalls)
 				}
 			case "disabled":
 				if s.observer != nil || s.localEventConsumer() != nil {
@@ -434,6 +458,28 @@ func TestNativeObservationStorageFailureKeepsActualTrafficAndStopsRetrying(t *te
 				t.Fatal("observation failure changed actual v1 traffic", got)
 			}
 		})
+	}
+}
+
+func TestNativeObservationHealthyAttachRefusalRemainsVisible(t *testing.T) {
+	consumer, err := usagebucket.NewAsyncCoordinator(t.TempDir(), usagebucket.StoreOptions{}, usagebucket.CoordinatorOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := consumer.Close(ctx); err != nil {
+			t.Error(err)
+		}
+	}()
+	nativeObservationWait(t, func() bool { return !consumer.Status().Opening })
+	if status := consumer.Status(); status.Degraded || status.Closed {
+		t.Fatal("healthy refusal fixture failed to open", status)
+	}
+	s := &Service{eventConsumer: consumer, eventConsumerState: "LOCAL_ATTACH_REFUSED"}
+	if metrics := s.localEventMetrics(); metrics["state"] != "LOCAL_ATTACH_REFUSED" || metrics["authorizes"] != false {
+		t.Fatal("healthy attachment refusal lost its state", metrics)
 	}
 }
 
