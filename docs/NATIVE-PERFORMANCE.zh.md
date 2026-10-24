@@ -31,6 +31,45 @@ S3 汇总拒绝身份缺失、原/勘误交叉或不匹配的 baseline build。�
 10 秒测量、4 线程、完整 120 cell、队列、fsync、ACK 和 5%/10% 阈值保持。
 本节只声明新入口及源码差异；实际 Actions 结果需要单独记录，不因此宣称通过。
 
+### 勘误 profile 的首轮完整 Actions
+
+运行 `40105537448` 固定候选 `6deacea61c574f0a1fced95d6c65db2c150f0a72`，tree
+`3148d1895668e8989148ed7681ab39253da86a57`，显式选择上述固定 `4904a193` 勘误
+基线。没有设置 CPU affinity、GOMAXPROCS 或替换文件系统，原完整参数保持。
+最终为 failure，S3 账本如实拒绝；本轮不重试以选择通过结果。
+
+| 范围 | 实际结果 | artifact |
+|---|---|---|
+| 来源与补丁 | 固定 SHA/tree、唯一父提交/变更文件及逐字节采时移动均匹配 | `12564681684` |
+| 旧侧 collector | 七项原生 collector 回归/race 全部通过，无跳过或失败 | `12564413106` |
+| 带负载故障 | 七项实际负载故障全部通过，无跳过或失败 | `12564915060` |
+| 持续负载 | 1810.605879718 秒、39 次生命周期循环；100/250/500/1000 会话档位均达到，业务错误为零 | `12565162183` |
+| 完整 A/B | 119/120 measured，旧侧 60/60、候选 59/60；十一项达标、一项 incomplete | `12565696275` |
+| S3 账本 | `full_S3_accepted=false`，`PERFORMANCE` / `equivalent_ab` / `process_cpu_windows` 为 false | `12565316688` |
+
+唯一缺口为 g4 候选 events/download 的 shutdown-accounting。原始 node-stop 与
+coordinator-close 快照均保留 meter `CAPACITY_REACHED`，登记容量 1152，首个
+缺口 sequence 28673、实际 5 字节 upload；累计 dropped events 239476。store
+仍为 healthy、220 个文件及 19,683,325 字节，coordinator 最终另记录
+`STORE_EVIDENCE_INVALID`。这些状态不等于 store 硬容量耗尽或降级，也不能仅凭
+关闭后快照确定某次 fsync 的唯一责任；原正式样本未启用阶段 observer。
+
+完整下载并核对 120 份 sample、240 份 CPU、240 份 runtime、四份实际二进制，
+模块锁/模板/源码摘要及十二项比较重算均匹配。该失败样本有完整数值 CPU 和分配
+窗口，但原 CPU 谓词同时要求 `status=measured`，所以 CPU gate 仍拒绝它；
+`image_sizes`、`allocation_windows`、`evidence_complete` 均为 true，不能据此
+补足其计量尾部。重算的 S3 账本与归档 JSON 完全相同，原拒绝条件不变。
+
+同候选的 PR CI `40105527049` 与完整功能运行 `40105980034` 成功：Go/race、
+strict quick/full、runtime stability、固定 Core Machine/C2 及镜像冒烟均执行。
+full 原始事件按固定 manifest 重算为 37 个顶层、29 个子测试通过，2 个固定上游
+不可用组合单列。独立诊断四份 download、8 份 CPU/8 份 runtime 和四份 profile
+亦完成核对（`12564602515`），不进入正式 120 cell。
+
+本次十一项完整比较在本 profile 的原预算内，不消除原 `a1ad269` 的 106/120、
+单 CPU 115/120 或历史 CPU 调查结果，也不证明换了基线后所有环境均无拒绝。
+勘误 profile 自身仍未完整通过 S3；后续候选改动与交付必须继续绑定具体源码。
+
 ## 2026-10-24 events/long 窗口调用栈
 
 整进程扩展采集 `40100710905` / artifact `12562712198` 复用原二进制，十二份
