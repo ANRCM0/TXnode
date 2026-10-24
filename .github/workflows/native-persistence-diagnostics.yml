@@ -1,80 +1,57 @@
-name: Independent native persistence diagnostics
-
-on:
-  workflow_call:
-    inputs:
-      candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
-        required: true
-        type: string
-  workflow_dispatch:
-    inputs:
-      candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
-        required: true
-        type: string
-
+name: Independent extended events-long CPU profiles
+'on':
+  workflow_dispatch: {}
 permissions:
   contents: read
-
+  actions: read
 defaults:
   run:
     shell: bash
-
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
   GOTOOLCHAIN: local
   CGO_ENABLED: '0'
-
 jobs:
-  persistence-diagnostics:
-    name: Unprofiled observer off on pairs (no S3 acceptance)
+  profile:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.candidate }}
-          fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.0'
-          cache-dependency-path: go.sum
-      - name: Verify immutable source and diagnostic contracts
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate }}
-        run: |
-          set -euo pipefail
-          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test -z "$(git status --porcelain)"
-          python3 -m unittest discover -s scripts -p 'test_native_cpu.py' -v
-      - name: Collect five alternating unprofiled observer pairs per side
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate }}
-        run: |
-          set -euo pipefail
-          python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --output artifacts/native-persistence-diagnostics --persistence-diagnostics-only --groups 5 --seconds 10 --warmup 2 --concurrency 4
-      - name: Publish diagnostic observations without an acceptance verdict
-        if: always()
-        run: |
-          if [[ -f artifacts/native-persistence-diagnostics/report.md ]]; then
-            cat artifacts/native-persistence-diagnostics/report.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Retain independent evidence including accounting failures
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-persistence-diagnostics-${{ inputs.candidate }}
-          path: |
-            artifacts/native-persistence-diagnostics/report.json
-            artifacts/native-persistence-diagnostics/report.md
-            artifacts/native-persistence-diagnostics/prefetch-*.log
-            artifacts/native-persistence-diagnostics/persistence-*/sample.json
-            artifacts/native-persistence-diagnostics/persistence-*/metadata.json
-            artifacts/native-persistence-diagnostics/persistence-*/server.log
-            artifacts/native-persistence-diagnostics/persistence-*/cpu-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/runtime-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/evidence.json
-            artifacts/native-persistence-diagnostics/persistence-*/bucket-after-*.json
-          if-no-files-found: error
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    - uses: actions/setup-go@v5
+      with:
+        go-version: 1.26.0
+        cache-dependency-path: go.sum
+    - uses: actions/download-artifact@v4
+      with:
+        name: native-long-cpu-2dbf6834d4aa313b50b782e5326e718490e4d051
+        run-id: 40059251852
+        github-token: ${{ github.token }}
+        path: ${{ runner.temp }}/long-cpu-reference
+    - name: Record environment before the fixed diagnostic plan
+      run: 'set -euo pipefail
+
+        mkdir "$RUNNER_TEMP/extended-profile-environment"
+
+        uname -a > "$RUNNER_TEMP/extended-profile-environment/environment.txt"
+
+        lscpu >> "$RUNNER_TEMP/extended-profile-environment/environment.txt"
+
+        findmnt -T "$RUNNER_TEMP" >> "$RUNNER_TEMP/extended-profile-environment/environment.txt"
+
+        go version >> "$RUNNER_TEMP/extended-profile-environment/environment.txt"
+
+        '
+    - name: Collect six alternating 55-second event stack profiles per side
+      run: python3 scripts/events-long-cpu-profile.py --output "$RUNNER_TEMP/extended-events-long-profile"
+        --reference-directory "$RUNNER_TEMP/long-cpu-reference"
+    - name: Retain every instrumented sample and failure
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: extended-events-long-profile-${{ github.sha }}
+        path: '${{ runner.temp }}/extended-events-long-profile/
+
+          ${{ runner.temp }}/extended-profile-environment/'
+        if-no-files-found: error
