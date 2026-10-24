@@ -80,7 +80,7 @@ def main():
     try:
         for name, options in [('report.txt', ['report', '--stdio', '-f']),
                               ('script.txt', ['script', '-f', '--ns', '--show-lost-events', '-F',
-                                              'comm,pid,tid,cpu,time,period,event,ip,sym,dso'])]:
+                                              'comm,pid,tid,time,period,event,ip,sym,dso'])]:
             with (args.output / name).open('wb') as out, (args.output / (name + '.stderr')).open('wb') as err:
                 reply = subprocess.run(['sudo', '-n', str(perf), *options, '-i', str(path)],
                                        stdout=out, stderr=err, timeout=40)
