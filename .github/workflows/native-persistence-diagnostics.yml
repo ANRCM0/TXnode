@@ -1,4 +1,4 @@
-name: Independent single CPU long-workload investigation
+name: Independent long-workload syscall collector repair
 'on':
   workflow_dispatch: {}
 permissions:
@@ -14,35 +14,33 @@ env:
 jobs:
   long-cpu:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 15
     steps:
     - uses: actions/checkout@v4
       with:
         fetch-depth: 0
-    - uses: actions/setup-go@v5
-      with:
-        go-version: 1.26.0
-        cache-dependency-path: go.sum
     - uses: actions/download-artifact@v4
       with:
-        name: native-actions-single-cpu-90508592b4c0b433eb9a71f367694a981aa958e1-40041704618
-        run-id: 40041704618
+        name: native-long-cpu-2dbf6834d4aa313b50b782e5326e718490e4d051
+        run-id: 40059251852
         github-token: ${{ github.token }}
-        path: ${{ runner.temp }}/long-cpu-reference
+        path: ${{ runner.temp }}/long-cpu-first
     - name: Record unchanged-host environment and diagnostic tool
-      run: "set -euo pipefail\nif ! command -v strace; then\n  sudo apt-get update -qq\n  sudo apt-get install -y strace\n\
-        fi\nsudo -n true\nmkdir \"$RUNNER_TEMP/long-cpu-environment\"\nuname -a > \"$RUNNER_TEMP/long-cpu-environment/environment.txt\"\
-        \nlscpu >> \"$RUNNER_TEMP/long-cpu-environment/environment.txt\"\nfindmnt -T \"$RUNNER_TEMP\" >> \"$RUNNER_TEMP/long-cpu-environment/environment.txt\"\
-        \nstrace -V >> \"$RUNNER_TEMP/long-cpu-environment/environment.txt\"\n"
-    - name: Reproduce only the two CPU cases then collect bounded syscall summaries
-      run: python3 scripts/native-long-cpu-investigation.py --output "$RUNNER_TEMP/native-long-cpu" --reference-directory
-        "$RUNNER_TEMP/long-cpu-reference"
+      run: "set -euo pipefail\nif ! command -v strace; then\n  sudo apt-get update\
+        \ -qq\n  sudo apt-get install -y strace\nfi\nsudo -n true\nmkdir \"$RUNNER_TEMP/long-cpu-environment\"\
+        \nuname -a > \"$RUNNER_TEMP/long-cpu-environment/environment.txt\"\nlscpu\
+        \ >> \"$RUNNER_TEMP/long-cpu-environment/environment.txt\"\nfindmnt -T \"\
+        $RUNNER_TEMP\" >> \"$RUNNER_TEMP/long-cpu-environment/environment.txt\"\n\
+        strace -V >> \"$RUNNER_TEMP/long-cpu-environment/environment.txt\"\n"
+    - name: Prove collector control then collect only four traced samples
+      run: python3 scripts/native-long-syscall-supplement.py --output "$RUNNER_TEMP/long-syscall-supplement"
+        --first-directory "$RUNNER_TEMP/long-cpu-first"
     - name: Retain diagnostic observations without an acceptance claim
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: native-long-cpu-${{ github.sha }}
-        path: '${{ runner.temp }}/native-long-cpu/
+        name: native-long-syscall-supplement-${{ github.sha }}
+        path: '${{ runner.temp }}/long-syscall-supplement/
 
           ${{ runner.temp }}/long-cpu-environment/'
         if-no-files-found: error

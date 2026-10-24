@@ -63,17 +63,18 @@ def syscall_summary(path):
 
 
 class TraceWindow:
-    def __init__(self, process, state):
+    def __init__(self, process, state, interruptible=2):
         self.process, self.state = process, state
+        self.interruptible = interruptible
         self.handle = None
         self.tracer_pid = None
         self.log = None
         self.result = {'scope': 'attach before first CPU request; detach after second CPU acknowledgement',
-                       'summary_only': True, 'complete': False}
+                       'summary_only': True, 'complete': False, 'interruptible': interruptible}
 
     def start(self):
         self.log = (self.state / 'trace-attach.log').open('wb')
-        command = ['sudo', '-n', 'strace', '-f', '-c', '-I', '1', '-o',
+        command = ['sudo', '-n', 'strace', '-f', '-c', '-I', str(self.interruptible), '-o',
                    str(self.state / 'syscalls.txt'), '-p', str(self.process.pid)]
         self.handle = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=self.log,
                                        start_new_session=True)
@@ -85,6 +86,8 @@ class TraceWindow:
                     raise RuntimeError('unexpected tracer identity')
                 self.tracer_pid = tracer
                 self.result.update(tracee_pid=self.process.pid, tracer_pid=tracer,
+                                   sigint_caught=bool(int(proc_field(tracer, 'SigCgt'), 16)
+                                                     & (1 << (signal.SIGINT - 1))),
                                    attached_monotonic_nanos=time.monotonic_ns())
                 return
             if self.handle.poll() is not None:
@@ -109,9 +112,13 @@ class TraceWindow:
         self.log.close()
         self.log = None
         alive = self.process.poll() is None
-        detached = alive and int(proc_field(self.process.pid, 'TracerPid')) == 0
+        tasks = list(Path('/proc/%d/task' % self.process.pid).glob('*/status')) if alive else []
+        detached = alive and bool(tasks) and all(
+            next(line.split(':', 1)[1].strip() for line in path.read_text().splitlines()
+                 if line.startswith('TracerPid:')) == '0' for path in tasks)
         self.result.update(detached_monotonic_nanos=time.monotonic_ns(),
-                           tracee_alive_after_detach=alive, detached=detached)
+                           tracee_alive_after_detach=alive, detached=detached,
+                           detached_thread_count=len(tasks))
         self.handle = None
         if not detached:
             raise RuntimeError('tracee did not continue after detach')
@@ -205,7 +212,10 @@ def main():
                         window.start()
                     value = original_snapshot(process, snapshot_state, number, nonce)
                     if number == 2:
-                        active[-1].stop()
+                        try:
+                            active[-1].stop()
+                        except Exception as error:
+                            active[-1].result['collection_error'] = type(error).__name__
                     return value
                 bench.cpu_snapshot = traced_snapshot
                 item = {'mode': mode, 'workload': 'long', 'side': side, 'acceptance_sample': False}
