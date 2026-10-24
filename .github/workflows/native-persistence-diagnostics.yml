@@ -1,16 +1,10 @@
-name: Independent native persistence diagnostics
+name: Independent trusted TLS fixture isolation proof
 
 on:
-  workflow_call:
-    inputs:
-      candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
-        required: true
-        type: string
   workflow_dispatch:
     inputs:
       candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
+        description: Full immutable trusted TLS facade candidate SHA
         required: true
         type: string
 
@@ -23,58 +17,103 @@ defaults:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  GOTOOLCHAIN: local
-  CGO_ENABLED: '0'
+  PYTHONDONTWRITEBYTECODE: '1'
 
 jobs:
-  persistence-diagnostics:
-    name: Unprofiled observer off on pairs (no S3 acceptance)
+  tls-isolation:
+    name: Old serial handshake timeout and fixed trusted TLS cases
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.candidate }}
           fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.0'
-          cache-dependency-path: go.sum
-      - name: Verify immutable source and diagnostic contracts
+      - name: Record candidate and both fixture implementations
         env:
           CANDIDATE_SHA: ${{ inputs.candidate }}
         run: |
           set -euo pipefail
-          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test -z "$(git status --porcelain)"
-          python3 -m unittest discover -s scripts -p 'test_native_cpu.py' -v
-      - name: Collect five alternating unprofiled observer pairs per side
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate }}
+          command -v openssl
+          mkdir -p artifacts/tls-fixture-isolation
+          python3 - <<'PY'
+          import hashlib, json, os, re, subprocess
+          from pathlib import Path
+          candidate = os.environ['CANDIDATE_SHA']
+          previous = '4f996cc48c2a3634d2e5243339b365c92511ecf4'
+          assert re.fullmatch('[0-9a-f]{40}', candidate)
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          assert git('rev-parse', 'HEAD').decode().strip() == candidate
+          assert not git('status', '--porcelain', '--untracked-files=no').strip()
+          root = Path('artifacts/tls-fixture-isolation')
+          proxy = 'scripts/tests/node-native-machine/tls_proxy.py'
+          hashes = {}
+          for label, source, path in (('previous-proxy', previous, proxy), ('fixed-proxy', candidate, proxy),
+                                      ('tests', candidate, 'scripts/tests/node-native-machine/test_tls_proxy.py')):
+              data = git('show', source + ':' + path)
+              hashes[label] = hashlib.sha256(data).hexdigest()
+              (root / (label + '.py.txt')).write_bytes(data)
+          meta = {'schema': 'txnode-tls-fixture-isolation-source/v1', 'candidate': candidate,
+                  'candidate_tree': git('rev-parse', 'HEAD^{tree}').decode().strip(),
+                  'workflow_sha': os.environ['GITHUB_SHA'], 'previous_proxy_source': previous,
+                  'source_sha256': hashes, 'accepted_for_S3': False,
+                  'scope': 'One deliberately incomplete TLS handshake versus an independent CA-verified HTTP request. Native startup, readiness, retry, persistence and Core source stay unchanged.'}
+          (root / 'metadata.json').write_text(json.dumps(meta, indent=2) + chr(10))
+          PY
+      - name: Require the original accept-loop TLS handshake to block the independent request
         run: |
           set -euo pipefail
-          python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --output artifacts/native-persistence-diagnostics --persistence-diagnostics-only --groups 5 --seconds 10 --warmup 2 --concurrency 4
-      - name: Publish diagnostic observations without an acceptance verdict
-        if: always()
+          proxy=scripts/tests/node-native-machine/tls_proxy.py
+          cp "$proxy" "$RUNNER_TEMP/fixed-machine-tls-proxy.py"
+          trap 'cp "$RUNNER_TEMP/fixed-machine-tls-proxy.py" "$proxy"' EXIT
+          git show 4f996cc48c2a3634d2e5243339b365c92511ecf4:"$proxy" > "$proxy"
+          python3 - <<'PY'
+          import io, json, sys, unittest
+          from pathlib import Path
+          sys.path.insert(0, str(Path('scripts/tests/node-native-machine').resolve()))
+          suite = unittest.defaultTestLoader.loadTestsFromName('test_tls_proxy.NativeTLSProxyTests.test_pending_handshake_does_not_block_other_trusted_requests')
+          output = io.StringIO()
+          result = unittest.TextTestRunner(stream=output, verbosity=2).run(suite)
+          root = Path('artifacts/tls-fixture-isolation')
+          text = output.getvalue()
+          (root / 'previous-tests.log').write_text(text)
+          assert result.testsRun == 1 and len(result.errors) == 1 and not result.failures and not result.skipped
+          assert 'TimeoutError' in result.errors[0][1] and 'handshake operation timed out' in result.errors[0][1]
+          (root / 'counterfactual.json').write_text(json.dumps({'expected_handshake_timeout': True,
+              'tests_run': 1, 'unexpected_failures': 0, 'scope': 'The independent trusted request timed out while the first handshake was deliberately held.'}, indent=2) + chr(10))
+          PY
+          cp "$RUNNER_TEMP/fixed-machine-tls-proxy.py" "$proxy"
+          trap - EXIT
+          git diff --exit-code
+      - name: Require fixed connection isolation and certificate verification
         run: |
-          if [[ -f artifacts/native-persistence-diagnostics/report.md ]]; then
-            cat artifacts/native-persistence-diagnostics/report.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Retain independent evidence including accounting failures
+          python3 - <<'PY'
+          import io, json, sys, unittest
+          from pathlib import Path
+          sys.path.insert(0, str(Path('scripts/tests/node-native-machine').resolve()))
+          import test_tls_proxy
+          suite = unittest.defaultTestLoader.loadTestsFromModule(test_tls_proxy)
+          output = io.StringIO()
+          result = unittest.TextTestRunner(stream=output, verbosity=2).run(suite)
+          root = Path('artifacts/tls-fixture-isolation')
+          (root / 'fixed-tests.log').write_text(output.getvalue())
+          assert result.testsRun == 2 and result.wasSuccessful() and not result.skipped
+          prior = json.loads((root / 'counterfactual.json').read_text())
+          assert prior['expected_handshake_timeout'] is True
+          summary = {'schema': 'txnode-tls-fixture-isolation-proof/v1', 'regression_accepted': True,
+                     'previous_expected_timeout': True, 'fixed_tests_passed': 2,
+                     'accepted_for_S3': False,
+                     'scope': 'Trusted TLS certificate verification and original HTTP forwarding remain required. This proof does not uniquely attribute earlier Machine failures.'}
+          (root / 'summary.json').write_text(json.dumps(summary, indent=2) + chr(10))
+          with open(__import__('os').environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
+              stream.write('# Trusted TLS fixture isolation' + chr(10) * 2 + '```json' + chr(10) + json.dumps(summary, indent=2) + chr(10) + '```' + chr(10))
+          PY
+          git diff --exit-code
+      - name: Retain the original timeout, fixed test logs and exact source
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-persistence-diagnostics-${{ inputs.candidate }}
-          path: |
-            artifacts/native-persistence-diagnostics/report.json
-            artifacts/native-persistence-diagnostics/report.md
-            artifacts/native-persistence-diagnostics/prefetch-*.log
-            artifacts/native-persistence-diagnostics/persistence-*/sample.json
-            artifacts/native-persistence-diagnostics/persistence-*/metadata.json
-            artifacts/native-persistence-diagnostics/persistence-*/server.log
-            artifacts/native-persistence-diagnostics/persistence-*/cpu-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/runtime-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/evidence.json
-            artifacts/native-persistence-diagnostics/persistence-*/bucket-after-*.json
+          name: machine-tls-isolation-${{ inputs.candidate }}-${{ github.run_id }}
+          path: artifacts/tls-fixture-isolation/
           if-no-files-found: error
