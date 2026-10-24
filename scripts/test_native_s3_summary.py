@@ -40,12 +40,16 @@ class S3SummaryTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
+        self.profile = SUMMARY.native_baselines.DEFAULT_PROFILE
+        self.baseline = SUMMARY.native_baselines.identity(self.profile)
         self.soak = {'accepted': True, 'elapsed_seconds': 1801,
                      'phases': [{'lifecycle_cycles': 8, 'load_bearing_generations_recovered': 9,
                                  'load_bearing_tls_workers': 12, 'expected_retired_disconnects': 96}
                                 for _ in range(4)]}
         self.faults = {'accepted': True}
         self.performance = {'candidate': CANDIDATE, 'accepted': True,
+                            'baseline': self.baseline['commit'], 'baseline_tree': self.baseline['tree'],
+                            'builds': {'legacy': {'sha': self.baseline['commit'], 'status': 'built'}},
                             'schema': 'txnode-native-performance/v2', 'cpu_method': 'process-cputime-ns-v1',
                             'comparisons': [{'status': 'within-initial-thresholds'} for _ in range(12)],
                             'runtime_images': {side: {'uncompressed_bytes': 1000} for side in ('legacy', 'candidate')}}
@@ -60,14 +64,54 @@ class S3SummaryTests(unittest.TestCase):
         for kind, name, document in [('soak', 'soak-summary.json', self.soak),
                                       ('faults', 'summary.json', self.faults),
                                       ('performance', 'report.json', self.performance)]:
-            directory = self.root / ('native-' + kind + '-' + CANDIDATE)
+            label = SUMMARY.native_baselines.artifact_label(self.profile) if kind == 'performance' else ''
+            directory = self.root / ('native-' + kind + '-' + label + CANDIDATE)
             directory.mkdir(exist_ok=True)
             (directory / name).write_text(json.dumps(document), encoding='utf-8')
             (directory / 'commit.txt').write_text(CANDIDATE, encoding='utf-8')
 
     def summarize(self, outcomes=SUCCESS):
         self.write()
-        return SUMMARY.summarize(self.root, CANDIDATE, outcomes)
+        return SUMMARY.summarize(self.root, CANDIDATE, outcomes, self.profile)
+
+    def test_errata_requires_its_own_identity_and_exact_baseline_test_evidence(self):
+        self.profile = SUMMARY.native_baselines.ERRATA_PROFILE
+        self.baseline = SUMMARY.native_baselines.identity(self.profile)
+        self.performance.update(baseline=self.baseline['commit'], baseline_tree=self.baseline['tree'],
+                                baseline_identity=self.baseline)
+        self.performance['builds']['legacy']['sha'] = self.baseline['commit']
+        directory = self.root / ('native-baseline-tests-' + SUMMARY.native_baselines.artifact_label(self.profile) + CANDIDATE)
+        directory.mkdir()
+        for name, value in [('commit.txt', self.baseline['commit']), ('tree.txt', self.baseline['tree']),
+                            ('candidate.txt', CANDIDATE)]:
+            (directory / name).write_text(value, encoding='utf-8')
+        success = dict(SUCCESS, BASELINE_TESTS='success')
+        result = self.summarize(success)
+        self.assertTrue(result['full_S3_accepted'])
+        self.assertEqual(result['baseline_identity'], self.baseline)
+        for outcome in ('skipped', 'failure', ''):
+            with self.subTest(outcome=outcome):
+                self.assertFalse(self.summarize(dict(success, BASELINE_TESTS=outcome))['checks']['errata_baseline_tests'])
+        for name in ('commit.txt', 'tree.txt', 'candidate.txt'):
+            original = (directory / name).read_text(encoding='utf-8')
+            (directory / name).write_text('b' * 40, encoding='utf-8')
+            self.assertFalse(self.summarize(success)['checks']['errata_baseline_tests'])
+            (directory / name).write_text(original, encoding='utf-8')
+        del self.performance['baseline_identity']
+        self.assertFalse(self.summarize(success)['checks']['baseline_identity'])
+        self.performance['baseline_identity'] = self.baseline
+        self.performance['builds']['legacy']['sha'] = SUMMARY.native_baselines.ORIGINAL
+        self.assertFalse(self.summarize(success)['checks']['baseline_identity'])
+        self.performance['builds']['legacy']['sha'] = self.baseline['commit']
+        self.performance['baseline'] = SUMMARY.native_baselines.ORIGINAL
+        self.assertFalse(self.summarize(success)['checks']['baseline_identity'])
+
+    def test_mismatched_original_baseline_cannot_satisfy_the_default_gate(self):
+        self.performance['baseline'] = SUMMARY.native_baselines.ERRATA
+        result = self.summarize()
+        self.assertFalse(result['full_S3_accepted'])
+        self.assertFalse(result['checks']['baseline_identity'])
+        self.assertTrue(result['checks']['image_sizes'])
 
     def test_complete_valid_scopes_and_successful_jobs_are_required(self):
         result = self.summarize()

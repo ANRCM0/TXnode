@@ -9,6 +9,55 @@
 
 所有功能、网络与负载执行仍限于 GitHub Actions。本地仅允许源码检查、Go 静态编译、格式和 AST 检查。缺少客户端、工具编译失败、实际负载不达标与证据不完整均不能记为通过。
 
+## 2026-10-24 独立时钟勘误基线
+
+经用户明确选择，新增 `legacy-clock-serialized-v1`，固定提交
+`4904a193d4564cf67af55728da0b338ff3b1268f`，tree
+`edfe6051a97952aba014bf874927bca8bc0b550d`。它直接以原 `a1ad269` 为父提交，
+唯一源码差异是将 `NativeCollector.CompleteIO` 的 `time.Now()` / `stamp`
+采时移到既有 `c.mu` 锁内。所有 eligibility、grant、deadline、退休、容量、
+持久化、同步和错误处理条件均原样保留；没有观察钩子或第三方代码升级。
+
+原 `original-a1ad269-v1` 继续为默认选项，历史失败和未决报告保持其原始身份。
+`native_baselines.py` 在构建前核对完整 SHA/tree、唯一父提交、唯一变更文件、
+逐字节两行移动和补丁摘要。勘误版必须显式选择
+`--baseline-profile legacy-clock-serialized-v1`；其 A/B、独立 profile 和 S3 artifact 名增加相同前缀，
+JSON 同时记录原提交、实际勘误提交和补丁身份。
+
+工作流 `native-acceptance.yml` 的 `baseline_profile` 输入支持这两个固定选项。
+勘误验收另要求该固定旧源码上的七项原生 collector 回归/race 测试成功，并将
+候选、旧源码 SHA/tree 绑定到该 job 的产物；原基线的该 job 为跳过，不记作已执行。
+S3 汇总拒绝身份缺失、原/勘误交叉或不匹配的 baseline build。五组、2 秒预热、
+10 秒测量、4 线程、完整 120 cell、队列、fsync、ACK 和 5%/10% 阈值保持。
+本节只声明新入口及源码差异；实际 Actions 结果需要单独记录，不因此宣称通过。
+
+## 2026-10-24 events/long 窗口调用栈
+
+整进程扩展采集 `40100710905` / artifact `12562712198` 复用原二进制，十二份
+profile 均完成。旧侧 3.92 秒、新侧 3.49 秒的 CPU 样本中，关闭后 `ReadRecord`
+分别占 0.99 / 1.05 秒；该阶段不在原 CPU 测量窗口内，不能据此解释正式比率。
+
+窗口限定补采 `40102555123` / artifact `12563489354` 使用独立工具
+`bde74a86acf16784c3be2214f9bb2c63a6521be1`，两侧仍为原 `a1ad269` / `90508592`。
+仅诊断 harness 的 profiler 启停移到原两次 CPU snapshot 外侧；生产源码、原
+snapshot 函数、nonce、字节证明和关闭后账量核对保留。两份新 harness 摘要明确
+区别于原冻结二进制。每侧六份交替、每份 2 秒预热及 55 秒测量、4 线程和 CPU 0，
+持久化 observer 关闭；55 秒及 profiler 参数属于诊断，不生成验收比率。
+
+| 窗口内互斥栈分类 | 旧侧 CPU 样本权重 | 新侧 CPU 样本权重 |
+|---|---:|---:|
+| 全部 | 5.15 秒 | 5.18 秒 |
+| Coordinator worker | 4.78 秒 | 4.65 秒 |
+| relay | 0.09 秒 | 0.14 秒 |
+| 独立后台 GC | 0.19 秒 | 0.32 秒 |
+| 其余 | 0.09 秒 | 0.07 秒 |
+
+十二份原始 profile 和窗口元数据、两份合并 profile、24 份 CPU / 24 份 runtime、
+源码/overlay/helper/模块锁及原账量证明均匹配；两侧达到采集前固定的至少 2 秒
+CPU 样本预算，关闭后 `ReadRecord` 样本权重为零。两侧主要热点均在事件持久化
+worker 的 JSON 编码与摘要校验；累计函数权重不可相加，带 profiler 的样本权重
+也不是原 CPU/GiB 的新旧验收比率。目前仍未确定原 5% 越界的唯一原因。
+
 ## 2026-10-24 main 的定时 Actions 结果
 
 定时运行 `40040191779` 固定 main `90508592b4c0b433eb9a71f367694a981aa958e1`，
@@ -299,7 +348,7 @@ events/download 容量失败，其余三个诊断 case 完成；诊断失败不�
 
 `scripts/native-acceptance.py` 在一个 Linux runner/job 中为以下版本创建临时隔离 checkout：
 
-- 旧基线：`a1ad2695e1143269168c36a274283de3342e91c7`，选择 sing-box 服务端。
+- 默认旧基线：`a1ad2695e1143269168c36a274283de3342e91c7`，选择 sing-box 服务端；独立时钟勘误版需显式选择并按前节身份记账。
 - 候选：工作流解析后的完整 SHA，选择唯一原生 txnode 服务端。
 
 两份源码均以固定 Go `1.26.0`、`GOTOOLCHAIN=local`、`CGO_ENABLED=0`、同一组 `-trimpath -ldflags=-s -w` 及既有 release build tags 编译。各 checkout 注入本候选版本携带的相同测量 server、只读 bucket 诊断 helper 和各自的 factory 适配；不修改原数据面或模块依赖。报告记录工具、模板、业务二进制和测量二进制摘要，避免将注入的测量入口冒充历史仓库的原生功能。每侧构建前最多三次模块预取，失败间隔五秒，保留完整日志及逐次退出码；耗尽仍为 incomplete，且预取改变任一已提交模块锁即失败。
