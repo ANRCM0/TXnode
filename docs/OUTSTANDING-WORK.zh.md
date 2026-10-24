@@ -4,6 +4,22 @@
 [NEXT-DEVELOPMENT.zh.md](NEXT-DEVELOPMENT.zh.md)，严格互通入口见
 [INTEROP.md](INTEROP.md)。历史 `a6d0e96` 的“29 通过、6 跳过”不代表当前候选。
 
+## 2026-10-24 长连接 CPU 调查补项
+
+独立 Actions `40059251852` / artifact `12547191583` 固定原 `90508592` / `a1ad269`
+和单 CPU 方法，只复现两项 long 比较。20 份未追踪样本全部 measured；ordinary
+CPU/GiB 比率 `0.9847583126`，CV `0.1366565637`，按原规则 unresolved；events
+CPU/GiB 比率 `1.0532690294`，CV `0.0662570970`，仍为 investigate。该 job 的
+四份后续追踪因 `strace -I 1` 退出控制而失败，保留为 incomplete，不改写原结果。
+
+补采 `40061564735` / artifact `12546509874` 验证 `-I 1` / `-I 2` 控制对照后，
+复用摘要匹配的原二进制，四份追踪均完成原计量尾部；不重建或重跑未追踪比较。
+ordinary 两侧 splice 各 8816 次，events 两侧 fsync 各 115 次，尚不足以确定 CPU
+差值的唯一原因。两份 artifact 及 24 份完整样本的 48 份 CPU / 48 份 runtime
+原文件已核对。
+实验脚本与工作流留在独立分支；完整 S3 仍为 false，正式 106/120 和独立单 CPU
+115/120 保留各自来源。本次只追加调查证据，不产生新运行时或发布验收。
+
 ## 2026-10-24 S3 汇总完整性修正
 
 正式运行 `40040191779` 的原 ledger 在缺少 `cpu_measurement` 时提前结束共享
