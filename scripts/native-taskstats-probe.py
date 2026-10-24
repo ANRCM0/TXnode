@@ -79,14 +79,15 @@ class Taskstats:
 
     def snapshot(self, pid, label):
         before = time.monotonic_ns()
-        values = self.request(self.family, 1, 2, struct.pack('=I', pid), label)
+        values = self.request(self.family, self.layout['command_get'],
+                              self.layout['command_attr_tgid'], struct.pack('=I', pid), label)
         after = time.monotonic_ns()
-        aggregates = [value for kind, value in values if kind == 6]
+        aggregates = [value for kind, value in values if kind == self.layout['type_aggr_tgid']]
         if len(aggregates) != 1:
             raise ValueError('one TGID aggregate required')
         children = attributes(aggregates[0])
-        identities = [value for kind, value in children if kind == 2]
-        stats = [value for kind, value in children if kind == 3]
+        identities = [value for kind, value in children if kind == self.layout['type_tgid']]
+        stats = [value for kind, value in children if kind == self.layout['type_stats']]
         if (identities != [struct.pack('=I', pid)] or len(stats) != 1
                 or len(stats[0]) < self.layout['stime_offset'] + 8):
             raise ValueError('TGID or taskstats payload mismatch')
@@ -140,9 +141,12 @@ def layout(output):
 #include <stddef.h>
 #include <stdio.h>
 int main(void) {
-    printf("{\"version_offset\":%zu,\"utime_offset\":%zu,\"stime_offset\":%zu,\"size\":%zu}\n",
+    printf("{\"version_offset\":%zu,\"utime_offset\":%zu,\"stime_offset\":%zu,\"size\":%zu,"
+           "\"command_get\":%d,\"command_attr_tgid\":%d,\"type_aggr_tgid\":%d,\"type_tgid\":%d,\"type_stats\":%d}\n",
         offsetof(struct taskstats, version), offsetof(struct taskstats, ac_utime),
-        offsetof(struct taskstats, ac_stime), sizeof(struct taskstats));
+        offsetof(struct taskstats, ac_stime), sizeof(struct taskstats),
+        TASKSTATS_CMD_GET, TASKSTATS_CMD_ATTR_TGID, TASKSTATS_TYPE_AGGR_TGID,
+        TASKSTATS_TYPE_TGID, TASKSTATS_TYPE_STATS);
     return 0;
 }
 '''
