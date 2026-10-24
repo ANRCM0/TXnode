@@ -1,4 +1,4 @@
-name: Decode retained native perf probe
+name: Frozen native upload software CPU windows
 
 on:
   workflow_dispatch:
@@ -16,7 +16,7 @@ env:
 
 jobs:
   reproduce:
-    name: Decode the exact retained probe without recording
+    name: Collect bounded software CPU windows from frozen binaries
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -35,17 +35,19 @@ jobs:
           findmnt -T "$RUNNER_TEMP" > "$RUNNER_TEMP/native-follow-up-environment/filesystem.txt"
           sysctl kernel.perf_event_paranoid kernel.kptr_restrict > "$RUNNER_TEMP/native-follow-up-environment/perf-policy.txt"
           git rev-parse HEAD > "$RUNNER_TEMP/native-follow-up-environment/tool-source.txt"
-      - name: Decode original probe data after checking exact archive and tool hashes
+      - name: Verify recording controls then collect six independent upload CPU windows
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          python3 scripts/native-perf-decode-supplement.py --output "$RUNNER_TEMP/native-perf-decode-supplement"
+          python3 scripts/native-upload-perf-diagnostic.py \
+            --output "$RUNNER_TEMP/native-upload-perf" \
+            --reference "$RUNNER_TEMP/native-upload-perf-reference"
       - name: Retain finite diagnostic evidence without claiming S3 acceptance
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-perf-decode-supplement-${{ github.sha }}
+          name: native-upload-perf-${{ github.sha }}
           path: |
-            ${{ runner.temp }}/native-perf-decode-supplement/
+            ${{ runner.temp }}/native-upload-perf/
             ${{ runner.temp }}/native-follow-up-environment/
           if-no-files-found: error
