@@ -1,16 +1,10 @@
-name: Independent native persistence diagnostics
+name: Independent event startup diagnostic regression
 
 on:
-  workflow_call:
-    inputs:
-      candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
-        required: true
-        type: string
   workflow_dispatch:
     inputs:
       candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
+        description: Immutable Service diagnostic fix candidate SHA
         required: true
         type: string
 
@@ -24,13 +18,13 @@ defaults:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   GOTOOLCHAIN: local
-  CGO_ENABLED: '0'
+  CGO_ENABLED: '1'
 
 jobs:
-  persistence-diagnostics:
-    name: Unprofiled observer off on pairs (no S3 acceptance)
+  regression:
+    name: Old adapter rejection and twenty fixed race runs
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -40,41 +34,118 @@ jobs:
         with:
           go-version: '1.26.0'
           cache-dependency-path: go.sum
-      - name: Verify immutable source and diagnostic contracts
+      - name: Record exact source and controlled production adapter overlay
         env:
           CANDIDATE_SHA: ${{ inputs.candidate }}
         run: |
           set -euo pipefail
-          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test -z "$(git status --porcelain)"
-          python3 -m unittest discover -s scripts -p 'test_native_cpu.py' -v
-      - name: Collect five alternating unprofiled observer pairs per side
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate }}
+          mkdir -p artifacts/event-startup-failure
+          python3 - <<'PY'
+          import hashlib, json, os, re, subprocess
+          from pathlib import Path
+          candidate = os.environ['CANDIDATE_SHA']
+          baseline = 'eb5586f33c0a16a01355b195eff24d97037a0be8'
+          assert re.fullmatch('[0-9a-f]{40}', candidate)
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          assert git('rev-parse', 'HEAD').decode().strip() == candidate
+          assert not git('status', '--porcelain', '--untracked-files=no').strip()
+          changed = git('diff', '--name-only', baseline, candidate).decode().splitlines()
+          assert changed == ['internal/service/native_observation_linux_test.go',
+                             'internal/service/usage_event_store_adapter.go'], changed
+          root = Path('artifacts/event-startup-failure')
+          adapter = 'internal/service/usage_event_store_adapter.go'
+          previous, fixed = git('show', baseline + ':' + adapter), git('show', candidate + ':' + adapter)
+          (root / 'previous-adapter.go.txt').write_bytes(previous)
+          (root / 'fixed-adapter.go.txt').write_bytes(fixed)
+          tests = git('show', candidate + ':internal/service/native_observation_linux_test.go')
+          (root / 'candidate-tests.go.txt').write_bytes(tests)
+          meta = {'schema': 'txnode-event-startup-failure-proof/v1', 'candidate': candidate,
+                  'candidate_tree': git('rev-parse', 'HEAD^{tree}').decode().strip(),
+                  'workflow_sha': os.environ['GITHUB_SHA'], 'previous_adapter_source': baseline,
+                  'previous_adapter_sha256': hashlib.sha256(previous).hexdigest(),
+                  'fixed_adapter_sha256': hashlib.sha256(fixed).hexdigest(),
+                  'candidate_tests_sha256': hashlib.sha256(tests).hexdigest(),
+                  'accepted_for_S3': False,
+                  'scope': 'New deterministic test with only the production adapter replaced for the old counterfactual; fixed source restored before twenty real race runs. No timeout, owner, counter, capacity, sync or ACK relaxation.'}
+          (root / 'metadata.json').write_text(json.dumps(meta, indent=2) + chr(10))
+          PY
+      - name: Require the old production adapter to fail the new deterministic case
         run: |
           set -euo pipefail
-          python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --output artifacts/native-persistence-diagnostics --persistence-diagnostics-only --groups 5 --seconds 10 --warmup 2 --concurrency 4
-      - name: Publish diagnostic observations without an acceptance verdict
+          adapter=internal/service/usage_event_store_adapter.go
+          cp "$adapter" "$RUNNER_TEMP/fixed-event-adapter.go"
+          trap 'cp "$RUNNER_TEMP/fixed-event-adapter.go" "$adapter"' EXIT
+          git show eb5586f33c0a16a01355b195eff24d97037a0be8:"$adapter" > "$adapter"
+          set +e
+          go test -race -json ./internal/service -run '^TestNativeObservationStorageFailureKeepsActualTrafficAndStopsRetrying$/^event_capacity_before_attach$' -count=1 -timeout=2m > artifacts/event-startup-failure/previous-events.jsonl 2> artifacts/event-startup-failure/previous-stderr.log
+          previous_exit=$?
+          set -e
+          cp "$RUNNER_TEMP/fixed-event-adapter.go" "$adapter"
+          trap - EXIT
+          echo "$previous_exit" > artifacts/event-startup-failure/previous-exit.txt
+          git diff --exit-code
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          root = Path('artifacts/event-startup-failure')
+          events = [json.loads(line) for line in (root / 'previous-events.jsonl').read_text().splitlines() if line]
+          parent = 'TestNativeObservationStorageFailureKeepsActualTrafficAndStopsRetrying'
+          child = parent + '/event_capacity_before_attach'
+          failures = [e.get('Test') for e in events if e.get('Action') == 'fail' and e.get('Test')]
+          output = ''.join(e.get('Output', '') for e in events)
+          assert (root / 'previous-exit.txt').read_text().strip() == '1'
+          assert sorted(failures) == sorted([parent, child]), failures
+          assert not any(e.get('Action') == 'skip' for e in events)
+          assert 'event storage failure hidden' in output and 'LOCAL_ATTACH_REFUSED' in output
+          assert not any(token in output for token in ('DATA RACE', 'panic:', 'fatal error:'))
+          result = {'expected_failure_observed': True, 'failed_tests': failures,
+                    'scope': 'Only the expected diagnostic assertion failed with the old production adapter.'}
+          (root / 'counterfactual.json').write_text(json.dumps(result, indent=2) + chr(10))
+          PY
+      - name: Run all storage and healthy refusal cases twenty times with race detection
+        id: fixed
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          go test -race -json ./internal/service -run '^TestNativeObservation(StorageFailureKeepsActualTrafficAndStopsRetrying|HealthyAttachRefusalRemainsVisible)$' -count=20 -timeout=5m > artifacts/event-startup-failure/fixed-events.jsonl 2> artifacts/event-startup-failure/fixed-stderr.log
+      - name: Check actual repeated case counts and publish the regression verdict
         if: always()
+        env:
+          FIXED_OUTCOME: ${{ steps.fixed.outcome }}
         run: |
-          if [[ -f artifacts/native-persistence-diagnostics/report.md ]]; then
-            cat artifacts/native-persistence-diagnostics/report.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Retain independent evidence including accounting failures
+          python3 - <<'PY'
+          import collections, json, os
+          from pathlib import Path
+          root = Path('artifacts/event-startup-failure')
+          result = {'schema': 'txnode-event-startup-failure-regression/v1',
+                    'regression_accepted': False, 'accepted_for_S3': False,
+                    'fixed_step_outcome': os.environ['FIXED_OUTCOME']}
+          try:
+              previous = json.loads((root / 'counterfactual.json').read_text())
+              events = [json.loads(line) for line in (root / 'fixed-events.jsonl').read_text().splitlines() if line]
+              parent = 'TestNativeObservationStorageFailureKeepsActualTrafficAndStopsRetrying'
+              names = [parent, 'TestNativeObservationHealthyAttachRefusalRemainsVisible']
+              names += [parent + '/' + mode for mode in ('observer_capacity', 'observer_unwritable', 'event_capacity', 'event_capacity_before_attach', 'disabled')]
+              expected = collections.Counter({name: 20 for name in names})
+              actual = collections.Counter(e['Test'] for e in events if e.get('Action') == 'pass' and e.get('Test'))
+              assert actual == expected, dict(actual)
+              assert not any(e.get('Action') in ('fail', 'skip') for e in events)
+              assert os.environ['FIXED_OUTCOME'] == 'success' and previous['expected_failure_observed'] is True
+              result.update(regression_accepted=True, passed_case_events=sum(actual.values()),
+                            repetitions=20, passed_tests=dict(actual))
+          except (OSError, ValueError, KeyError, TypeError, AssertionError) as error:
+              result['evidence_error'] = type(error).__name__ + ': ' + str(error)
+          (root / 'summary.json').write_text(json.dumps(result, indent=2) + chr(10))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as stream:
+              stream.write('# Event startup failure regression' + chr(10) * 2 + '```json' + chr(10) + json.dumps(result, indent=2) + chr(10) + '```' + chr(10))
+          if not result['regression_accepted']:
+              raise SystemExit('regression evidence incomplete')
+          PY
+      - name: Retain original failure, repeated fixed results and exact source evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-persistence-diagnostics-${{ inputs.candidate }}
-          path: |
-            artifacts/native-persistence-diagnostics/report.json
-            artifacts/native-persistence-diagnostics/report.md
-            artifacts/native-persistence-diagnostics/prefetch-*.log
-            artifacts/native-persistence-diagnostics/persistence-*/sample.json
-            artifacts/native-persistence-diagnostics/persistence-*/metadata.json
-            artifacts/native-persistence-diagnostics/persistence-*/server.log
-            artifacts/native-persistence-diagnostics/persistence-*/cpu-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/runtime-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/evidence.json
-            artifacts/native-persistence-diagnostics/persistence-*/bucket-after-*.json
+          name: event-startup-failure-regression-${{ inputs.candidate }}-${{ github.run_id }}
+          path: artifacts/event-startup-failure/
           if-no-files-found: error
