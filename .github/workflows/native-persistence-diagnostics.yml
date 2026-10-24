@@ -61,12 +61,13 @@ jobs:
 
         root.mkdir(parents=True,exist_ok=True)
 
-        paths=[''internal/usagev2/http.go'',''internal/usagev2/machine_transport_diagnostic.go'']
+        paths=[''internal/usagev2/http.go'',''internal/usagev2/machine_transport_diagnostic.go'',''internal/service/native_usage_adapter.go'',''scripts/tests/node-native-machine/tls_proxy.py'',''scripts/tests/node-native-machine/run.py'']
 
         data={''schema'':''txnode-machine-transport-instrumentation/v1'',''base'':base,''diagnostic_source'':git(''rev-parse'',''HEAD'').decode().strip(),''diagnostic_tree'':git(''rev-parse'',''HEAD^{tree}'').decode().strip(),''current_sha256'':{p:hashlib.sha256(Path(p).read_bytes()).hexdigest()for
-        p in paths},''original_http_sha256'':hashlib.sha256(git(''show'',base+'':internal/usagev2/http.go'')).hexdigest(),''accepted_for_S3'':False,''scope'':''Cold
-        failure-only hook before the original unchanged transport refusal; no request, timeout, recovery, capacity, ACK or
-        Core source change. Instrumented clone is not release acceptance.''}
+        p in paths},''original_http_sha256'':hashlib.sha256(git(''show'',base+'':internal/usagev2/http.go'')).hexdigest(),''accepted_for_S3'':False,''scope'':''Diagnostic
+        clone with startup context label, request stopwatch, backend timing aggregates, and original unchanged transport refusal.
+        No request body, timeout, recovery policy, capacity, ACK or Core source change. Instrumented clone is not release
+        acceptance.''}
 
         (root/''instrumentation.json'').write_text(json.dumps(data,indent=2)+chr(10))
 

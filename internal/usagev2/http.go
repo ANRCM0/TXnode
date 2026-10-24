@@ -102,15 +102,16 @@ func (t *HTTPTransport) request(ctx context.Context, path string, body any, quer
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
+	diagnosticStarted := time.Now()
 	response, err := t.client.Do(req)
 	if err != nil {
-		machineTransportCause(ctx, err, path, "request")
+		machineTransportCause(ctx, err, path, "request", time.Since(diagnosticStarted))
 		return Receipt{}, false, ErrTransportUnavailable
 	}
 	defer response.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(response.Body, MaxPayloadBytes+1))
 	if err != nil {
-		machineTransportCause(ctx, err, path, "read_body")
+		machineTransportCause(ctx, err, path, "read_body", time.Since(diagnosticStarted))
 		return Receipt{}, false, ErrTransportUnavailable
 	}
 	var envelope struct {

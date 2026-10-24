@@ -103,10 +103,13 @@ class NativeTLSProxy:
                     body+=part
                 headers.pop('Connection',None);headers['Connection']='close'
                 upstream=http.client.HTTPConnection('127.0.0.1',owner.http_port,timeout=10)
+                backend_started=time.monotonic_ns()
+                owner.record({'kind':'http-start','path':path.split('?',1)[0]})
                 try:
                     upstream.request(method,path,body[:length] if length else None,headers)
                     response=upstream.getresponse();content=response.read(4<<20)
                     event={'kind':'http','method':method,'path':path.split('?',1)[0],'status':response.status,'node_id':lower.get('x-tx-node-id'),'machine_id':lower.get('x-tx-machine-id')}
+                    event['backend_elapsed_nanos']=time.monotonic_ns()-backend_started
                     if path=='/txapi/node/v1/report':
                         try:
                             payload=json.loads(body[:length]);event['batch_id']=payload.get('traffic_batch_id');event['traffic']=payload.get('traffic',{})

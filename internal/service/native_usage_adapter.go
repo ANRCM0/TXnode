@@ -133,6 +133,7 @@ func (s *Service) initNativeUsage(ctx context.Context, bootstrap controlplane.Bo
 func (s *Service) recoverNativeStartup(parent context.Context) error {
 	ctx, cancel := context.WithTimeout(parent, nativeStartupRecoveryTimeout)
 	defer cancel()
+	ctx = usagev2.WithMachineTransportStartupScope(ctx)
 	runtime := s.nativeUsage
 	original, err := runtime.spool.Records()
 	if err != nil {

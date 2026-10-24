@@ -103,7 +103,7 @@ def failure_summary(category):
                 continue
             fields = {'schema', 'sequence', 'phase', 'endpoint', 'cause', 'context_canceled',
                       'context_deadline', 'error_is_deadline', 'error_is_canceled',
-                      'has_deadline', 'deadline_remaining_nanos', 'observed_unix_nanos'}
+                      'has_deadline', 'deadline_remaining_nanos', 'observed_unix_nanos', 'scope', 'request_elapsed_nanos'}
             if (isinstance(item, dict) and set(item) == fields
                     and item['schema'] == 'txnode-machine-transport-cause/v1'
                     and type(item['sequence']) is int and 1 <= item['sequence'] <= 16
@@ -115,8 +115,27 @@ def failure_summary(category):
                     and type(item['deadline_remaining_nanos']) is int
                     and -60_000_000_000 <= item['deadline_remaining_nanos'] <= 60_000_000_000
                     and type(item['observed_unix_nanos']) is int and item['observed_unix_nanos'] > 0):
+                if (type(item['scope']) is not str or item['scope'] not in {'startup', 'worker'}
+                        or type(item['request_elapsed_nanos']) is not int
+                        or not 0 <= item['request_elapsed_nanos'] <= 60_000_000_000):
+                    continue
                 transport_causes.append(item)
         diagnostics['usage_transport'] = {'observation_limit': 16, 'observations': transport_causes[:16]}
+        families = {'/txapi/node/v2/usage/batch/get':'usage_query', '/txapi/node/v2/usage/submit':'usage_submit',
+                    '/txapi/node/v1/config':'config', '/txapi/node/v1/users':'users',
+                    '/txapi/node/v1/machine/nodes':'discovery', '/txapi/node/v1/handshake':'handshake'}
+        timings = {}
+        for path, label in families.items():
+            events = proxy.event_snapshot()
+            values = sorted(min(60_000_000_000, max(0, event['backend_elapsed_nanos']))
+                            for event in events if event['kind']=='http' and event.get('path')==path
+                            and type(event.get('backend_elapsed_nanos')) is int)
+            starts = sum(event['kind']=='http-start' and event.get('path')==path for event in events)
+            timings[label] = {'started':min(10000, starts), 'completed':min(10000, len(values)),
+                             'over_two_seconds':min(10000, sum(value>2_000_000_000 for value in values)),
+                             'max_nanos':max(values, default=0),
+                             'median_nanos':values[len(values)//2] if values else 0}
+        diagnostics['fixture_backend_timings'] = timings
         config_booleans = {'config_event_received', 'config_event_dispatched', 'config_event_desired_port',
                            'old_listener_open', 'new_listener_open', 'shared_ws_connected'}
         config_fields = config_booleans | {'schema', 'stage', 'code', 'child_applied_port'}
