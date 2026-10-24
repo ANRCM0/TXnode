@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 import preflight
-from recovery_diagnostic import valid_recovery
+from recovery_diagnostic import FAILURE_CLASSES, valid_recovery
 
 
 REVISION = 'd2e70b8c3896b8d9808595886cb544d133f179ee'
@@ -120,6 +120,12 @@ class RecoveryDiagnosticPolicy(unittest.TestCase):
 
     def test_fixed_safe_state_is_admitted(self):
         self.assertTrue(valid_recovery(self.good))
+
+    def test_reviewed_failure_classes_are_shared_and_bounded(self):
+        for label in FAILURE_CLASSES:
+            with self.subTest(label=label):
+                self.assertTrue(valid_recovery(dict(self.good, failure_classes=[label], target_failure_class=label)))
+        self.assertFalse(valid_recovery(dict(self.good, failure_classes=['usage_http_PRIVATE_TOKEN'])))
 
     def test_member_readiness_stage_is_explicit(self):
         value = dict(self.good, stage='reenabled', code='member_readiness_failed')

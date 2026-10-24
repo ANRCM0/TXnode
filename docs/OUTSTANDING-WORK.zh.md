@@ -4,6 +4,46 @@
 [NEXT-DEVELOPMENT.zh.md](NEXT-DEVELOPMENT.zh.md)，严格互通入口见
 [INTEROP.md](INTEROP.md)。历史 `a6d0e96` 的“29 通过、6 跳过”不代表当前候选。
 
+## 2026-10-24 启动诊断与 Machine 夹具修正
+
+文档 PR #11 合并后的 `40045439602` 在事件容量回归失败：异步 worker 可以
+先于内核挂接而停止，Service 的 `LOCAL_ATTACH_REFUSED` 提前返回遮住实际
+`STORE_CAPACITY_REACHED`。修正仅使 coordinator 的真实 Degraded/Reason
+优先显示；健康 worker 的真正挂接拒绝继续保留原标签。确定性回归仍要求真实
+SOCKS 流量为 19/19 v1 字节、失败后停止本地观察且重复初始化不重建 consumer。
+
+Machine 的后续失败另行保留：`40046295510`、`40047881008`、`40049351108`
+分别在新 token 恢复或成员重新启用阶段失败，不补称为通过。独立插桩运行
+`40051450211` 观察到一次启动 submit 在累计两秒页预算到期时失败，该次请求
+自身用时 246,859,141 ns。后台到期和清理取消单列；代理后端耗时包含排队和
+PHP 处理，不能单独视作 Core 内部执行时间或全部历史失败的唯一根因。
+
+验收夹具现在将 TLS 握手放到原连接 worker，并只为 PHP HTTP 子进程设置四个
+worker，避免单个未完成握手或串行 PHP 队列阻塞其它连接。Node/Workerman
+环境、Core pin、证书校验、原两秒恢复页、十二秒就绪、十五秒退避，以及原始
+batch/周期重放和 SQL 唯一记录断言保留。新增的显式请求屏障回归在具备固定
+PHP 环境的 Machine job 执行；它要求独立请求在原两秒内返回且被阻塞请求尚未释放。
+
+最终未插桩功能候选为 `79ef3f4330549ea5d6a8af4e7d025ad8fce89f18`，tree
+`1995e121843dca9b7443e38c0b58554784e47324`。常规 PR CI `40052280101` 和
+完整功能 `40052277069` 均成功：Go/race、runtime stability、严格 quick/full、
+真实固定 Core C2、Machine 和镜像冒烟通过。full artifact `12543434146` 的
+原始 JSON 为 37 个适用顶层、29 个子项通过，另两项不适用；Machine artifact
+`12543862367` 的本次原始批次与 SQL 唯一 settled 行均为 7，旧 token 拒绝、
+新 token 恢复、成员撤出和 WS-only 配置断言通过。它不等于独立完整账单对账
+或生产 PKI 证明。本段文档更新不改变该候选的非文档源码。
+
+三份独立反事实已核对原始日志及固定源码摘要：`40046534638` 的旧 Service
+适配器在新确定性回归准确失败，修正版七个 case 各二十次 race，共 140 PASS；
+`40049559568` 的原 TLS 代理在慢握手场景超时，修正版两项网络回归通过；
+`40052359178` 在同一 runner/PHP/屏障下复现原串行子进程环境时，独立请求
+准确两秒超时，四 worker helper 返回 200，测试约 72 ms。最后一项使用 identity
+adapter 在新 harness 中复现旧环境，未宣称执行旧源码文件。插桩克隆及独立
+实验工作流不合入 main，也不替代最终未插桩候选的验收。
+
+本修正不改变下面正式 A/B 的 106/120 measured 与完整 S3 未通过状态。合并后
+main CI、镜像发布、Core 采用和生产部署继续分别记账。
+
 ## 2026-10-24 Actions 执行环境复核
 
 main `90508592b4c0b433eb9a71f367694a981aa958e1` 的定时 native Actions

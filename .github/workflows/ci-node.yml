@@ -194,8 +194,8 @@ jobs:
         run: python3 -m unittest discover -s scripts -p 'test_native_cpu.py' -v
       - name: Reject failed or missing native fault evidence
         run: python3 -m unittest discover -s scripts -p 'test_native_fault_summary.py' -v
-      - name: Verify pinned Core Machine contract inspection
-        run: python3 -m unittest discover -s scripts/tests/node-native-machine -p 'test_preflight.py' -v
+      - name: Verify pinned Core Machine contracts and trusted TLS isolation
+        run: python3 -m unittest discover -s scripts/tests/node-native-machine -p 'test_*.py' -v
       - name: Check independent Node image channels
         run: bash scripts/test-image-tags.sh
       - name: Verify native credential publication and replay history
@@ -534,6 +534,7 @@ jobs:
             sudo apt-get install -y default-mysql-client
           fi
           python3 -m py_compile scripts/tests/node-native-machine/*.py
+          python3 -m unittest discover -s scripts/tests/node-native-machine -p 'php_server_test.py' -v
           php -l scripts/tests/node-native-machine/fixture.php
           cd .compat/core/api
           composer install --no-interaction --prefer-dist

@@ -107,7 +107,7 @@ func (s *Service) localEventMetrics() map[string]interface{} {
 		state = "not_started"
 	}
 	m := map[string]interface{}{"state": state, "authorizes": false, "attribution": "unattributable", "restore_unknown": true, "tail_unknown": true, "coverage": "single_service_per_process"}
-	if c == nil || state == "LOCAL_ATTACH_REFUSED" {
+	if c == nil {
 		return m
 	}
 	status := c.Status()
@@ -115,6 +115,8 @@ func (s *Service) localEventMetrics() map[string]interface{} {
 	case status.Degraded:
 		m["state"] = "stopped"
 		m["reason"] = status.Reason
+	case state == "LOCAL_ATTACH_REFUSED":
+		// Preserve a healthy worker's refusal without hiding an earlier store failure.
 	case status.Closed:
 		m["state"] = "closed"
 	case status.Closing:

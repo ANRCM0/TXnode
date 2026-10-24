@@ -203,15 +203,41 @@ func machineCoreFailureClass(err error) string {
 	}
 
 	if class == "other" {
+		var response *usagev2.HTTPError
+		var pathError *os.PathError
+		var operation *net.OpError
 		switch {
 		case errors.Is(err, context.Canceled):
 			class = "context_canceled"
 		case errors.Is(err, context.DeadlineExceeded):
 			class = "context_deadline"
+		case errors.Is(err, usagev2.ErrRecoveryRequired):
+			class = "usage_recovery"
+		case errors.Is(err, usagev2.ErrPayloadConflict):
+			class = "usage_payload_conflict"
+		case errors.Is(err, usagev2.ErrReceiptMismatch):
+			class = "usage_receipt_mismatch"
+		case errors.Is(err, usagev2.ErrTransportUnavailable):
+			class = "usage_transport"
+		case errors.As(err, &response):
+			switch {
+			case response.Status == 401 || response.Status == 403:
+				class = "usage_http_authority"
+			case response.Status == 422:
+				class = "usage_http_validation"
+			case response.Status >= 500 && response.Status <= 599:
+				class = "usage_http_server"
+			default:
+				class = "usage_http_other"
+			}
+		case errors.As(err, &pathError):
+			class = "filesystem"
+		case errors.As(err, &operation) && operation.Op == "listen":
+			class = "listener"
 		default:
 			cause := err
 			for depth := 0; cause != nil && depth < 8; depth++ {
-				for _, prefix := range []struct{ prefix, label string }{{"NODE_CREDENTIAL_DELIVERY_", "provider"}, {"NODE_AUTHORIZATION_", "authorization"}, {"NATIVE_USAGE_", "native_usage"}} {
+				for _, prefix := range []struct{ prefix, label string }{{"NODE_CREDENTIAL_DELIVERY_", "provider"}, {"NODE_AUTHORIZATION_", "authorization"}, {"NATIVE_USAGE_", "native_usage"}, {"usage v2 ", "usage_protocol"}, {"REPORTING_", "reporting"}} {
 					if strings.HasPrefix(cause.Error(), prefix.prefix) {
 						class = prefix.label
 						break
@@ -225,6 +251,33 @@ func machineCoreFailureClass(err error) string {
 		}
 	}
 	return class
+}
+
+func TestMachineCoreFailureClassesRemainBounded(t *testing.T) {
+	private := "FIXTURE_PRIVATE_TOKEN_AND_PATH"
+	cases := []struct {
+		err  error
+		want string
+	}{
+		{fmt.Errorf("initial setup: %w", usagev2.ErrRecoveryRequired), "usage_recovery"},
+		{usagev2.ErrPayloadConflict, "usage_payload_conflict"},
+		{usagev2.ErrReceiptMismatch, "usage_receipt_mismatch"},
+		{usagev2.ErrTransportUnavailable, "usage_transport"},
+		{&usagev2.HTTPError{Status: 401, Code: private}, "usage_http_authority"},
+		{&usagev2.HTTPError{Status: 422, Code: private}, "usage_http_validation"},
+		{&usagev2.HTTPError{Status: 503, Code: private}, "usage_http_server"},
+		{&usagev2.HTTPError{Status: 409, Code: private}, "usage_http_other"},
+		{&os.PathError{Op: "open", Path: private, Err: os.ErrPermission}, "filesystem"},
+		{&net.OpError{Op: "listen", Err: errors.New(private)}, "listener"},
+		{errors.New("usage v2 complete durable receipt required: " + private), "usage_protocol"},
+		{errors.New("REPORTING_RECOVERY_FAILED: " + private), "reporting"},
+		{fmt.Errorf("initial setup: %w", errors.New(private)), "other"},
+	}
+	for _, test := range cases {
+		if got := machineCoreFailureClass(test.err); got != test.want || strings.Contains(got, private) {
+			t.Errorf("failure label got %q want %q", got, test.want)
+		}
+	}
 }
 
 // Publish only reviewed state labels; errors and runtime stacks remain private.
