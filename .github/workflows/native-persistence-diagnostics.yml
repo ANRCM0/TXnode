@@ -1,4 +1,4 @@
-name: Independent extended events-long CPU profiles
+name: Independent measurement-window events-long CPU profiles
 'on':
   workflow_dispatch: {}
 permissions:
@@ -14,7 +14,7 @@ env:
 jobs:
   profile:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v4
       with:
@@ -43,15 +43,15 @@ jobs:
         go version >> "$RUNNER_TEMP/extended-profile-environment/environment.txt"
 
         '
-    - name: Collect six alternating 55-second event stack profiles per side
-      run: python3 scripts/events-long-cpu-profile.py --output "$RUNNER_TEMP/extended-events-long-profile"
-        --reference-directory "$RUNNER_TEMP/long-cpu-reference"
+    - name: Build diagnostic-only harnesses and collect six windowed profile pairs
+      run: python3 scripts/events-long-cpu-profile.py --windowed-harness --output
+        "$RUNNER_TEMP/window-events-long-profile" --reference-directory "$RUNNER_TEMP/long-cpu-reference"
     - name: Retain every instrumented sample and failure
       if: always()
       uses: actions/upload-artifact@v4
       with:
-        name: extended-events-long-profile-${{ github.sha }}
-        path: '${{ runner.temp }}/extended-events-long-profile/
+        name: window-events-long-profile-${{ github.sha }}
+        path: '${{ runner.temp }}/window-events-long-profile/
 
           ${{ runner.temp }}/extended-profile-environment/'
         if-no-files-found: error

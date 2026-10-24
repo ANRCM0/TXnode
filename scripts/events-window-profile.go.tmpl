@@ -1,0 +1,92 @@
+package main
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime/pprof"
+
+	"golang.org/x/sys/unix"
+)
+
+type windowProfile struct {
+	file    *os.File
+	root    string
+	active  bool
+	started bool
+	before  int64
+	after   int64
+}
+
+func profileMonotonic() int64 {
+	var value unix.Timespec
+	if err := unix.ClockGettime(unix.CLOCK_MONOTONIC, &value); err != nil {
+		panic(err)
+	}
+	return value.Nano()
+}
+
+func newWindowProfile(root string) *windowProfile {
+	p := &windowProfile{root: root}
+	if path := os.Getenv("TXNODE_NATIVE_AB_CPU_PROFILE"); path != "" {
+		var err error
+		p.file, err = os.Create(path)
+		if err != nil {
+			panic(err)
+		}
+	}
+	return p
+}
+
+func (p *windowProfile) start() {
+	if p.file == nil {
+		return
+	}
+	if p.started {
+		panic("duplicate diagnostic profile start")
+	}
+	p.before = profileMonotonic()
+	if err := pprof.StartCPUProfile(p.file); err != nil {
+		panic(err)
+	}
+	p.after = profileMonotonic()
+	p.active, p.started = true, true
+}
+
+func (p *windowProfile) stop(complete bool) {
+	if !p.active {
+		return
+	}
+	before := profileMonotonic()
+	pprof.StopCPUProfile()
+	after := profileMonotonic()
+	p.active = false
+	body, err := json.Marshal(map[string]any{
+		"schema": "txnode-diagnostic-profile-window/v1", "pid": os.Getpid(),
+		"start_before_nanos": p.before, "start_after_nanos": p.after,
+		"stop_before_nanos": before, "stop_after_nanos": after,
+		"two_cpu_snapshots_completed": complete,
+	})
+	if err != nil {
+		panic(err)
+	}
+	path := filepath.Join(p.root, "profile-window.json")
+	if err := os.WriteFile(path+".tmp", body, 0600); err != nil {
+		panic(err)
+	}
+	if err := os.Rename(path+".tmp", path); err != nil {
+		panic(err)
+	}
+}
+
+func (p *windowProfile) close() {
+	if p.file == nil {
+		return
+	}
+	if p.active {
+		p.stop(false)
+	}
+	if err := p.file.Close(); err != nil {
+		panic(err)
+	}
+}

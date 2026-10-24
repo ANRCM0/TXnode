@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Finite, instrumented events/long stack collection from archived binaries in Actions."""
 import argparse
+import difflib
 import gzip
 import hashlib
 import importlib.util
@@ -8,7 +9,9 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
+import tempfile
 from types import SimpleNamespace
 
 
@@ -102,10 +105,72 @@ def profile_stats(path):
             'duration_nanos': duration, 'sample_types': types}
 
 
+def windowed_binaries(root, output, bench, original, checkouts):
+    template = (root / 'scripts/native-acceptance-server.go.tmpl').read_text()
+    start = template.index('\tif path := os.Getenv("TXNODE_NATIVE_AB_CPU_PROFILE"); path != "" {')
+    end = template.index('\n\tnode := makeKernel()', start)
+    old_init = template[start:end]
+    new_init = '\tprofile := newWindowProfile(*root)\n\tdefer profile.close()\n'
+    old_signal = ('\t\t\tcpuSnapshots++\n'
+                  '\t\t\twriteCPUSnapshot(*root, os.Getenv("TXNODE_NATIVE_AB_CPU_NONCE"), cpuSnapshots)\n')
+    new_signal = ('\t\t\tcpuSnapshots++\n'
+                  '\t\t\tif cpuSnapshots == 1 { profile.start() }\n'
+                  '\t\t\twriteCPUSnapshot(*root, os.Getenv("TXNODE_NATIVE_AB_CPU_NONCE"), cpuSnapshots)\n'
+                  '\t\t\tif cpuSnapshots == 2 { profile.stop(true) }\n')
+    if template.count(old_signal) != 1:
+        raise RuntimeError('original CPU handler changed')
+    patched = template.replace(old_init, new_init, 1).replace(old_signal, new_signal, 1)
+    patched = patched.replace('\t"runtime/pprof"\n', '', 1)
+    restored = patched.replace(new_init, old_init, 1).replace(new_signal, old_signal, 1)
+    restored = restored.replace('\t"runtime"\n', '\t"runtime"\n\t"runtime/pprof"\n', 1)
+    if restored != template:
+        raise RuntimeError('diagnostic profile overlay changes more than control points')
+    helper = (root / 'scripts/events-window-profile.go.tmpl').read_bytes()
+    patch = ''.join(difflib.unified_diff(template.splitlines(True), patched.splitlines(True),
+                                      fromfile='original-server-template', tofile='window-profile-main.go'))
+    (output / 'profile-window-overlay.patch').write_text(patch)
+    (output / 'profile-window-helper.go.txt').write_bytes(helper)
+    workspace = Path(tempfile.mkdtemp(prefix='txnode-window-profile-'))
+    paths, metadata = {}, {}
+    for side in ('legacy', 'candidate'):
+        checkout = workspace / side
+        bench.command(['git', 'worktree', 'add', '--detach', str(checkout), original['builds'][side]['sha']])
+        checkouts.append(checkout)
+        harness = checkout / 'cmd/native-ab'
+        harness.mkdir()
+        (harness / 'main.go').write_text(patched)
+        (harness / 'profile_window.go').write_bytes(helper)
+        factory = root / ('scripts/native-acceptance-%s.go.tmpl' % side)
+        bucket = root / 'scripts/native-acceptance-bucket-diagnostic.go.tmpl'
+        shutil.copyfile(factory, harness / 'factory.go')
+        shutil.copyfile(bucket, checkout / 'internal/usagebucket/native_ab_diagnostic.go')
+        locks = {name: digest(checkout / name) for name in ('go.mod', 'go.sum')}
+        if locks != original['builds'][side]['module_lock_sha256']:
+            raise RuntimeError('profile source module locks changed')
+        prefetch = bench.prefetch_modules(checkout, output, side)
+        if prefetch['status'] != 'complete':
+            raise RuntimeError('profile module prefetch incomplete')
+        binary = output / ('server-window-' + side)
+        bench.command(['go', 'build', *bench.FLAGS, '-o', str(binary), './cmd/native-ab'], checkout)
+        bench.command(['git', 'diff', '--exit-code', 'HEAD', '--'], checkout)
+        if locks != {name: digest(checkout / name) for name in locks}:
+            raise RuntimeError('profile build changed module locks')
+        metadata[side] = {'production_source': original['builds'][side]['sha'],
+                          'production_tree': bench.command(['git', 'rev-parse', 'HEAD^{tree}'], checkout),
+                          'binary_sha256': digest(binary), 'binary_bytes': binary.stat().st_size,
+                          'main_sha256': digest(harness / 'main.go'), 'helper_sha256': digest(harness / 'profile_window.go'),
+                          'factory_sha256': digest(factory), 'bucket_helper_sha256': digest(bucket),
+                          'module_lock_sha256': locks, 'tracked_source_unchanged': True,
+                          'original_main_restored_exactly': True, 'prefetch': prefetch}
+        paths[side] = binary
+    return paths, metadata
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--reference-directory', type=Path, required=True)
+    parser.add_argument('--windowed-harness', action='store_true')
     args = parser.parse_args()
     if os.environ.get('GITHUB_ACTIONS') != 'true' or platform.system() != 'Linux':
         raise RuntimeError('profile execution belongs to Linux Actions')
@@ -137,6 +202,17 @@ def main():
         raise RuntimeError('profile toolchain differs from frozen build')
     allowed = sorted(os.sched_getaffinity(0))
     os.sched_setaffinity(0, {allowed[0]})
+    bench = load('frozen_original_bench', root / 'scripts/native-acceptance.py')
+    checkouts = []
+    binaries = {side: reference / ('server-' + side) for side in ('legacy', 'candidate')}
+    harnesses = None
+    if args.windowed_harness:
+        try:
+            binaries, harnesses = windowed_binaries(root, output, bench, original, checkouts)
+        except BaseException:
+            for checkout in reversed(checkouts):
+                bench.command(['git', 'worktree', 'remove', '--force', str(checkout)])
+            raise
     plan = {'schema': 'txnode-events-long-profile/v1', 'candidate': CANDIDATE,
             'baseline': original['baseline'], 'workflow_source': git('rev-parse', 'HEAD').decode().strip(),
             'reference_run': 40059251852, 'reference_artifact': 12547191583,
@@ -150,28 +226,50 @@ def main():
             'scope': 'Six alternating profiled pairs, startup/warmup/55s-transfer/shutdown. '
                      'Stack diagnostics only; no formal comparison or acceptance. Original binaries and byte proofs retained.',
             'full_S3_accepted': False}
+    if harnesses is not None:
+        plan['schema'] = 'txnode-events-long-window-profile/v1'
+        plan['reference_builds'] = plan.pop('builds')
+        plan['instrumented_harnesses'] = harnesses
+        plan['profile_overlay_sha256'] = digest(output / 'profile-window-overlay.patch')
+        plan['profile_helper_sha256'] = digest(root / 'scripts/events-window-profile.go.tmpl')
+        plan['scope'] = ('Six alternating diagnostic-harness pairs. CPU profile starts before snapshot 1 and '
+                         'stops after snapshot 2; startup, warmup and shutdown proof reads excluded. '
+                         'Original production trees, factory, byte proofs, capacity and ACK retained. '
+                         'No formal comparison or acceptance.')
     write(output / 'plan.json', plan)
     report = {'schema': plan['schema'], 'candidate': CANDIDATE, 'baseline': original['baseline'],
               'accepted': False, 'full_S3_accepted': False, 'samples': [], 'aggregates': {},
               'scope': plan['scope'], 'collection_complete': False, 'hotspot_sample_budget_met': False}
     write(output / 'report.json', report)
-    bench = load('frozen_original_bench', root / 'scripts/native-acceptance.py')
     validator = load('frozen_cpu_validator', root / 'scripts/native-s3-summary.py')
     settings = SimpleNamespace(warmup=WARMUP, seconds=SECONDS, concurrency=CONCURRENCY)
-    origin = bench.Origin()
+    origin = None
     try:
+        origin = bench.Origin()
         for group in range(1, GROUPS + 1):
             sides = ('legacy', 'candidate') if group % 2 else ('candidate', 'legacy')
             for side in sides:
                 state = output / ('g%d-%s' % (group, side))
                 profile = state / 'cpu.pprof'
                 item = {'group': group, 'side': side, 'acceptance_sample': False,
-                        'profile_scope': 'startup, warmup, transfer and graceful shutdown'}
-                item['sample'] = bench.sample(reference / ('server-' + side), state, 'events', 'long',
+                        'binary_sha256': digest(binaries[side]),
+                        'profile_scope': 'first CPU snapshot through second CPU snapshot' if harnesses is not None
+                                         else 'startup, warmup, transfer and graceful shutdown'}
+                item['sample'] = bench.sample(binaries[side], state, 'events', 'long',
                                              settings, origin, cpu_profile=profile, persistence_diagnostics=False)
                 try:
                     item.update(profile_sha256=digest(profile), profile=profile_stats(profile),
                                 valid_process_cpu_window=validator.valid_cpu(item['sample']))
+                    if harnesses is not None:
+                        window = json.loads((state / 'profile-window.json').read_text())
+                        start, end = [item['sample']['cpu_measurement'][key] for key in ('start', 'end')]
+                        if (window['schema'] != 'txnode-diagnostic-profile-window/v1'
+                                or window['pid'] != start['pid'] or window['two_cpu_snapshots_completed'] is not True
+                                or not window['start_before_nanos'] <= window['start_after_nanos']
+                                <= start['monotonic_before_nanos'] <= end['monotonic_after_nanos']
+                                <= window['stop_before_nanos'] <= window['stop_after_nanos']):
+                            raise RuntimeError('profile window does not contain original CPU snapshots')
+                        item['profile_window'] = window
                 except Exception as error:
                     item['collection_error'] = type(error).__name__
                 report['samples'].append(item)
@@ -179,7 +277,10 @@ def main():
                 print('profile group=%d side=%s status=%s stats=%s' % (
                     group, side, item['sample']['status'], item.get('profile')), flush=True)
     finally:
-        origin.close()
+        if origin is not None:
+            origin.close()
+        for checkout in reversed(checkouts):
+            bench.command(['git', 'worktree', 'remove', '--force', str(checkout)])
     complete = (len(report['samples']) == GROUPS * 2 and all(
         item['sample']['status'] == 'measured' and item.get('valid_process_cpu_window') is True
         and 'collection_error' not in item for item in report['samples']))
@@ -189,7 +290,7 @@ def main():
             profiles = [str(output / ('g%d-%s/cpu.pprof' % (item['group'], side))) for item in items]
             target = output / ('aggregate-' + side + '.pprof')
             command = ['go', 'tool', 'pprof', '-proto', '-output', str(target),
-                       str(reference / ('server-' + side)), *profiles]
+                       str(binaries[side]), *profiles]
             subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
             stats = profile_stats(target)
             if any(stats[key] != sum(item['profile'][key] for item in items) for key in ('sample_count', 'cpu_nanos')):
@@ -198,7 +299,7 @@ def main():
             for label, flags in [('flat', []), ('cumulative', ['-cum'])]:
                 path = output / ('top-%s-%s.txt' % (side, label))
                 value = subprocess.check_output(['go', 'tool', 'pprof', '-top', '-nodecount=80',
-                                                 *flags, str(reference / ('server-' + side)), str(target)],
+                                                 *flags, str(binaries[side]), str(target)],
                                                 stderr=subprocess.PIPE, timeout=60)
                 path.write_bytes(value)
                 files[path.name] = digest(path)
