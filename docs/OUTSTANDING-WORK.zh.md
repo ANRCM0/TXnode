@@ -4,6 +4,24 @@
 [NEXT-DEVELOPMENT.zh.md](NEXT-DEVELOPMENT.zh.md)，严格互通入口见
 [INTEROP.md](INTEROP.md)。历史 `a6d0e96` 的“29 通过、6 跳过”不代表当前候选。
 
+## 2026-10-24 S3 汇总完整性修正
+
+正式运行 `40040191779` 的原 ledger 在缺少 `cpu_measurement` 时提前结束共享
+`try`，后面的镜像大小与分配窗口检查没有生成。验证器候选
+`9f3ff8deff30c396721b6e81962a36e456923964` 将原 CPU 谓词原样提取到
+`scripts/native-s3-summary.py`，逐项捕获缺失或损坏证据，使每项固定检查都有
+显式结果。任何失败仍拒绝验收，CLI 在非零退出前写 JSON 与 job summary。
+生产源码、原 CPU 谓词 AST、测量脚本、soak/fault/performance job 定义、原始
+基线、容量、fsync、ACK、负载与阈值均保持。
+
+Actions `40055572834` / artifact `12545083199` 只重放同一份原始失败产物：
+通过 GitHub 读取原运行的 job 结论，原验证器结果与归档 ledger 完全相同；
+新验证器明确记录 `process_cpu_windows=false`、`image_sizes=true`、
+`allocation_windows=false`，两版都以非零状态退出，完整 S3 仍为 false。
+七项新回归全部通过，无跳过；原/新验证器、测试和输入报告摘要已核对。
+它不新增性能、soak 或故障样本，也不把原 106/120 改写为验收通过。
+独立重放工作流保留在诊断分支，不合入 main。
+
 ## 2026-10-24 启动诊断与 Machine 夹具修正
 
 文档 PR #11 合并后的 `40045439602` 在事件容量回归失败：异步 worker 可以
