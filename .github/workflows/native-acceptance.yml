@@ -12,6 +12,11 @@ on:
         required: false
         default: original-a1ad269-v1
         type: string
+      latency_profile:
+        description: Optional prospectively declared latency percentile budget
+        required: false
+        default: observations-only
+        type: string
   workflow_dispatch:
     inputs:
       candidate:
@@ -26,6 +31,14 @@ on:
         options:
           - original-a1ad269-v1
           - legacy-clock-serialized-v1
+      latency_profile:
+        description: Observation history or an explicit fresh latency budget
+        required: false
+        default: observations-only
+        type: choice
+        options:
+          - observations-only
+          - percentiles-5pct-v1
       diagnostics_only:
         description: Run separate CPU and persistence diagnostics without S3 acceptance
         required: false
@@ -86,6 +99,20 @@ jobs:
               output.write('baseline_label=' + native_baselines.artifact_label(baseline['profile']) + '\n')
               output.write('baseline_sha=' + baseline['commit'] + '\n')
           PY
+      - name: Declare prospective latency budget before any measurement job
+        if: inputs.latency_profile && inputs.latency_profile != 'observations-only'
+        env:
+          LATENCY_PROFILE: ${{ inputs.latency_profile }}
+          BASELINE_PROFILE: ${{ inputs.baseline_profile || 'original-a1ad269-v1' }}
+          DIAGNOSTICS_ONLY: ${{ inputs.diagnostics_only && 'true' || 'false' }}
+        run: |
+          set -euo pipefail
+          test "$DIAGNOSTICS_ONLY" = false
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python3 scripts/native_latency.py plan --profile "$LATENCY_PROFILE" \
+            --candidate "$GITHUB_SHA" --baseline-profile "$BASELINE_PROFILE" \
+            --workflow-run "$GITHUB_RUN_ID" --tool-revision "$GITHUB_SHA" \
+            --output artifacts/source/latency-plan.json
       - uses: actions/upload-artifact@v4
         with:
           name: native-source-${{ steps.source.outputs.sha }}
@@ -283,6 +310,26 @@ jobs:
         with:
           go-version: '1.26.0'
           cache-dependency-path: go.sum
+      - name: Download this run's pre-load latency plan
+        if: inputs.latency_profile && inputs.latency_profile != 'observations-only'
+        uses: actions/download-artifact@v4
+        with:
+          name: native-source-${{ needs.source.outputs.sha }}
+          path: artifacts/latency-source
+      - name: Validate the immutable latency budget before building or loading either side
+        if: inputs.latency_profile && inputs.latency_profile != 'observations-only'
+        env:
+          CANDIDATE_SHA: ${{ needs.source.outputs.sha }}
+          BASELINE_PROFILE: ${{ needs.source.outputs.baseline_profile }}
+          LATENCY_PROFILE: ${{ inputs.latency_profile }}
+        run: |
+          set -euo pipefail
+          python3 scripts/native_latency.py validate-plan --profile "$LATENCY_PROFILE" \
+            --candidate "$CANDIDATE_SHA" --baseline-profile "$BASELINE_PROFILE" \
+            --workflow-run "$GITHUB_RUN_ID" --tool-revision "$GITHUB_SHA" \
+            --plan artifacts/latency-source/latency-plan.json
+          mkdir -p artifacts/native-performance
+          cp artifacts/latency-source/latency-plan.json artifacts/native-performance/latency-plan.json
       - name: Build both revisions and alternate five measurement groups
         env:
           CANDIDATE_SHA: ${{ needs.source.outputs.sha }}
@@ -291,6 +338,19 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --baseline-profile "$BASELINE_PROFILE" --output artifacts/native-performance
+      - name: Evaluate only the prospectively declared latency percentiles
+        if: always() && inputs.latency_profile == 'percentiles-5pct-v1'
+        env:
+          CANDIDATE_SHA: ${{ needs.source.outputs.sha }}
+          BASELINE_PROFILE: ${{ needs.source.outputs.baseline_profile }}
+        run: |
+          python3 scripts/native_latency.py summarize --profile percentiles-5pct-v1 \
+            --candidate "$CANDIDATE_SHA" --baseline-profile "$BASELINE_PROFILE" \
+            --workflow-run "$GITHUB_RUN_ID" --tool-revision "$GITHUB_SHA" \
+            --plan artifacts/native-performance/latency-plan.json \
+            --report artifacts/native-performance/report.json \
+            --output artifacts/native-performance/latency-acceptance.json \
+            --step-summary "$GITHUB_STEP_SUMMARY"
       - name: Publish comparison to job summary
         if: always()
         run: |
@@ -303,6 +363,15 @@ jobs:
         with:
           name: native-performance-${{ needs.source.outputs.baseline_label }}${{ needs.source.outputs.sha }}
           path: artifacts/native-performance/
+          if-no-files-found: error
+      - name: Retain the separately named prospective latency proof
+        if: always() && inputs.latency_profile == 'percentiles-5pct-v1'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-latency-${{ needs.source.outputs.baseline_label }}percentiles-5pct-v1-${{ needs.source.outputs.sha }}
+          path: |
+            artifacts/native-performance/latency-plan.json
+            artifacts/native-performance/latency-acceptance.json
           if-no-files-found: error
 
   acceptance:
@@ -326,15 +395,17 @@ jobs:
           PERFORMANCE_JOB: ${{ needs.performance.result }}
           BASELINE_TEST_JOB: ${{ needs.errata-baseline-tests.result }}
           BASELINE_PROFILE: ${{ needs.source.outputs.baseline_profile }}
+          LATENCY_PROFILE: ${{ inputs.latency_profile || 'observations-only' }}
         run: |
           python3 scripts/native-s3-summary.py \
             --candidate "$CANDIDATE_SHA" --baseline-profile "$BASELINE_PROFILE" --evidence evidence --output s3-acceptance.json \
+            --latency-profile "$LATENCY_PROFILE" --workflow-run "$GITHUB_RUN_ID" --tool-revision "$GITHUB_SHA" \
             --soak-job "$SOAK_JOB" --faults-job "$FAULTS_JOB" --performance-job "$PERFORMANCE_JOB" \
             --baseline-test-job "$BASELINE_TEST_JOB" \
             --step-summary "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: native-s3-acceptance-${{ needs.source.outputs.baseline_label }}${{ needs.source.outputs.sha }}
+          name: native-s3-acceptance-${{ inputs.latency_profile == 'percentiles-5pct-v1' && 'percentiles-5pct-v1-' || '' }}${{ needs.source.outputs.baseline_label }}${{ needs.source.outputs.sha }}
           path: s3-acceptance.json
           if-no-files-found: error

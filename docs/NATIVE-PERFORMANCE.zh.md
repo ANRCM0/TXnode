@@ -9,6 +9,35 @@
 
 所有功能、网络与负载执行仍限于 GitHub Actions。本地仅允许源码检查、Go 静态编译、格式和 AST 检查。缺少客户端、工具编译失败、实际负载不达标与证据不完整均不能记为通过。
 
+## 2026-10-25 事前延迟预算补项
+
+对照 `NEXT-DEVELOPMENT.zh.md` 的完整要求，现行 S3 v2 的十三项检查虽然已有
+完整通过，但 p50/p95/p99 仅记录，尚不能证明事前固定的延迟预算已验收。I/O
+timeout 不是百分位预算，不将原 `613d6a36` 的 120 份结果倒填成延迟通过。
+
+新增显式 `latency_profile=percentiles-5pct-v1`：沿用初始 5% 调查口径，对每个
+mode/workload 的 p50/p95/p99 分别比较五组中位数，候选/旧侧上限 1.05；任一侧
+该百分位的 population CV 超过 0.10 则未决。缺失、重复、失败、非法数值/顺序、
+不一致工具或基线均拒绝。它采用原每 worker 最多 20000 条有界确定性观测，不
+声称是无损全量直方图或生产 SLO。policy 的 canonical SHA-256 固定为
+`3cb81c29e2e169abeb750869a076313a245175fd7b0e3186184bc94b5dc55e96`。
+
+完整调用链为 workflow `source` 生成 `latency-plan.json`，绑定精确 candidate/
+tree、baseline、run ID、workflow/tool revision、测量及预算工具摘要和上述固定
+policy；后续 performance job 下载本次 plan，并在原构建/负载命令之前验证及
+复制。工具和 candidate 必须是同一 workflow 提交，且工具文件逐字匹配其已提交
+内容，不能用新预算接受旧运行。采样后 `native_latency.py` 只读取原 report，
+输出十二组/三十六项比较；即使原测量失败也保留独立拒绝 JSON。
+
+选择该 profile 的 S3 v3 另重算并核对原始 plan、复制件及 latency archive，
+增加 `latency_evidence`、`latency_windows`、`latency_comparisons`。原 CPU、
+吞吐、噪声、资源、容量、同步、ACK、负载及所有 v2 检查保留。新 profile 的
+延迟 artifact 和最终 ledger 明确单列，任何失败或未决均不能得到完整通过。
+`observations-only` 继续产生原 v2 形状，保留旧报告/失败及既有通过的原范围。
+
+本补项目前只有源码、AST/YAML 和边界检查，新增单元与新 profile 的完整
+Actions 尚待执行；不把实现或原 v2 通过宣布为整个 S0-S4 目标完成。
+
 ## 2026-10-25 候选 record 准备路径
 
 候选 `613d6a36357d0a4888fe9be3ac7faec29a948861`，tree

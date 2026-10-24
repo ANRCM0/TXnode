@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 
 import native_baselines
+import native_latency
 
 
 def valid_cpu(sample):
@@ -59,10 +60,14 @@ SCOPE = ('fixed Linux Actions loopback profile: 30 minute staged TCP/UDP/mux, '
          'sing-box versus native SOCKS A/B; no production or physical multi-host claim')
 
 
-def summarize(root, candidate, outcomes, baseline_profile=native_baselines.DEFAULT_PROFILE):
+def summarize(root, candidate, outcomes, baseline_profile=native_baselines.DEFAULT_PROFILE,
+              latency_profile=native_latency.OBSERVATIONS, workflow_run='', tool_revision=''):
     baseline = native_baselines.identity(baseline_profile)
     checks = {name: outcomes.get(name) == 'success' for name in ('SOAK', 'FAULTS', 'PERFORMANCE')}
     checks.update(dict.fromkeys(CHECKS, False))
+    strict_latency = latency_profile != native_latency.OBSERVATIONS
+    if strict_latency:
+        checks.update(dict.fromkeys(('latency_evidence', 'latency_windows', 'latency_comparisons'), False))
     errors = {}
 
     def record(name, operation):
@@ -115,20 +120,46 @@ def summarize(root, candidate, outcomes, baseline_profile=native_baselines.DEFAU
         # A missing CPU field must not prevent independent image/allocation checks.
         for name in predicates:
             checks[name] = record(name, predicates[name]) is True
+        if strict_latency:
+            def latency_evidence():
+                if latency_profile != native_latency.PROFILE:
+                    raise ValueError('unknown prospective latency profile')
+                expected = native_latency.identity(candidate, baseline_profile, workflow_run, tool_revision)
+                declared = json.loads((root / ('native-source-' + candidate) / 'latency-plan.json').read_text(encoding='utf-8'))
+                copied = read('performance', 'latency-plan.json')
+                archived = read('performance', 'latency-acceptance.json')
+                derived = native_latency.summarize(performance, declared, expected)
+                if copied != declared or archived != derived:
+                    raise ValueError('latency archive must match its pre-load plan and original report')
+                return derived
+
+            latency = record('latency_evidence', latency_evidence)
+            if latency is not None:
+                checks['latency_evidence'] = latency['checks']['plan_identity'] and latency['checks']['report_identity']
+                checks['latency_windows'] = latency['checks']['complete_latency_windows']
+                checks['latency_comparisons'] = latency['checks']['latency_comparisons']
     else:
         errors['candidate'] = {'error': 'immutable_candidate_required'}
     checks['evidence_complete'] = not errors
     if errors:
         checks['evidence_error'] = ', '.join(errors)
-    return {'schema': 'txnode-s3-acceptance/v2', 'candidate': candidate, 'baseline_identity': baseline, 'checks': checks,
-            'evidence_errors': errors, 'full_S3_accepted': all(value is True for value in checks.values()),
-            'scope': SCOPE}
+    result = {'schema': 'txnode-s3-acceptance/v3' if strict_latency else 'txnode-s3-acceptance/v2',
+              'candidate': candidate, 'baseline_identity': baseline, 'checks': checks,
+              'evidence_errors': errors, 'full_S3_accepted': all(value is True for value in checks.values()),
+              'scope': SCOPE}
+    if strict_latency:
+        result.update(latency_profile=latency_profile, latency_policy_sha256=native_latency.digest(native_latency.POLICY))
+        result['scope'] += '; prospectively declared p50/p95/p99 regression budget, no production SLO'
+    return result
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--candidate', required=True)
     parser.add_argument('--baseline-profile', choices=native_baselines.PROFILES, default=native_baselines.DEFAULT_PROFILE)
+    parser.add_argument('--latency-profile', choices=(native_latency.OBSERVATIONS, native_latency.PROFILE), default=native_latency.OBSERVATIONS)
+    parser.add_argument('--workflow-run', default='')
+    parser.add_argument('--tool-revision', default='')
     parser.add_argument('--evidence', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--soak-job', required=True)
@@ -140,7 +171,7 @@ def main():
     result = summarize(args.evidence, args.candidate,
                        {'SOAK': args.soak_job, 'FAULTS': args.faults_job, 'PERFORMANCE': args.performance_job,
                         'BASELINE_TESTS': args.baseline_test_job},
-                       args.baseline_profile)
+                       args.baseline_profile, args.latency_profile, args.workflow_run, args.tool_revision)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     encoded = json.dumps(result, indent=2)
     args.output.write_text(encoded + '\n', encoding='utf-8')

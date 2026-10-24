@@ -4,6 +4,18 @@
 [NEXT-DEVELOPMENT.zh.md](NEXT-DEVELOPMENT.zh.md)，严格互通入口见
 [INTEROP.md](INTEROP.md)。历史 `a6d0e96` 的“29 通过、6 跳过”不代表当前候选。
 
+## 2026-10-25 完成审计发现的延迟预算补项
+
+PR #16 的现行 S3 v2 已完整通过并交付；继续逐项核对原方案时，确认其百分位
+只有观测值，缺少事前固定的延迟预算。整个 S0-S4 目标保持进行中，原十三项
+检查全 true 的结论保留其原范围，不改写为延迟要求已完成。
+
+独立补项新增 `percentiles-5pct-v1`：p50/p95/p99 各按五组中位数比较，上限
+1.05，任一侧 CV 超过 0.10 为未决。source job 在负载前固定源码、run ID、工具
+摘要和 policy，performance job 必须先验证；之后只读取新的原参数 report。
+S3 v3 重算并增加三项延迟检查；旧观察模式仍为 v2，历史结果不倒填。完整入口
+及预算摘要见 `NATIVE-PERFORMANCE.zh.md`。当前仅静态检查，Actions 尚未验收。
+
 ## 2026-10-25 候选记录编码复用
 
 运行时候选 `613d6a36357d0a4888fe9be3ac7faec29a948861` 在 journal writer 中

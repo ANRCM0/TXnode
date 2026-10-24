@@ -204,6 +204,100 @@ class S3SummaryTests(unittest.TestCase):
         self.assertTrue(result['checks']['allocation_windows'])
         self.assertIn('Exact source S3 evidence', markdown.read_text(encoding='utf-8'))
 
+    def enable_latency(self):
+        self.expected = {'candidate': CANDIDATE, 'candidate_tree': 'b' * 40, 'baseline_identity': self.baseline,
+                         'workflow_run': '17', 'tool_revision': CANDIDATE,
+                         'measurement_tool_sha256': 'c' * 64, 'latency_tool_sha256': 'd' * 64}
+        self.performance.update(candidate_tree=self.expected['candidate_tree'], baseline_identity=self.baseline,
+                                tool_sha256=self.expected['measurement_tool_sha256'],
+                                go='go version go1.26.0 linux/amd64', go_environment='linux\namd64\nlocal\n0',
+                                settings={'groups': 5, 'sample_seconds': 10, 'warmup_seconds': 2, 'concurrency': 4,
+                                          'buffer_bytes': 32768, 'short_buffer_bytes': 1024,
+                                          'throughput_floor': 0.95, 'cpu_ceiling': 1.05, 'noise_cv_ceiling': 0.10,
+                                          'event_store_max_bytes': 1 << 30, 'usage_lease_seconds': 90,
+                                          'persistence_diagnostics': 'disabled'})
+        self.performance['builds']['candidate'] = {'sha': CANDIDATE, 'status': 'built'}
+        for item in self.performance['samples']:
+            item.update(persistence_diagnostics=False, operations=100000, latency_sample_count=80000,
+                        latency_method='bounded deterministic sample per worker',
+                        latency_ms={'50': 1.0, '95': 2.0, '99': 3.0})
+        self.declared = SUMMARY.native_latency.plan(self.expected)
+
+    def write_latency(self):
+        self.write()
+        self.source_plan = self.root / ('native-source-' + CANDIDATE) / 'latency-plan.json'
+        self.source_plan.parent.mkdir(exist_ok=True)
+        self.source_plan.write_text(json.dumps(self.declared), encoding='utf-8')
+        directory = self.root / ('native-performance-' + SUMMARY.native_baselines.artifact_label(self.profile) + CANDIDATE)
+        self.copied_plan = directory / 'latency-plan.json'
+        self.copied_plan.write_text(json.dumps(self.declared), encoding='utf-8')
+        self.latency_archive = directory / 'latency-acceptance.json'
+        value = SUMMARY.native_latency.summarize(self.performance, self.declared, self.expected)
+        self.latency_archive.write_text(json.dumps(value), encoding='utf-8')
+
+    def strict_summary(self):
+        with patch.object(SUMMARY.native_latency, 'identity', return_value=self.expected):
+            return SUMMARY.summarize(self.root, CANDIDATE, SUCCESS, self.profile,
+                                     SUMMARY.native_latency.PROFILE, '17', CANDIDATE)
+
+    def test_prospective_latency_is_an_explicit_v3_scope_and_does_not_rewrite_v2(self):
+        self.enable_latency()
+        self.write_latency()
+        result = self.strict_summary()
+        self.assertTrue(result['full_S3_accepted'])
+        self.assertEqual(result['schema'], 'txnode-s3-acceptance/v3')
+        self.assertEqual(result['latency_profile'], 'percentiles-5pct-v1')
+        self.assertTrue(all(result['checks'][name] for name in ('latency_evidence', 'latency_windows', 'latency_comparisons')))
+        prior = SUMMARY.summarize(self.root, CANDIDATE, SUCCESS, self.profile)
+        self.assertTrue(prior['full_S3_accepted'])
+        self.assertEqual(prior['schema'], 'txnode-s3-acceptance/v2')
+        self.assertNotIn('latency_profile', prior)
+
+    def test_stable_latency_failure_cannot_be_waived_by_successful_cpu_and_jobs(self):
+        self.enable_latency()
+        for item in self.performance['samples']:
+            if (item['mode'], item['workload'], item['side']) == ('events', 'download', 'candidate'):
+                item['latency_ms']['99'] = 3.18
+        self.write_latency()
+        result = self.strict_summary()
+        self.assertFalse(result['full_S3_accepted'])
+        self.assertTrue(result['checks']['latency_evidence'])
+        self.assertTrue(result['checks']['latency_windows'])
+        self.assertFalse(result['checks']['latency_comparisons'])
+        self.assertTrue(all(result['checks'][name] for name in ('PERFORMANCE', 'equivalent_ab', 'process_cpu_windows', 'image_sizes')))
+
+    def test_missing_or_forged_latency_archive_does_not_hide_original_checks(self):
+        self.enable_latency()
+        for change in ('remove', 'accepted', 'budget', 'run'):
+            with self.subTest(change=change):
+                self.write_latency()
+                if change == 'remove':
+                    self.latency_archive.unlink()
+                elif change == 'accepted':
+                    value = json.loads(self.latency_archive.read_text())
+                    value['accepted'] = False
+                    self.latency_archive.write_text(json.dumps(value), encoding='utf-8')
+                else:
+                    value = json.loads(self.copied_plan.read_text())
+                    if change == 'budget':
+                        value['policy']['candidate_over_legacy_ceiling'] = 1.10
+                    else:
+                        value['identity']['workflow_run'] = '18'
+                    self.copied_plan.write_text(json.dumps(value), encoding='utf-8')
+                result = self.strict_summary()
+                self.assertFalse(result['full_S3_accepted'])
+                self.assertFalse(result['checks']['latency_evidence'])
+                self.assertIn('latency_evidence', result['evidence_errors'])
+                self.assertTrue(all(result['checks'][name] for name in ('process_cpu_windows', 'allocation_windows', 'image_sizes')))
+
+    def test_strict_invalid_candidate_never_reads_a_latency_plan_outside_evidence(self):
+        with patch.object(SUMMARY.native_latency, 'identity', side_effect=AssertionError('must not read invalid source')):
+            result = SUMMARY.summarize(self.root, '../outside', SUCCESS, self.profile,
+                                       SUMMARY.native_latency.PROFILE, '17', CANDIDATE)
+        self.assertFalse(result['full_S3_accepted'])
+        self.assertEqual(result['evidence_errors']['candidate']['error'], 'immutable_candidate_required')
+        self.assertFalse(result['checks']['latency_evidence'])
+
 
 if __name__ == '__main__':
     unittest.main()

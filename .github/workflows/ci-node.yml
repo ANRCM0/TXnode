@@ -196,6 +196,8 @@ jobs:
         run: python3 -m unittest discover -s scripts -p 'test_native_fault_summary.py' -v
       - name: Verify independent complete S3 ledger checks
         run: python3 -m unittest discover -s scripts -p 'test_native_s3_summary.py' -v
+      - name: Verify prospective latency budgets and reject invalid percentile evidence
+        run: python3 -m unittest discover -s scripts -p 'test_native_latency.py' -v
       - name: Check original and clock errata baseline identities
         run: |
           git fetch --no-tags origin 4904a193d4564cf67af55728da0b338ff3b1268f
