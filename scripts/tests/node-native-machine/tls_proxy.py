@@ -119,12 +119,20 @@ class NativeTLSProxy:
                     output+=b''.join(f'{k}: {v}\r\n'.encode('iso-8859-1') for k,v in response.getheaders() if k.lower() not in {'connection','transfer-encoding','content-length'})
                     client.sendall(output+f'Content-Length: {len(content)}\r\nConnection: close\r\n\r\n'.encode()+content)
                 finally:upstream.close()
+        context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(cert,key)
         class Server(socketserver.ThreadingTCPServer):
             allow_reuse_address=True
             daemon_threads=True
+            def process_request_thread(self, request, address):
+                try:
+                    request=context.wrap_socket(request,server_side=True,do_handshake_on_connect=False)
+                    request.settimeout(15)
+                    request.do_handshake()
+                except (OSError,ssl.SSLError):
+                    request.close()
+                    return
+                super().process_request_thread(request,address)
         self.server=Server(('127.0.0.1',port),Handler)
-        context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(cert,key)
-        self.server.socket=context.wrap_socket(self.server.socket,server_side=True)
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True)
     def record(self,event):
         event['monotonic_ns']=time.monotonic_ns()
