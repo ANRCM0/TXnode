@@ -1,21 +1,11 @@
-name: Independent native persistence diagnostics
+name: Bounded native CPU and latency follow-up
 
 on:
-  workflow_call:
-    inputs:
-      candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
-        required: true
-        type: string
   workflow_dispatch:
-    inputs:
-      candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
-        required: true
-        type: string
 
 permissions:
   contents: read
+  actions: read
 
 defaults:
   run:
@@ -23,58 +13,43 @@ defaults:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  GOTOOLCHAIN: local
-  CGO_ENABLED: '0'
 
 jobs:
-  persistence-diagnostics:
-    name: Unprofiled observer off on pairs (no S3 acceptance)
+  reproduce:
+    name: Reproduce three fixed cells on frozen binaries
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.candidate }}
           fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.0'
-          cache-dependency-path: go.sum
-      - name: Verify immutable source and diagnostic contracts
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate }}
+      - name: Record the original runner context and require bounded tracing
         run: |
           set -euo pipefail
-          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test -z "$(git status --porcelain)"
-          python3 -m unittest discover -s scripts -p 'test_native_cpu.py' -v
-      - name: Collect five alternating unprofiled observer pairs per side
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate }}
-        run: |
-          set -euo pipefail
-          python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --output artifacts/native-persistence-diagnostics --persistence-diagnostics-only --groups 5 --seconds 10 --warmup 2 --concurrency 4
-      - name: Publish diagnostic observations without an acceptance verdict
-        if: always()
-        run: |
-          if [[ -f artifacts/native-persistence-diagnostics/report.md ]]; then
-            cat artifacts/native-persistence-diagnostics/report.md >> "$GITHUB_STEP_SUMMARY"
+          sudo -n true
+          if ! command -v strace >/dev/null; then
+            sudo -n apt-get update
+            sudo -n apt-get install -y strace
           fi
-      - name: Retain independent evidence including accounting failures
+          mkdir -p "$RUNNER_TEMP/native-follow-up-environment"
+          uname -a > "$RUNNER_TEMP/native-follow-up-environment/uname.txt"
+          lscpu > "$RUNNER_TEMP/native-follow-up-environment/lscpu.txt"
+          findmnt -T "$RUNNER_TEMP" > "$RUNNER_TEMP/native-follow-up-environment/filesystem.txt"
+          strace -V > "$RUNNER_TEMP/native-follow-up-environment/strace.txt"
+          git rev-parse HEAD > "$RUNNER_TEMP/native-follow-up-environment/tool-source.txt"
+      - name: Read the exact reference, reproduce untraced cases, then count syscalls separately
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/native-cpu-latency-follow-up.py \
+            --output "$RUNNER_TEMP/native-cpu-latency-follow-up" \
+            --reference "$RUNNER_TEMP/native-cpu-latency-reference"
+      - name: Retain finite diagnostic evidence without claiming S3 acceptance
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: native-persistence-diagnostics-${{ inputs.candidate }}
+          name: native-cpu-latency-follow-up-${{ github.sha }}
           path: |
-            artifacts/native-persistence-diagnostics/report.json
-            artifacts/native-persistence-diagnostics/report.md
-            artifacts/native-persistence-diagnostics/prefetch-*.log
-            artifacts/native-persistence-diagnostics/persistence-*/sample.json
-            artifacts/native-persistence-diagnostics/persistence-*/metadata.json
-            artifacts/native-persistence-diagnostics/persistence-*/server.log
-            artifacts/native-persistence-diagnostics/persistence-*/cpu-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/runtime-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/evidence.json
-            artifacts/native-persistence-diagnostics/persistence-*/bucket-after-*.json
+            ${{ runner.temp }}/native-cpu-latency-follow-up/
+            ${{ runner.temp }}/native-follow-up-environment/
           if-no-files-found: error
