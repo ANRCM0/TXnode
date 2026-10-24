@@ -1,80 +1,118 @@
-name: Independent native persistence diagnostics
-
-on:
-  workflow_call:
-    inputs:
-      candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
-        required: true
-        type: string
-  workflow_dispatch:
-    inputs:
-      candidate:
-        description: Full immutable candidate commit SHA (40 lowercase hex characters)
-        required: true
-        type: string
-
+name: Independent Machine transport cause diagnostic
+'on':
+  workflow_dispatch: {}
 permissions:
   contents: read
-
 defaults:
   run:
     shell: bash
-
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  GOTOOLCHAIN: local
-  CGO_ENABLED: '0'
-
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 jobs:
-  persistence-diagnostics:
-    name: Unprofiled observer off on pairs (no S3 acceptance)
+  machine-transport:
+    name: Instrumented Machine transport cause collection (no acceptance)
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 25
+    env:
+      CGO_ENABLED: '1'
+      APP_ENV: testing
+      DB_CONNECTION: mysql
+      DB_HOST: 127.0.0.1
+      DB_PORT: '3306'
+      DB_DATABASE: txboard_native_machine_test
+      DB_USERNAME: txboard_native_machine
+      DB_PASSWORD: native-machine-ci-only
+      REDIS_PORT: '6379'
+      REDIS_DB: '14'
+      REDIS_CACHE_DB: '15'
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: native-machine-root-ci-only
+          MYSQL_DATABASE: txboard_native_machine_test
+          MYSQL_USER: txboard_native_machine
+          MYSQL_PASSWORD: native-machine-ci-only
+        ports:
+        - 3306:3306
+        options: --health-cmd="mysqladmin ping -h 127.0.0.1 -pnative-machine-root-ci-only" --health-interval 5s --health-timeout
+          5s --health-retries 24
+      redis:
+        image: redis:7.4
+        ports:
+        - 6379:6379
+        options: --health-cmd="redis-cli ping" --health-interval 5s --health-retries 12
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.candidate }}
-          fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.0'
-          cache-dependency-path: go.sum
-      - name: Verify immutable source and diagnostic contracts
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate }}
-        run: |
-          set -euo pipefail
-          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
-          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-          test -z "$(git status --porcelain)"
-          python3 -m unittest discover -s scripts -p 'test_native_cpu.py' -v
-      - name: Collect five alternating unprofiled observer pairs per side
-        env:
-          CANDIDATE_SHA: ${{ inputs.candidate }}
-        run: |
-          set -euo pipefail
-          python3 scripts/native-acceptance.py --candidate "$CANDIDATE_SHA" --output artifacts/native-persistence-diagnostics --persistence-diagnostics-only --groups 5 --seconds 10 --warmup 2 --concurrency 4
-      - name: Publish diagnostic observations without an acceptance verdict
-        if: always()
-        run: |
-          if [[ -f artifacts/native-persistence-diagnostics/report.md ]]; then
-            cat artifacts/native-persistence-diagnostics/report.md >> "$GITHUB_STEP_SUMMARY"
-          fi
-      - name: Retain independent evidence including accounting failures
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: native-persistence-diagnostics-${{ inputs.candidate }}
-          path: |
-            artifacts/native-persistence-diagnostics/report.json
-            artifacts/native-persistence-diagnostics/report.md
-            artifacts/native-persistence-diagnostics/prefetch-*.log
-            artifacts/native-persistence-diagnostics/persistence-*/sample.json
-            artifacts/native-persistence-diagnostics/persistence-*/metadata.json
-            artifacts/native-persistence-diagnostics/persistence-*/server.log
-            artifacts/native-persistence-diagnostics/persistence-*/cpu-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/runtime-*.json
-            artifacts/native-persistence-diagnostics/persistence-*/evidence.json
-            artifacts/native-persistence-diagnostics/persistence-*/bucket-after-*.json
-          if-no-files-found: error
+    - uses: actions/checkout@v4
+    - name: Record isolated diagnostic source
+      run: 'python3 - <<''PY''
+
+        import hashlib,json,os,subprocess
+
+        from pathlib import Path
+
+        base=''8735d7ac01a45360900d93fa0d38721caf0f33e8''
+
+        def git(*args):return subprocess.check_output([''git'',*args])
+
+        root=Path(os.environ[''RUNNER_TEMP''])/''native-machine-evidence''
+
+        root.mkdir(parents=True,exist_ok=True)
+
+        paths=[''internal/usagev2/http.go'',''internal/usagev2/machine_transport_diagnostic.go'']
+
+        data={''schema'':''txnode-machine-transport-instrumentation/v1'',''base'':base,''diagnostic_source'':git(''rev-parse'',''HEAD'').decode().strip(),''diagnostic_tree'':git(''rev-parse'',''HEAD^{tree}'').decode().strip(),''current_sha256'':{p:hashlib.sha256(Path(p).read_bytes()).hexdigest()for
+        p in paths},''original_http_sha256'':hashlib.sha256(git(''show'',base+'':internal/usagev2/http.go'')).hexdigest(),''accepted_for_S3'':False,''scope'':''Cold
+        failure-only hook before the original unchanged transport refusal; no request, timeout, recovery, capacity, ACK or
+        Core source change. Instrumented clone is not release acceptance.''}
+
+        (root/''instrumentation.json'').write_text(json.dumps(data,indent=2)+chr(10))
+
+        (root/''transport-overlay.patch'').write_bytes(git(''diff'',base,''HEAD'',''--'',*paths))
+
+        PY'
+    - name: Read immutable supported Core
+      id: core
+      run: "python3 - <<'PY'\nimport json, os, re\nvalue = json.load(open('compatibility/core.v1.json'))\nassert value['repository']\
+        \ == 'ANRCM0/TXBoard'\nassert re.fullmatch('[0-9a-f]{40}', value['revision'])\nwith open(os.environ['GITHUB_OUTPUT'],\
+        \ 'a') as output:\n    output.write('revision=' + value['revision'] + '\\n')\nPY\n"
+    - uses: actions/checkout@v4
+      with:
+        repository: ANRCM0/TXBoard
+        ref: ${{ steps.core.outputs.revision }}
+        path: .compat/core
+        persist-credentials: false
+    - uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.2'
+        extensions: mbstring, pdo_mysql, pdo_sqlite, curl, openssl, sodium, bcmath, redis, fileinfo
+        coverage: none
+    - uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+    - uses: actions/setup-go@v5
+      with:
+        go-version-file: go.mod
+        cache-dependency-path: go.sum
+    - name: Prepare exclusive fixed Core fixture
+      run: "set -euo pipefail\nif ! command -v mysql && ! command -v mariadb; then\n  sudo apt-get update\n  sudo apt-get\
+        \ install -y default-mysql-client\nfi\npython3 -m py_compile scripts/tests/node-native-machine/*.py\nphp -l scripts/tests/node-native-machine/fixture.php\n\
+        cd .compat/core/api\ncomposer install --no-interaction --prefer-dist\ncp .env.example .env\nphp artisan key:generate\n"
+    - name: Exercise production Orchestrator and existing Core machine contract
+      run: python3 scripts/tests/node-native-machine/run.py .compat/core/api . "$RUNNER_TEMP/native-machine-evidence"
+    - name: Retain source and assertion evidence
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: machine-transport-cause-${{ github.sha }}
+        path: '${{ runner.temp }}/native-machine-evidence/sources.json
+
+          ${{ runner.temp }}/native-machine-evidence/compatibility-preflight.json
+
+          ${{ runner.temp }}/native-machine-evidence/result.json
+
+
+          ${{ runner.temp }}/machine-transport-source/instrumentation.json
+
+          ${{ runner.temp }}/machine-transport-source/transport-overlay.patch'
+        if-no-files-found: warn

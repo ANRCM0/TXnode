@@ -89,6 +89,34 @@ def failure_summary(category):
     log = evidence / 'node-live.log'
     if log.is_file():
         text = log.read_text(errors='replace')
+        transport_causes = []
+        for line in text.splitlines():
+            marker = 'NATIVE_MACHINE_TRANSPORT_CAUSE '
+            if marker not in line:
+                continue
+            encoded = line.split(marker, 1)[1]
+            if len(encoded) > 1024:
+                continue
+            try:
+                item = json.loads(encoded)
+            except (ValueError, TypeError):
+                continue
+            fields = {'schema', 'sequence', 'phase', 'endpoint', 'cause', 'context_canceled',
+                      'context_deadline', 'error_is_deadline', 'error_is_canceled',
+                      'has_deadline', 'deadline_remaining_nanos', 'observed_unix_nanos'}
+            if (isinstance(item, dict) and set(item) == fields
+                    and item['schema'] == 'txnode-machine-transport-cause/v1'
+                    and type(item['sequence']) is int and 1 <= item['sequence'] <= 16
+                    and all(type(item[key]) is str for key in ('phase', 'endpoint', 'cause'))
+                    and item['phase'] in {'request', 'read_body'} and item['endpoint'] in {'query', 'submit'}
+                    and item['cause'] in {'context_deadline', 'context_canceled', 'tls_verification',
+                                         'connection_refused', 'connection_reset', 'eof', 'network_timeout', 'other'}
+                    and all(type(item[key]) is bool for key in ('context_canceled', 'context_deadline', 'error_is_deadline', 'error_is_canceled', 'has_deadline'))
+                    and type(item['deadline_remaining_nanos']) is int
+                    and -60_000_000_000 <= item['deadline_remaining_nanos'] <= 60_000_000_000
+                    and type(item['observed_unix_nanos']) is int and item['observed_unix_nanos'] > 0):
+                transport_causes.append(item)
+        diagnostics['usage_transport'] = {'observation_limit': 16, 'observations': transport_causes[:16]}
         config_booleans = {'config_event_received', 'config_event_dispatched', 'config_event_desired_port',
                            'old_listener_open', 'new_listener_open', 'shared_ws_connected'}
         config_fields = config_booleans | {'schema', 'stage', 'code', 'child_applied_port'}
