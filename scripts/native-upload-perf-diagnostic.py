@@ -176,7 +176,7 @@ def main():
                 if sample['status'] == 'measured' and item['perf_window']['complete']:
                     controls = item['perf_window']['controls']
                     proof = sample['cpu_measurement']
-                    if ([c['command'] for c in controls] != ['enable', 'disable']
+                    if ([c['command'] for c in controls] != ['enable', 'disable', 'stop']
                             or controls[0]['ack_ns'] >= proof['start']['requested_monotonic_nanos']
                             or proof['end']['received_monotonic_nanos'] >= controls[1]['sent_ns']):
                         raise ValueError('perf controls do not surround original CPU requests')

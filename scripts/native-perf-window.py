@@ -78,13 +78,16 @@ class PerfWindow:
         os.write(self.control, value.encode() + b'\n')
         data = b''
         deadline = time.monotonic() + 5
-        while b'\n' not in data:
+        # This verified perf build writes sizeof("ack\n"), including the C terminator.
+        expected = b'ack\n\x00'
+        while len(data) < len(expected):
             if self.handle.poll() is not None or time.monotonic() >= deadline:
                 raise RuntimeError('perf control acknowledgement missing')
             ready, _, _ = select.select([self.ack], [], [], .05)
             if ready:
                 data += os.read(self.ack, 1024)
-        if data != b'ack\n':
+        self.result.setdefault('control_responses', []).append({'command': value, 'raw_hex': data.hex()})
+        if data != expected:
             raise ValueError('unexpected perf control acknowledgement')
         self.result['controls'].append({'command': value, 'sent_ns': sent, 'ack_ns': time.monotonic_ns()})
 
@@ -138,7 +141,7 @@ class PerfWindow:
                         or not descendant(self.perf_pid, self.handle.pid)):
                     raise RuntimeError('private perf identity changed before stopping')
                 self.result['stop_requested_ns'] = time.monotonic_ns()
-                subprocess.run(['sudo', '-n', 'kill', '-INT', str(self.perf_pid)], check=True, timeout=5)
+                self.command('stop')
             code = self.handle.wait(timeout=10)
             self.result.update(perf_exit_code=code, stopped_ns=time.monotonic_ns(),
                                tracee_alive_after_stop=self.process.poll() is None)
