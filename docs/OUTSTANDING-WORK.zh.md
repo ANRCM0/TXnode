@@ -28,7 +28,7 @@ Coordinator 执行 private ACK。读取/恢复兼容入口 `validateRecord` 调�
 完整 native Actions `40114161320` 已全部成功，使用原五组参数、阈值和固定
 `4904a193` 勘误基线。完整 A/B 为 120/120 measured（双方各 60），十二项比较
 全部满足原阈值；最小吞吐比率 0.99865、最大 CPU/GiB 比率 1.02806，最大 CV
-0.05366。持续负载 1812.103511547 秒、40 次带负载生命周期循环，四档均达到
+0.05365。持续负载 1812.103511547 秒、40 次带负载生命周期循环，四档均达到
 100/250/500/1000 会话，TCP/UDP/mux 错误和饥饿 worker 均为零；回收后的原
 goroutine/FD/heap/存活对象预算通过。七项带负载故障和七项旧侧 collector/race
 均通过，无 skip/fail。
@@ -43,6 +43,18 @@ goroutine/FD/heap/存活对象预算通过。七项带负载故障和七项旧�
 保留，不改写原 `a1ad269` 为已通过，也不证明所有环境均无容量缺口。最终 PR
 文档 head、合并后 main 和实际镜像发布仍需分别记账；Core 采用、正式标签、
 物理多机及生产试运行未由此验收。
+
+| S0-S4 当前候选映射 | 实际依据与范围 |
+|---|---|
+| S0 | 本候选 Go/race 执行严格结果/CPU/故障/S3 验证器、原生事件/observer/packet 和精确 SIGKILL 回归；quick/full 原始 JSON 与固定清单及客户端 pin 匹配 |
+| S1 | strict full 实际覆盖固定 REALITY、Naive、Mihomo TUIC；两项上游不适用继续单列，不计通过 |
+| S2-A | Go/race 覆盖 smux/yamux 的原 owner、路由、限速取消、撤权和实例隔离；strict full 覆盖官方客户端真实 packet 双向互通 |
+| S2-B | strict full 实际覆盖官方 UDP 承载的大流量、应用 UDP、空闲复用、目标失败 TCP/UDP、损伤/重复/撤权及 Reload；包级 race 覆盖窗口/预算与原会话重放历史 |
+| S3 | 同候选 Core C2/Machine、带负载故障、四档 30 分钟 soak 及独立勘误 profile 的 120 份 A/B 和最终账本全部通过；只接受所记录环境和语义 |
+| S4 | strict full 覆盖 TCP/UDP 显式 traffic_pattern 与四种低熵模式；Go/race 覆盖严格配置、连接 ID 跨 Reload 关闭及诊断敏感字段拒绝；迁移/回滚步骤见 `NATIVE-OPERATIONS.zh.md` |
+
+这张映射绑定运行时候选 `613d6a36`，不把之后文档 head 的条件跳过记作又执行
+一次完整验收；整合时须核对全部非文档 blob/mode 相同及合并后的独立 CI。
 
 ## 2026-10-24 时钟勘误入口与窗口 profile
 
