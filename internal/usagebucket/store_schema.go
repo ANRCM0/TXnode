@@ -232,29 +232,35 @@ func validateDiskBucket(b *diskBucket) error {
 }
 
 func validateRecord(r journalRecord) error {
+	_, err := validateRecordBucketJSON(r)
+	return err
+}
+
+// Return the same canonical bucket bytes used to validate the local receipt.
+func validateRecordBucketJSON(r journalRecord) ([]byte, error) {
 	if r.Version != 1 || !validHex(r.StoreID, 32) || !validHex(r.ProcessID, 32) || r.Sequence == 0 || (r.PreviousDigest != "" && !validHex(r.PreviousDigest, 64)) || r.Authorizes || r.Attribution != "unattributable" || !r.RestoreUnknown || !r.TailUnknown || len(r.Reasons) == 0 || len(r.Reasons) > 8 {
-		return ErrStoreEvidence
+		return nil, ErrStoreEvidence
 	}
 	for _, reason := range r.Reasons {
 		if !safeLabel(reason, 80) {
-			return ErrStoreEvidence
+			return nil, ErrStoreEvidence
 		}
 	}
 	if r.Kind != "BUCKET" {
 		if r.Kind != "PROCESS_BEGIN" && r.Kind != "PROCESS_END" && r.Kind != "STORE_STOP" || r.Bucket != nil || r.Capture != nil || r.Receipt != nil {
-			return ErrStoreEvidence
+			return nil, ErrStoreEvidence
 		}
-		return nil
+		return nil, nil
 	}
 	if err := validateDiskBucket(r.Bucket); err != nil {
-		return err
+		return nil, err
 	}
 	if r.Capture == nil || !r.Capture.TailUnknown || r.Capture.Generation == 0 || r.Capture.Next < r.Bucket.End || (r.Capture.Degraded && !safeLabel(r.Capture.Reason, 80)) || (!r.Capture.Degraded && r.Capture.Reason != "") {
-		return ErrStoreEvidence
+		return nil, ErrStoreEvidence
 	}
 	data, _ := json.Marshal(r.Bucket)
 	if r.Receipt == nil || r.Receipt.Type != "local_receipt" || r.Receipt.ID != "local:"+r.StoreID+":"+strconv.FormatUint(r.Sequence, 10) || r.Receipt.Authorizes || r.Receipt.Attribution != "unattributable" || !r.Receipt.RestoreUnknown || r.Receipt.BucketDigest != digestBytes(data) {
-		return ErrStoreEvidence
+		return nil, ErrStoreEvidence
 	}
-	return nil
+	return data, nil
 }

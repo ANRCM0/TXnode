@@ -419,10 +419,7 @@ func (s *Store) persistRecord(record journalRecord, control bool) (string, error
 	if s.sequence == math.MaxUint64 {
 		return "", ErrStoreCapacity
 	}
-	if err := validateRecord(record); err != nil {
-		return "", err
-	}
-	payload, err := json.Marshal(record)
+	payload, err := prepareJournalRecord(record)
 	if err != nil {
 		return "", err
 	}
