@@ -19,6 +19,7 @@ from tls_proxy import NativeTLSProxy
 from preflight import inspect as compatibility_preflight
 from native_setup import prepare as prepare_native, render_credentials
 from recovery_diagnostic import FAILURE_CLASSES, valid_recovery
+from php_server import CORE_HTTP_WORKERS, core_http_environment
 
 if len(sys.argv)!=4:raise SystemExit('usage: run.py API NODE NEW_EVIDENCE')
 api,node,evidence=(Path(p).resolve() for p in sys.argv[1:]);scripts=Path(__file__).resolve().parent
@@ -61,6 +62,7 @@ artifact('sources.json',{'schema':'txnode-core-machine-sources/v1',
     'core_repository':baseline['repository'],'core_revision':actual,'core_tree':core_tree,'requested_core_release_id':actual,
     'node_repository':'ANRCM0/txnode','node_revision':node_revision,'node_tree':node_tree,
     'core_installation_mode':'not_started','requested_core_installation_mode':'native','node_kernel':'txnode',
+    'php_cli_server_workers':CORE_HTTP_WORKERS,
     'fixture_ancestor':'TXBoard 52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645 scripts/tests/node-native-machine',
     'native_core_installation_admission':False})
 compatibility = compatibility_preflight(api, baseline)
@@ -246,9 +248,9 @@ observation=evidence/'native-observations.jsonl';observation.touch(mode=0o600)
 proxy=NativeTLSProxy(tls_port,http_port,ws_port,str(evidence/'server.pem'),str(evidence/'server.key'),str(observation))
 processes=[];logs=[];test=None
 
-def start(name,args,cwd):
+def start(name,args,cwd,process_env=None):
     path=evidence/(name+'.log');out=path.open('xb');os.chmod(path,0o600);logs.append(out)
-    process=subprocess.Popen(args,cwd=cwd,env=env,stdout=out,stderr=subprocess.STDOUT,start_new_session=True);processes.append(process);return process
+    process=subprocess.Popen(args,cwd=cwd,env=env if process_env is None else process_env,stdout=out,stderr=subprocess.STDOUT,start_new_session=True);processes.append(process);return process
 context=ssl.create_default_context(cafile=str(evidence/'ca.pem'))
 def request(path,method,payload,headers):
     body=None if payload is None else json.dumps(payload).encode()
@@ -301,7 +303,7 @@ try:
     native_activated=True
     artifact('fixture.json',fixture)
     env['CORE_INSTALLATION_EPOCH']='2'
-    http=start('core-http',[php,'-S','127.0.0.1:'+str(http_port),'-t','public','public/index.php'],api)
+    http=start('core-http',[php,'-S','127.0.0.1:'+str(http_port),'-t','public','public/index.php'],api,core_http_environment(env))
     worker=start('core-workerman',[php,'artisan','ws-server','start','--host=127.0.0.1','--port='+str(ws_port)],api)
     proxy.start()
     deadline=time.monotonic()+10

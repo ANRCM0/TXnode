@@ -534,6 +534,7 @@ jobs:
             sudo apt-get install -y default-mysql-client
           fi
           python3 -m py_compile scripts/tests/node-native-machine/*.py
+          python3 -m unittest discover -s scripts/tests/node-native-machine -p 'php_server_test.py' -v
           php -l scripts/tests/node-native-machine/fixture.php
           cd .compat/core/api
           composer install --no-interaction --prefer-dist
