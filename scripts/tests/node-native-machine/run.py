@@ -226,10 +226,17 @@ def failure_summary(category):
             ('machine exited before readiness', 'orchestrator_early_exit'),
             ('connection refused', 'connection_refused'), ('i/o timeout', 'io_timeout'),
             ('context deadline exceeded', 'context_deadline'),
+            ('actual foreign HTTP scope:', 'foreign_http_scope'),
+            ('actual foreign WS node accepted', 'foreign_ws_scope'),
+            ('real native upgrade response:', 'native_upgrade_response'),
+            ('actual native WSS client', 'native_wss_client'),
+            ('foreign upgrade was not refused', 'foreign_upgrade_not_refused'),
             ('x509:', 'certificate_verification'), ('unknown cipher', 'cipher_configuration'),
             ('unknown kernel', 'kernel_configuration'), ('panic:', 'panic')):
             if needle in text:
                 diagnostics['signals'].append(label)
+        for status, code in re.findall(r'actual foreign HTTP scope: status=([0-9]{3}) code=([A-Z][A-Z0-9_]{0,100})', text):
+            diagnostics['foreign_http'] = {'status':int(status), 'code':code if code in {'NODE_NOT_FOUND','NODE_UNAUTHORIZED','INTERNAL_ERROR','CAPABILITY_UNAVAILABLE'} else 'other'}
     diagnostics['test_exit_code'] = None if test is None else test.poll()
     result = {'schema': 'txnode-core-machine-result/v1', 'status': 'failed',
               'failed_stage': active_stage, 'core_revision': actual,
