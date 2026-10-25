@@ -1,5 +1,6 @@
 """Linux PHP fixture concurrency regression; run in the Actions Machine job."""
 import http.client
+import json
 import os
 from pathlib import Path
 import shutil
@@ -11,7 +12,7 @@ import threading
 import time
 import unittest
 
-from php_server import core_http_environment
+from php_server import core_http_command, core_http_environment
 
 
 class CoreHTTPFixtureTest(unittest.TestCase):
@@ -21,6 +22,13 @@ class CoreHTTPFixtureTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / 'router.php').write_text('''<?php
+if ($_SERVER['REQUEST_URI'] === '/cache') {
+    $status = function_exists('opcache_get_status') ? opcache_get_status(false) : false;
+    header('Content-Type: application/json');
+    echo json_encode(['enabled' => is_array($status) && $status['opcache_enabled'],
+                      'cached' => function_exists('opcache_is_script_cached') && opcache_is_script_cached(__FILE__)]);
+    exit;
+}
 if ($_SERVER['REQUEST_URI'] === '/held') {
     touch(__DIR__ . '/entered');
     $deadline = microtime(true) + 10;
@@ -36,7 +44,7 @@ echo 'fixture';
                 listener.bind(('127.0.0.1', 0))
                 port = listener.getsockname()[1]
             process = subprocess.Popen(
-                [php, '-S', '127.0.0.1:' + str(port), 'router.php'], cwd=root,
+                core_http_command(php, port, 'router.php'), cwd=root,
                 env=core_http_environment(os.environ), start_new_session=True,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             held_result = []
@@ -68,6 +76,9 @@ echo 'fixture';
                         if time.monotonic() >= deadline:
                             self.fail('PHP fixture readiness deadline')
                         time.sleep(.01)
+                status, cache = request('/cache')
+                self.assertEqual(status, 200)
+                self.assertEqual(json.loads(cache), {'enabled': True, 'cached': True})
                 worker = threading.Thread(target=hold_request, daemon=True)
                 worker.start()
                 deadline = time.monotonic() + 2

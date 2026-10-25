@@ -974,6 +974,12 @@ func machineCoreHeartbeat(t *testing.T, connection *websocket.Conn) {
 
 func machineCoreForeignScope(t *testing.T, endpoint string, fixture machineCoreLiveFixture) {
 	t.Helper()
+	phase := "fixture"
+	defer func() {
+		if t.Failed() {
+			t.Log("NATIVE_MACHINE_SCOPE_FAILURE " + phase)
+		}
+	}()
 	if fixture.ForeignMachineID <= 0 || fixture.ForeignNodeID <= 0 || fixture.ForeignToken == "" {
 		t.Fatal("foreign Machine fixture required")
 	}
@@ -1001,14 +1007,19 @@ func machineCoreForeignScope(t *testing.T, endpoint string, fixture machineCoreL
 			t.Fatalf("actual foreign HTTP scope: status=%d code=%s", response.StatusCode, body.Error.Code)
 		}
 	}
+	phase = "foreign_http_node"
 	request("/txapi/node/v1/config", fixture.Token, fixture.MachineID, fixture.ForeignNodeID, 404, "NODE_NOT_FOUND")
+	phase = "foreign_http_machine"
 	request("/txapi/node/v1/machine/nodes", fixture.Token, fixture.ForeignMachineID, 0, 401, "NODE_UNAUTHORIZED")
+	phase = "foreign_ws_machine"
 	rejected := machineCoreSocket(t, endpoint, fixture.Token, fixture.ForeignMachineID, "error")
 	if rejected != nil {
 		_ = rejected.Close()
 	}
+	phase = "current_foreign_ws"
 	foreign := machineCoreSocket(t, endpoint, fixture.ForeignToken, fixture.ForeignMachineID, "session.ready")
 	defer foreign.Close()
+	phase = "foreign_ws_node"
 	_ = foreign.SetWriteDeadline(time.Now().Add(2 * time.Second))
 	if err := foreign.WriteJSON(map[string]any{"protocol_version": 1, "event": "sync.request", "request_id": "actual-foreign-node-request", "data": map[string]any{"node_id": fixture.Nodes[0].ID}}); err != nil {
 		t.Fatal(err)
@@ -1066,6 +1077,7 @@ func machineCoreRejectedUpgradeEvidence(t *testing.T, machineID int) {
 		}
 	}
 	if !middlewareRefused || !upstreamRefused {
+		t.Logf("NATIVE_MACHINE_UPGRADE_REFUSAL middleware=%t upstream=%t", middlewareRefused, upstreamRefused)
 		t.Fatal("pre-upgrade EOF lacked actual Core401 and direct Workerman-close evidence")
 	}
 }

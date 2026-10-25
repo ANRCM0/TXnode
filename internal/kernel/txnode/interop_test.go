@@ -168,14 +168,18 @@ func fetchThrough(t *testing.T, socksAddr, originAddr string) string {
 	return body
 }
 
-func fetchThroughE(t *testing.T, socksAddr, originAddr string) (string, error) {
+func fetchThroughE(t *testing.T, socksAddr, originAddr string, limits ...time.Time) (string, error) {
 	t.Helper()
-	conn, err := socksNoAuthConnectE(socksAddr, originAddr)
+	conn, err := socksNoAuthConnectE(socksAddr, originAddr, limits...)
 	if err != nil {
 		return "", err
 	}
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(8 * time.Second))
+	deadline := time.Now().Add(8 * time.Second)
+	if len(limits) > 0 && limits[0].Before(deadline) {
+		deadline = limits[0]
+	}
+	_ = conn.SetDeadline(deadline)
 	if _, err := io.WriteString(conn, "GET / HTTP/1.1\r\nHost: origin\r\nConnection: close\r\n\r\n"); err != nil {
 		return "", err
 	}
@@ -200,12 +204,24 @@ func socksNoAuthConnect(t *testing.T, socksAddr, dest string) net.Conn {
 	return conn
 }
 
-func socksNoAuthConnectE(socksAddr, dest string) (net.Conn, error) {
-	conn, err := net.DialTimeout("tcp", socksAddr, 2*time.Second)
+func socksNoAuthConnectE(socksAddr, dest string, limits ...time.Time) (net.Conn, error) {
+	dialWait := 2 * time.Second
+	if len(limits) > 0 {
+		if remaining := time.Until(limits[0]); remaining <= 0 {
+			return nil, context.DeadlineExceeded
+		} else if remaining < dialWait {
+			dialWait = remaining
+		}
+	}
+	conn, err := net.DialTimeout("tcp", socksAddr, dialWait)
 	if err != nil {
 		return nil, err
 	}
-	if err := conn.SetDeadline(time.Now().Add(8 * time.Second)); err != nil {
+	deadline := time.Now().Add(8 * time.Second)
+	if len(limits) > 0 && limits[0].Before(deadline) {
+		deadline = limits[0]
+	}
+	if err := conn.SetDeadline(deadline); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
@@ -585,13 +601,22 @@ func startMihomo(t *testing.T, proxyBlock string) string {
 	bin := mihomoBinary(t)
 	dir := t.TempDir()
 	socksPort := freePortTB(t)
+	const readyBody = "mihomo-fixture-ready"
+	control := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, readyBody)
+	}))
+	t.Cleanup(control.Close)
+	_, controlPort, err := net.SplitHostPort(control.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := "log-level: debug\n" +
 		"allow-lan: false\n" +
 		"mode: rule\n" +
 		"ipv6: false\n" +
 		"socks-port: " + strconv.Itoa(socksPort) + "\n" +
 		"proxies:\n" + proxyBlock +
-		"rules:\n  - MATCH,interop\n"
+		"rules:\n  - DST-PORT," + controlPort + ",DIRECT\n  - MATCH,interop\n"
 	path := filepath.Join(dir, "config.yaml")
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
@@ -612,18 +637,27 @@ func startMihomo(t *testing.T, proxyBlock string) string {
 	})
 	addr := net.JoinHostPort("127.0.0.1", strconv.Itoa(socksPort))
 	deadline := time.Now().Add(8 * time.Second)
+	var readinessErr error
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
 		if err == nil {
 			_ = conn.Close()
-			// The proxy is configured lazily; give it a moment so the first
-			// SOCKS request does not race initialization.
-			time.Sleep(100 * time.Millisecond)
-			return addr
+			// v1.19.32 opens SOCKS before provider loading and OnRunning.
+			// The reserved DIRECT target proves readiness without touching Node.
+			probeDeadline := time.Now().Add(250 * time.Millisecond)
+			if deadline.Before(probeDeadline) {
+				probeDeadline = deadline
+			}
+			body, err := fetchThroughE(t, addr, control.Listener.Addr().String(), probeDeadline)
+			if err == nil && body == readyBody {
+				t.Log("Mihomo local DIRECT startup control passed")
+				return addr
+			}
+			readinessErr = err
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	t.Fatalf("mihomo socks listener did not open; output:\n%s", output.String())
+	t.Fatalf("mihomo startup control did not pass within 8s: %v; output:\n%s", readinessErr, output.String())
 	return ""
 }
 
@@ -698,6 +732,9 @@ func versionOf(t *testing.T, name string) string {
 // client, which implements REALITY independently of Xray's uTLS fork.
 func TestInteropMihomoVLESSReality(t *testing.T) {
 	mihomoBinary(t)
+	if !t.Run("startup-control", verifyMihomoStartupControl) {
+		return
+	}
 	dest := os.Getenv("TXNODE_INTEROP_REALITY_DEST")
 	if dest == "" {
 		dest = "www.cloudflare.com:443"
@@ -739,6 +776,37 @@ func TestInteropMihomoVLESSReality(t *testing.T) {
 	}
 	if body != "interop-ok" {
 		t.Fatalf("body = %q", body)
+	}
+}
+
+func verifyMihomoStartupControl(t *testing.T) {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		if conn, err := listener.Accept(); err == nil {
+			close(accepted)
+			_ = conn.Close()
+		}
+	}()
+	t.Cleanup(func() {
+		_ = listener.Close()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("readiness control listener did not stop")
+		}
+	})
+	port := listener.Addr().(*net.TCPAddr).Port
+	startMihomo(t, "  - name: interop\n    type: socks5\n    server: 127.0.0.1\n    port: "+strconv.Itoa(port)+"\n")
+	select {
+	case <-accepted:
+		t.Fatal("startup control dialed the proxy under test")
+	default:
 	}
 }
 

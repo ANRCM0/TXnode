@@ -32,6 +32,7 @@ func TestNativeWSSHandshakeSyncAndHeartbeat(t *testing.T) {
 		defer conn.Close()
 		_ = conn.WriteJSON(map[string]any{"protocol_version": 1, "event": "session.ready", "request_id": "server-1", "data": map[string]any{"mode": "node", "node_id": 42}})
 		_ = conn.WriteJSON(map[string]any{"protocol_version": 1, "event": "sync.users", "request_id": "server-2", "data": map[string]any{"users": []any{}}})
+		_ = conn.WriteJSON(map[string]any{"protocol_version": 1, "event": "ops.node.connections.ack", "request_id": "late-result", "data": map[string]any{"accepted": false}})
 		_ = conn.WriteJSON(map[string]any{"protocol_version": 1, "event": "heartbeat.ping", "request_id": "server-3", "data": map[string]any{}})
 		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 		for {
@@ -58,6 +59,9 @@ func TestNativeWSSHandshakeSyncAndHeartbeat(t *testing.T) {
 	u := "ws" + strings.TrimPrefix(server.URL, "http") + prefix + "/ws"
 	s := NewSocket(u, "native-ws-secret", 42, 0, config.WSConfig{HandshakeTimeout: 2, BackoffInitial: 1, BackoffMax: 1},
 		func(e Event) {
+			if e.Name == "ops.node.connections.ack" {
+				t.Error("late connection acknowledgement must retain the socket and not enter the state mailbox")
+			}
 			select {
 			case events <- e:
 			default:

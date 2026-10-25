@@ -1,5 +1,17 @@
 # 原生验收覆盖映射
 
+2026-10-25：当前功能候选 `9f636d4c` 与固定 Core `097dc97` 的完整 Actions
+`40162774358` 已通过 Go/race、runtime stability、quick/full、Core C2/Machine
+及镜像冒烟。严格 full 原始事件为 38 个顶层、38 个子项通过，两项上游不适用
+单列；新增官方隐式 Mieru 的八项和独立 Mihomo DIRECT 启动控制均实际执行。
+本次 Machine 原十份批次对应十行唯一 settled SQL，并验证真实管理员连接分页、跨节点关闭拒绝、原请求
+重放、目标 EOF 与其它流持续。原授权、配置、成员撤回、token 与周期断言保留。
+合法迟到应答的 unknown/原 socket 心跳分别有 Core/Node 回归，未新增业务 owner。
+Octane/Swoole 和字节码缓存均实际确认，代理的 gzip 拒绝观测不改写原响应字节；
+五份 pending 的本次 HTTP 恢复跨度为 1.89056 秒，不推广为任意页工作量保证。
+来源与候选交付边界见 `CANDIDATE-DELIVERY.zh.md`；完整 S3 v3 仍未通过，不能把
+这些功能结果推广为实际部署、生产 PKI 或独立完整财务对账。
+
 2026-10-24：目标失败互通新增官方 Mieru UDP 承载，与原 TCP 承载分别执行正向
 控制、core 的 `ECONNREFUSED`、完整 SOCKS REP=05 和失败后的有效目标恢复。
 严格清单要求两个子项；完整矩阵现为 37 个适用顶层、29 个子项及两项不适用。

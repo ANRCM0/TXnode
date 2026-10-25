@@ -1,6 +1,83 @@
 # 固定 Core 基线的 Machine 兼容门禁
 
-Node 的固定 Core 基线以 `compatibility/core.v1.json` 为准，当前为 `ANRCM0/TXBoard@553641029c0094480cd71105cb7b0a7efe9a9a8a`。该提交经 Core PR #291 完整检查后，于 2026-10-21 合并为 `2dc3e7b446e5c36f393fa6084fb8ad0d811b0d95`，固定提交保留在 main 历史中。这里说明源码合约、真实 owner 调用链和 Actions 证据；源码检查、语法检查、编译均不构成完整 Machine 功能验收。
+Node 的固定 Core 基线以 `compatibility/core.v1.json` 为准，本轮兼容候选固定
+`ANRCM0/TXBoard@097dc9748bbe665ae7672c43827998f1e9420e3a` 并要求
+`node-connections/v1`。这里说明源码合约、真实 owner 调用链和 Actions 证据；
+源码检查、语法检查、编译均不构成完整 Machine 功能验收。
+
+## 2026-10-25 连接管理兼容候选
+
+Core PR #307 将管理员节点详情页接入三个封闭操作：
+
+| 操作 | 权限与 owner |
+| --- | --- |
+| `network.nodes.connections.list.request` | `network.nodes.read`；原 workflow 幂等 owner → NativeNodeConnections 短期请求回执 |
+| `network.nodes.connections.close` | `network.nodes.manage`；原 workflow 幂等 owner → 相同 Node 命令派发链 |
+| `network.nodes.connections.result.get` | `network.nodes.read`；当前管理员及 Node 作用域读取原请求结果 |
+
+完整派发链为原 Core browser admission/actor → NativeNodeConnections → 仅含请求 ID
+的 Redis 通知 → NodeWorker 重读短期回执与当前凭据、成员关系和 socket → 原 WS
+`ops.node.connections.request` → Machine mailbox/Service 原调度 → 原 Kernel/Session
+连接登记与关闭 → `ops.node.connections.result` → Core 原回执投影。没有新增连接或
+账量 owner。Core 集成候选选择 Node `9f636d4ccaa5fd00cc2282cb8e64490d49c564e3`；
+正式采用与构建以 PR #307 的最终合并和各自 Actions 来源为准。
+
+请求绑定管理员、Node、当前 socket epoch、原输入和 15 秒截止时间；旧作用域与
+错误结构仍拒绝。匹配但迟到的合法结果只收到 `accepted:false`，保持 unknown，
+不会用通用错误帧触发共享 socket 重连。Node 的真实 WS 回归要求之后仍收到并
+回复原 socket 的心跳；Core 回归覆盖独立、Machine 及已归组独立节点三种身份。
+
+默认固定 Core Machine 门禁现在先核对这三个操作及原有五个操作和 ws-server 准入，
+然后实际验证 limit=1 两页、不透明 ID、跨 Node 关闭拒绝、原 workflow 键重放、
+目标连接 EOF 和其它流继续传输。原配置更新、授权、成员撤回、token 轮换、旧凭据
+拒绝、原批次重放和 SQL 唯一 settled 断言继续执行。每次重放数量取自该运行实际
+捕获的原批次，不把不同运行的批次数当作同一组固定样本。
+
+最终功能候选 Node `9f636d4c` 的完整 Actions `40162774358` 与常规 PR
+`40162775732` 均成功。full artifact `12587510910` 的原始事件为 38 个顶层、
+38 个声明子项通过，两项固定上游不适用单列；新增 Mihomo 本地 DIRECT 控制只
+证明固定客户端已 ready，不先访问 Node。Machine `12586759266` 本次原十份
+批次对应十行唯一 settled SQL，C2 `12587596251` 来源一致。Node/Core SHA、tree、
+清单、客户端 pin、全部声明子项及 ZIP 摘要已离线核对。
+
+HTTP 夹具采用 Core 原 Octane/Swoole 入口、四个 worker、Swoole 6.2.3 和显式
+OPcache，实际设置保存在 result。其五份兄弟节点 pending 的 HTTP 跨度为
+1.89056 秒，原两秒页及十二秒就绪未改；数量上限 16 不保证任意单页耗时。
+Core `e2ae095b` 单独组合 job `121077874060` / artifact `12587146921` 使用相同
+Node，实际六份批次对应六行 SQL；它不套用固定 Core gate 的十份。
+
+Octane 下曾因代理直接解析 gzip 字节而缺少 401 错误码证据；阶段诊断已确认原
+HTTP 负向断言和 Workerman 预升级关闭实际发生。代理现在只对最多 64 KiB 的
+副本解码，原响应头与压缩字节保持；真实网络回归、损坏/超大拒绝回归和最终
+组合均实际通过。固定 Core 和独立组合分别观察到九个、八个 gzip 授权拒绝。
+这不改写开发服务器下原两秒恢复失败或其它历史失败的唯一原因。
+
+前置候选 Node `50b05dfc` 与 Core `327c077` 的完整功能 Actions `40156485416`
+已成功。Core `327c077` 的组合 gate `40156326727` / artifact `12584725893`
+实际验证上述连接链，原三份批次对应三行唯一 SQL 记录；镜像 gate `40156326799`
+的 `12585555600` / `12585525761` 分别验证三映像升级/恢复及三处资源限制、两处
+完整备份材料。迟到应答修正后的 Node `3258d008` 与固定 Core `097dc97` 的完整
+Actions `40157560438` 已成功：八项实际执行的功能 job 全部通过，full
+`12585447058` 的原始事件为 38 个顶层、37 个子项通过，另两项不适用；Machine
+`12584657736` 本次原八份批次对应八行唯一 settled SQL，C2 `12584772679` 的
+来源也与该组合一致。所有声明的子项、客户端 pin、ZIP 摘要及公开来源均已核对。
+Core `097dc97` 的 API job `121061923458` 实际通过迟到应答回归；其 43 项条件
+跳过不计通过，原生 MySQL 门禁另以最终 Core 的同源工作流认定。
+
+Core `3d62009`、`44249a4`、`321b11df` 的组合恢复曾因 usage_transport 拒绝；
+最后一轮开发服务器实际五份 pending 的请求累计超过两秒页。`2649c5f` 镜像 gate
+曾在调度器 100 秒观察断言失败，`a656ab3` 曾在初始限流预算键数量断言失败。
+失败及当时公开诊断均保留，不据后续通过声明其唯一原因已定位。
+夹具的运行方式及观测修正不修改生产两秒恢复页与
+原退避保持；夹具十二秒就绪及调度观察断言继续有效。实际多机、生产 PKI、独立完整财务
+对账及现场回滚仍未由这些托管 Actions 证明。
+
+## 历史 2026-10-21 Core 基线
+
+先前基线 `ANRCM0/TXBoard@553641029c0094480cd71105cb7b0a7efe9a9a8a` 经 Core
+PR #291 完整检查后，于 2026-10-21 合并为
+`2dc3e7b446e5c36f393fa6084fb8ad0d811b0d95`，固定提交仍保留在 main 历史中。
+以下段落记录该历史 pin 的迁移和实测范围，不作为当前候选的新一轮执行。
 
 ## 从旧管理路径迁移到正式操作
 
@@ -53,9 +130,9 @@ Provider trust、安装激活、购买履约、recipient-render、签名有限�
 
 ## 静态前置和 Actions 证据
 
-`preflight.py` 检查真实 Core HEAD、API 源码状态、精确 inventory Git blob、ws-server command，以及五个正式操作的 HTTP admission、编译 owner 绑定、admin actor/permission、幂等模式和 browser surface。输出 `required_contracts` 逐项记录及编译合约 blob；不执行 PHP，不建立数据库或网络连接，始终 `runtime_verified=false`。
+`preflight.py` 检查真实 Core HEAD、API 源码状态、精确 inventory Git blob、ws-server command，以及八个正式操作的 HTTP admission、编译 owner 绑定、admin actor/permission、幂等模式和 browser surface。输出 `required_contracts` 逐项记录及编译合约 blob；不执行 PHP，不建立数据库或网络连接，始终 `runtime_verified=false`。
 
-新 pin 的六项必要合约应全部齐备；旧 `d2e70b8c` 的 `CORE_WS_COMMAND_NOT_ADMITTED` 仍由回归保留。若操作、权限、绑定、surface 或源码发生不兼容变化仍应失败。`test_preflight.py` 为 Actions 保留这些回归；缺口检查不能改成 allow-failure 或 skip。
+新 pin 的九项必要合约应全部齐备；旧 `d2e70b8c` 的 `CORE_WS_COMMAND_NOT_ADMITTED` 仍由回归保留。若操作、权限、绑定、surface 或源码发生不兼容变化仍应失败。`test_preflight.py` 为 Actions 保留这些回归；缺口检查不能改成 allow-failure 或 skip。
 
 `run.py` 在数据库探测、迁移、seed 和应用启动之前保存 sources.json 与 compatibility-preflight.json。前置缺口保存失败 result.json，failed_stage=compatibility_preflight；安装状态为 not_started，native_core_installation_admission=false。只有完整真实 gate 成功才记录相应成功字段、Core release/composition 指纹及断言。
 
