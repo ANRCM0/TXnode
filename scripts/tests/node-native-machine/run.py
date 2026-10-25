@@ -19,7 +19,7 @@ from tls_proxy import NativeTLSProxy
 from preflight import inspect as compatibility_preflight
 from native_setup import prepare as prepare_native, render_credentials
 from recovery_diagnostic import FAILURE_CLASSES, valid_recovery
-from php_server import CORE_HTTP_WORKERS, core_http_environment
+from php_server import CORE_HTTP_WORKERS, CORE_HTTP_OPTIONS, core_http_command, core_http_environment
 
 if len(sys.argv) not in (4,6):raise SystemExit('usage: run.py API NODE NEW_EVIDENCE [--candidate-core-sha SHA]')
 candidate_core = None
@@ -77,6 +77,7 @@ artifact('sources.json',{'schema':'txnode-core-machine-sources/v1',
     'node_repository':'ANRCM0/txnode','node_revision':node_revision,'node_tree':node_tree,
     'core_installation_mode':'not_started','requested_core_installation_mode':'native','node_kernel':'txnode',
     'php_cli_server_workers':CORE_HTTP_WORKERS,
+    'php_http_bytecode_cache_requested':True,
     'fixture_ancestor':'TXBoard 52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645 scripts/tests/node-native-machine',
     'native_core_installation_admission':False})
 compatibility = compatibility_preflight(api, baseline)
@@ -95,11 +96,39 @@ if compatibility['gaps']:
 active_stage = 'setup'
 native_activated = False
 command_diagnostics = {}
+http_runtime = {}
+recovery_starts = {}
+recovery_ends = {}
+
+
+def recovery_http_observation(stage):
+    started = recovery_starts.get(stage, 0)
+    if stage not in {'reenabled', 'recovered'} or not started:return None
+    ended = recovery_ends.get(stage, time.monotonic_ns())
+    roles = {str(fixture['nodes'][0]['id']):'target', str(fixture['nodes'][1]['id']):'sibling'}
+    paths = {'/txapi/node/v2/usage/batch/get':'query', '/txapi/node/v2/usage/submit':'submit'}
+    events = [event for event in proxy.event_snapshot()
+              if event.get('kind') == 'http-timing' and event.get('path') in paths
+              and started <= event.get('started_monotonic_ns', 0) <= ended and event.get('node_id') in roles]
+    selected = []
+    for role in ('target', 'sibling'):
+        child = [event for event in events if roles[event['node_id']] == role]
+        selected.extend(child[:16])
+        for event in sorted(child, key=lambda event:event['elapsed_ns'], reverse=True)[:2]:
+            if event not in selected:selected.append(event)
+    captures = globals().get('disabled_evidence', {}).get('spools', []) if stage == 'reenabled' else globals().get('old', {}).get('tails', [])
+    return {'stage':stage, 'captured_spools':{role:sum(str(tail.get('node_id')) == identity for tail in captures) for identity,role in roles.items()},
+            'requests':[{'operation':paths[event['path']], 'node':roles[event['node_id']],
+                         'started_after_recovery_ns':event['started_monotonic_ns']-started,
+                         'elapsed_ns':event['elapsed_ns'], 'outcome':event['outcome'], 'status':event['status']}
+                        for event in selected]}
 
 def failure_summary(category):
     # Private logs can contain fixture credentials. Publish only fixed labels,
     # source line numbers, and process status, never log text or exception text.
     diagnostics = {'category': category, 'assertions': [], 'signals': []}
+    if http_runtime:
+        diagnostics['http_runtime'] = {key:http_runtime.get(key) is True for key in ('enabled','timestamp_validation','file_protection_disabled','jit_disabled')}
     if command_diagnostics:
         diagnostics['command'] = dict(command_diagnostics)
     log = evidence / 'node-live.log'
@@ -173,28 +202,8 @@ def failure_summary(category):
             except (ValueError, TypeError):continue
             if valid_recovery(recovery):
                 diagnostics['recovery'] = recovery
-        rotation_time = globals().get('rotation', {}).get('completed_monotonic_ns', 0)
-        usage_paths = {'/txapi/node/v2/usage/batch/get':'query', '/txapi/node/v2/usage/submit':'submit'}
-        node_roles = {str(fixture['nodes'][0]['id']):'target', str(fixture['nodes'][1]['id']):'sibling'}
-        timings = [event for event in proxy.event_snapshot()
-                   if rotation_time > 0 and event.get('kind') == 'http-timing' and event.get('path') in usage_paths
-                   and event.get('started_monotonic_ns', 0) >= rotation_time
-                   and event.get('node_id') in node_roles]
-        # Retain the startup prefix per child; a healthy sibling's later worker
-        # queries must not evict the failed child's first recovery requests.
-        selected = []
-        for role in ('target', 'sibling'):
-            child = [event for event in timings if node_roles[event['node_id']] == role]
-            selected.extend(child[:16])
-            for event in sorted(child, key=lambda event:event['elapsed_ns'], reverse=True)[:2]:
-                if event not in selected:selected.append(event)
-        diagnostics['recovery_pending_counts'] = {
-            role:sum(str(tail.get('node_id')) == identity for tail in globals().get('old', {}).get('tails', []))
-            for identity,role in node_roles.items()}
-        diagnostics['recovery_http'] = [{'operation':usage_paths[event['path']], 'node':node_roles[event['node_id']],
-                                         'started_after_rotation_ns':event['started_monotonic_ns']-rotation_time,
-                                         'elapsed_ns':event['elapsed_ns'], 'outcome':event['outcome'], 'status':event['status']}
-                                        for event in selected]
+        http_observation = recovery_http_observation(active_stage)
+        if http_observation is not None:diagnostics['recovery_http_observation'] = http_observation
         source = (node / 'internal/machine/native_core_machine_live_test.go').read_text().splitlines()
         for match in re.finditer(r'native_core_machine_live_test\.go:([0-9]+):', text):
             line = int(match.group(1))
@@ -346,6 +355,10 @@ def connection_operation(node_id, action, fields=None, key=None):
     raise RuntimeError('NATIVE_MACHINE_CONNECTION_RESULT_TIMEOUT')
 
 try:
+    http_runtime=command_json('http-runtime',[php,*CORE_HTTP_OPTIONS,'-r',
+        "$s=function_exists('opcache_get_status')?opcache_get_status(false):false; echo json_encode(['enabled'=>is_array($s)&&$s['opcache_enabled'],'timestamp_validation'=>(int)ini_get('opcache.validate_timestamps')===1,'file_protection_disabled'=>(int)ini_get('opcache.file_update_protection')===0,'jit_disabled'=>(int)ini_get('opcache.jit')===0]);"],api)
+    if http_runtime!={'enabled':True,'timestamp_validation':True,'file_protection_disabled':True,'jit_disabled':True}:
+        raise RuntimeError('NATIVE_MACHINE_HTTP_BYTECODE_CACHE_REQUIRED')
     provider=start('credential-provider',provider_args,node)
     deadline=time.monotonic()+10
     while True:
@@ -365,7 +378,7 @@ try:
     native_activated=True
     artifact('fixture.json',fixture)
     env['CORE_INSTALLATION_EPOCH']='2'
-    http=start('core-http',[php,'-S','127.0.0.1:'+str(http_port),'-t','public','public/index.php'],api,core_http_environment(env))
+    http=start('core-http',core_http_command(php,http_port,'public/index.php','public'),api,core_http_environment(env))
     worker=start('core-workerman',[php,'artisan','ws-server','start','--host=127.0.0.1','--port='+str(ws_port)],api)
     proxy.start()
     deadline=time.monotonic()+10
@@ -489,10 +502,12 @@ try:
     def disabled(incoming):
         stage_states['disabled']=state('disabled');rows=stage_states['disabled']['nodes']
         if rows[0]['enabled']or rows[0]['ws_online']or rows[0]['devices']or not rows[1]['ws_online']or not stage_states['disabled']['machine_online']:raise RuntimeError('NATIVE_MACHINE_TARGET_SCOPE_CLEANUP_FAILED')
+        recovery_starts['reenabled']=time.monotonic_ns()
         mutation(fixture['nodes'][0]['id'],{'enabled':True});return {'ok':True}
     disabled_evidence=barrier('disabled',disabled)
     rotation={}
     def reenabled(incoming):
+        recovery_ends['reenabled']=time.monotonic_ns()
         stage_states['reenabled']=state('reenabled')
         identity={'machine_id':str(fixture['machine_id'])};key=str(uuid.uuid4())
         status,body=admin_operation('network.machines.token.rotate',identity,key)
@@ -508,8 +523,14 @@ try:
             raise RuntimeError('NATIVE_MACHINE_ROTATION_RECEIPT_REPLAY_CHANGED_TOKEN')
         return {'token':token}
     barrier('reenabled',reenabled)
-    old=barrier('old-rejected',lambda incoming:{'ok':True})
-    recovered=barrier('recovered',lambda incoming:{'ok':True})
+    def old_rejected(incoming):
+        recovery_starts['recovered']=time.monotonic_ns()
+        return {'ok':True}
+    old=barrier('old-rejected',old_rejected)
+    def recovered_ready(incoming):
+        recovery_ends['recovered']=time.monotonic_ns()
+        return {'ok':True}
+    recovered=barrier('recovered',recovered_ready)
     if test.wait(timeout=10)!=0:raise RuntimeError('NATIVE_MACHINE_LIVE_TEST_FAILED')
     test_output=(evidence/'node-live.log').read_text()
     if '--- PASS: TestNativeCoreMachineLive ' not in test_output or '--- SKIP: TestNativeCoreMachineLive' in test_output:
@@ -537,7 +558,7 @@ try:
         raise RuntimeError('NATIVE_MACHINE_CONNECTION_PHYSICAL_ASSERTIONS_REQUIRED')
     # Runtime payloads and SQL snapshots stay private. Public evidence exposes
     # fixed assertion labels, aggregate counts and content/source hashes only.
-    artifact('result.json',{'native_connection_commands':connection_gate,'connection_command_assertions':['canonical_admin_permissions','pagination','foreign_node_rejected','workflow_receipt_replay','actual_target_eof','other_streams_continue'] if connection_gate else [],'actual_core_workerman_machine':True,'core_revision':actual,'node_revision':node_revision,'core_tree':core_tree,'node_tree':node_tree,'core_installation_mode':'native','core_release_id':runtime['release_id'],'core_composition_fingerprint':runtime['composition_fingerprint'],'canonical_admin_operations':True,'node_kernel':'txnode','actual_transparent_trusted_tls':True,'actual_protocols':['vless','vmess'],'shared_machine_upgrade_count':sum(e['kind']=='ws-upgrade'and e['status']==101 for e in events),'ws_only_configuration_delivery':True,'native_core_installation_admission':True,'transient_disconnect_503_recovery':True,'successor_socket_device_facts':True,'foreign_machine_scope_matrix':True,'membership_withdrawal_proved':True,'machine_token_denial_proved':True,'original_batches_replayed':len(required),'actual_sql_unique_batch_rows':len(required),'independent_full_billing_reconciliation':False,'production_pki_attested':False,'private_go_result_sha256':hashlib.sha256((evidence/'machine-live-result.json').read_bytes()).hexdigest(),'observations_sha256':hashlib.sha256(observation.read_bytes()).hexdigest()})
+    artifact('result.json',{'native_connection_commands':connection_gate,'connection_command_assertions':['canonical_admin_permissions','pagination','foreign_node_rejected','workflow_receipt_replay','actual_target_eof','other_streams_continue'] if connection_gate else [],'actual_core_workerman_machine':True,'core_revision':actual,'node_revision':node_revision,'core_tree':core_tree,'node_tree':node_tree,'core_installation_mode':'native','core_release_id':runtime['release_id'],'core_composition_fingerprint':runtime['composition_fingerprint'],'canonical_admin_operations':True,'node_kernel':'txnode','actual_transparent_trusted_tls':True,'actual_protocols':['vless','vmess'],'shared_machine_upgrade_count':sum(e['kind']=='ws-upgrade'and e['status']==101 for e in events),'ws_only_configuration_delivery':True,'native_core_installation_admission':True,'transient_disconnect_503_recovery':True,'successor_socket_device_facts':True,'foreign_machine_scope_matrix':True,'membership_withdrawal_proved':True,'machine_token_denial_proved':True,'original_batches_replayed':len(required),'actual_sql_unique_batch_rows':len(required),'independent_full_billing_reconciliation':False,'production_pki_attested':False,'php_http_runtime':http_runtime,'recovery_http_observations':{stage:recovery_http_observation(stage) for stage in ('reenabled','recovered')},'private_go_result_sha256':hashlib.sha256((evidence/'machine-live-result.json').read_bytes()).hexdigest(),'observations_sha256':hashlib.sha256(observation.read_bytes()).hexdigest()})
     print('Native actual Core/Workerman two-node Machine gate passed; public result contains no credentials.')
 except Exception:
     failure_summary('runner_failure')
