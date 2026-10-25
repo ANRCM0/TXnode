@@ -21,10 +21,20 @@ from native_setup import prepare as prepare_native, render_credentials
 from recovery_diagnostic import FAILURE_CLASSES, valid_recovery
 from php_server import CORE_HTTP_WORKERS, core_http_environment
 
-if len(sys.argv)!=4:raise SystemExit('usage: run.py API NODE NEW_EVIDENCE')
-api,node,evidence=(Path(p).resolve() for p in sys.argv[1:]);scripts=Path(__file__).resolve().parent
+if len(sys.argv) not in (4,6):raise SystemExit('usage: run.py API NODE NEW_EVIDENCE [--candidate-core-sha SHA]')
+candidate_core = None
+if len(sys.argv) == 6:
+    if sys.argv[4] != '--candidate-core-sha' or re.fullmatch('[a-f0-9]{40}', sys.argv[5]) is None:
+        raise SystemExit('NATIVE_MACHINE_EXPLICIT_CANDIDATE_SHA_REQUIRED')
+    candidate_core = sys.argv[5]
+api,node,evidence=(Path(p).resolve() for p in sys.argv[1:4]);scripts=Path(__file__).resolve().parent
 # Pin application source independently of the candidate Node and fixture code.
 baseline=json.loads((node/'compatibility/core.v1.json').read_text())
+supported_core_revision = baseline['revision']
+if candidate_core is not None:
+    baseline = dict(baseline, revision=candidate_core,
+                    protocols=list(dict.fromkeys(baseline['protocols'] + ['node-connections/v1'])))
+connection_gate = 'node-connections/v1' in baseline['protocols']
 core=api.parent
 actual=subprocess.check_output(['git','-C',str(core),'rev-parse','HEAD'],text=True).strip()
 node_revision=subprocess.check_output(['git','-C',str(node),'rev-parse','HEAD'],text=True).strip()
@@ -44,6 +54,8 @@ go=json.loads(subprocess.check_output(['go','env','-json','GOPATH','GOMODCACHE',
 if any(not isinstance(go.get(k),str)or not go[k] for k in ('GOPATH','GOMODCACHE','GOCACHE'))or go.get('CGO_ENABLED')!='1':raise SystemExit('NATIVE_MACHINE_GO_RACE_ENV_REQUIRED')
 env={k:os.environ[k]for k in ('PATH','LANG','LC_ALL','TMPDIR','GOTOOLCHAIN')if k in os.environ};env.update(go)
 env['CORE_RELEASE_ID'] = actual
+if connection_gate:
+    env['TXNODE_NATIVE_CONNECTIONS_GATE'] = '1'
 env.update(expected|{'DB_PORT':os.environ.get('DB_PORT','13306'),'DB_PASSWORD':os.environ['DB_PASSWORD'],'APP_DEBUG':'false','CACHE_DRIVER':'redis','SETTING_CACHE_STORE':'redis','SESSION_DRIVER':'array','QUEUE_CONNECTION':'sync','MAIL_MAILER':'array','CORE_INSTALLATION_MODE':'legacy','CORE_INSTALLATION_EPOCH':'1','TXBOARD_NATIVE_NODE_WS_ENABLED':'true','APP_KEY':'base64:ZdD07lazsdQQmdBAJ2tA5WjufeI2hP8xlP6zgmvCMZs=','REDIS_HOST':'127.0.0.1','REDIS_PORT':os.environ.get('REDIS_PORT','16379'),'REDIS_DB':os.environ.get('REDIS_DB','14'),'REDIS_CACHE_DB':os.environ.get('REDIS_CACHE_DB','15'),'REDIS_PREFIX':'native-machine-'+hashlib.sha256(str(evidence).encode()).hexdigest()[:12]+':','NATIVE_MACHINE_API':str(api),'NATIVE_MACHINE_DIR':str(evidence)})
 if not env['REDIS_DB'].isdigit() or not env['REDIS_CACHE_DB'].isdigit() or env['REDIS_DB']==env['REDIS_CACHE_DB']:
     raise SystemExit('NATIVE_MACHINE_DISTINCT_REDIS_DATABASES_REQUIRED')
@@ -60,6 +72,8 @@ def artifact(name,value):
 
 artifact('sources.json',{'schema':'txnode-core-machine-sources/v1',
     'core_repository':baseline['repository'],'core_revision':actual,'core_tree':core_tree,'requested_core_release_id':actual,
+    'core_selection':'explicit_candidate' if candidate_core is not None else 'supported_baseline',
+    'supported_core_revision':supported_core_revision,'native_connection_commands_required':connection_gate,
     'node_repository':'ANRCM0/txnode','node_revision':node_revision,'node_tree':node_tree,
     'core_installation_mode':'not_started','requested_core_installation_mode':'native','node_kernel':'txnode',
     'php_cli_server_workers':CORE_HTTP_WORKERS,
@@ -283,6 +297,32 @@ def mutation(node_id,fields):
     if status!=200 or body.get('data',{}).get('ok')is not True:raise RuntimeError('NATIVE_MACHINE_ADMIN_MUTATION_FAILED')
     return status
 
+def connection_operation(node_id, action, fields=None, key=None):
+    operation = 'network.nodes.connections.list.request' if action == 'list' else 'network.nodes.connections.close'
+    payload = {'node_id':str(node_id)} | (fields or {})
+    key = key or str(uuid.uuid4())
+    status, body = admin_operation(operation, payload, key)
+    receipt = body.get('data', {})
+    if status != 200 or receipt.get('status') != 'pending' or receipt.get('action') != action:
+        raise RuntimeError('NATIVE_MACHINE_CONNECTION_REQUEST_FAILED')
+    request_id = receipt.get('request_id', '')
+    if re.fullmatch('nco_[a-f0-9]{32}', request_id) is None:
+        raise RuntimeError('NATIVE_MACHINE_CONNECTION_RECEIPT_REQUIRED')
+    # Replay the exact HTTP workflow key, never issue a second Node command.
+    status, replay = admin_operation(operation, payload, key)
+    if status != 200 or replay.get('data') != receipt:
+        raise RuntimeError('NATIVE_MACHINE_CONNECTION_WORKFLOW_REPLAY_CHANGED')
+    deadline = time.monotonic()+10
+    while time.monotonic() < deadline:
+        status, body = admin_operation('network.nodes.connections.result.get',
+                                       {'node_id':str(node_id), 'request_id':request_id})
+        view = body.get('data', {})
+        if status != 200 or view.get('request_id') != request_id or view.get('node_id') != str(node_id):
+            raise RuntimeError('NATIVE_MACHINE_CONNECTION_RESULT_SCOPE_REQUIRED')
+        if view.get('status') != 'pending':return view
+        time.sleep(.05)
+    raise RuntimeError('NATIVE_MACHINE_CONNECTION_RESULT_TIMEOUT')
+
 try:
     provider=start('credential-provider',provider_args,node)
     deadline=time.monotonic()+10
@@ -330,6 +370,31 @@ try:
     test=start('node-live',[str(evidence/'native-machine-test'),'-test.run=^TestNativeCoreMachineLive$','-test.v','-test.timeout=150s'],node)
     stage_states={}
     configuration_gate={}
+    connection_evidence={}
+    if connection_gate:
+        def connection_listed(incoming):
+            target = fixture['nodes'][0]
+            sibling = fixture['nodes'][1]
+            first = connection_operation(target['id'], 'list', {'limit':1})
+            if first.get('status') != 'complete' or first.get('total') != 2 or len(first.get('connections', [])) != 1 or not first.get('next'):
+                raise RuntimeError('NATIVE_MACHINE_CONNECTION_FIRST_PAGE_REQUIRED')
+            second = connection_operation(target['id'], 'list', {'limit':1, 'after':first['next']})
+            if second.get('status') != 'complete' or second.get('total') != 2 or len(second.get('connections', [])) != 1 or second.get('next'):
+                raise RuntimeError('NATIVE_MACHINE_CONNECTION_SECOND_PAGE_REQUIRED')
+            target_id = second['connections'][0]['id']
+            if first['connections'][0]['id'] == target_id or any(row['user_id'] != str(target['user_id']) or row['transport'] != 'tcp' for row in first['connections']+second['connections']):
+                raise RuntimeError('NATIVE_MACHINE_CONNECTION_OWNER_ROWS_REQUIRED')
+            foreign = connection_operation(sibling['id'], 'close', {'connection_id':target_id})
+            if foreign.get('status') != 'not_found':raise RuntimeError('NATIVE_MACHINE_FOREIGN_CONNECTION_CLOSE_ACCEPTED')
+            connection_evidence['target_id'] = target_id
+            return {'actual_pagination':True, 'foreign_node_rejected':True, 'workflow_replay_preserved':True}
+        barrier('connections-listed',connection_listed)
+        def connection_closed(incoming):
+            closed = connection_operation(fixture['nodes'][0]['id'], 'close', {'connection_id':connection_evidence['target_id']})
+            if closed.get('status') != 'closed':raise RuntimeError('NATIVE_MACHINE_CONNECTION_CLOSE_NOT_CONFIRMED')
+            return {'actual_close_acknowledged':True}
+        barrier('connections-close',connection_closed)
+        barrier('connections-verified',lambda incoming: {'ok':True})
     def wait_proxy(predicate, code, timeout=10):
         deadline=time.monotonic()+timeout
         while not predicate(proxy.event_snapshot()):
@@ -446,9 +511,11 @@ try:
     if not denials:raise RuntimeError('NATIVE_MACHINE_COMPLETED_HTTP_DENIAL_REQUIRED')
     if any(e['kind']=='http'and e['path']=='/txapi/node/v1/report'and e['status']==401 for e in events):raise RuntimeError('NATIVE_MACHINE_DENIED_REPORT_ATTEMPT')
     goresult=json.loads((evidence/'machine-live-result.json').read_text())
+    if connection_gate and goresult.get('native_connection_commands') is not True:
+        raise RuntimeError('NATIVE_MACHINE_CONNECTION_PHYSICAL_ASSERTIONS_REQUIRED')
     # Runtime payloads and SQL snapshots stay private. Public evidence exposes
     # fixed assertion labels, aggregate counts and content/source hashes only.
-    artifact('result.json',{'actual_core_workerman_machine':True,'core_revision':actual,'node_revision':node_revision,'core_tree':core_tree,'node_tree':node_tree,'core_installation_mode':'native','core_release_id':runtime['release_id'],'core_composition_fingerprint':runtime['composition_fingerprint'],'canonical_admin_operations':True,'node_kernel':'txnode','actual_transparent_trusted_tls':True,'actual_protocols':['vless','vmess'],'shared_machine_upgrade_count':sum(e['kind']=='ws-upgrade'and e['status']==101 for e in events),'ws_only_configuration_delivery':True,'native_core_installation_admission':True,'transient_disconnect_503_recovery':True,'successor_socket_device_facts':True,'foreign_machine_scope_matrix':True,'membership_withdrawal_proved':True,'machine_token_denial_proved':True,'original_batches_replayed':len(required),'actual_sql_unique_batch_rows':len(required),'independent_full_billing_reconciliation':False,'production_pki_attested':False,'private_go_result_sha256':hashlib.sha256((evidence/'machine-live-result.json').read_bytes()).hexdigest(),'observations_sha256':hashlib.sha256(observation.read_bytes()).hexdigest()})
+    artifact('result.json',{'native_connection_commands':connection_gate,'connection_command_assertions':['canonical_admin_permissions','pagination','foreign_node_rejected','workflow_receipt_replay','actual_target_eof','other_streams_continue'] if connection_gate else [],'actual_core_workerman_machine':True,'core_revision':actual,'node_revision':node_revision,'core_tree':core_tree,'node_tree':node_tree,'core_installation_mode':'native','core_release_id':runtime['release_id'],'core_composition_fingerprint':runtime['composition_fingerprint'],'canonical_admin_operations':True,'node_kernel':'txnode','actual_transparent_trusted_tls':True,'actual_protocols':['vless','vmess'],'shared_machine_upgrade_count':sum(e['kind']=='ws-upgrade'and e['status']==101 for e in events),'ws_only_configuration_delivery':True,'native_core_installation_admission':True,'transient_disconnect_503_recovery':True,'successor_socket_device_facts':True,'foreign_machine_scope_matrix':True,'membership_withdrawal_proved':True,'machine_token_denial_proved':True,'original_batches_replayed':len(required),'actual_sql_unique_batch_rows':len(required),'independent_full_billing_reconciliation':False,'production_pki_attested':False,'private_go_result_sha256':hashlib.sha256((evidence/'machine-live-result.json').read_bytes()).hexdigest(),'observations_sha256':hashlib.sha256(observation.read_bytes()).hexdigest()})
     print('Native actual Core/Workerman two-node Machine gate passed; public result contains no credentials.')
 except Exception:
     failure_summary('runner_failure')

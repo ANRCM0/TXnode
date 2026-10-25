@@ -111,7 +111,7 @@ if ($mode === 'seed') {
  if (($runtime['ready']??false)!==true || ($runtime['authority_epoch']??null)!=='2'
   || ($runtime['release_id']??null)!==getenv('CORE_RELEASE_ID')) throw new RuntimeException('NATIVE_MACHINE_APPROVED_CORE_COMPOSITION_REQUIRED');
  // Fixture authority provisioning matches Core's native browser owner tests.
- foreach (['network.nodes.manage','network.machines.manage'] as $permission) {
+ foreach (['network.nodes.manage','network.nodes.read','network.machines.manage'] as $permission) {
   DB::table('tx_internal_actor_grant')->insert(['user_id'=>$admin->id,'permission'=>$permission,'created_at'=>time()]);
  }
  echo json_encode(['machine_id'=>(int)$machine->id,'token'=>$machine->token,'nodes'=>$nodes,'foreign_machine_id'=>(int)$foreignMachine->id,'foreign_node_id'=>(int)$foreignNode->id,'foreign_token'=>$foreignMachine->token,'origin_port'=>(int)getenv('NATIVE_MACHINE_ORIGIN_PORT'),'new_port'=>(int)getenv('NATIVE_MACHINE_NEW_PORT'),'activation'=>['phase'=>'open','authority_epoch'=>'2'],'runtime'=>$runtime],JSON_THROW_ON_ERROR)."\n"; exit(0);

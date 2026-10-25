@@ -5,7 +5,14 @@ Do not execute its network, database, race, or runtime checks on a workstation.
 The runner and transparent TLS proxy were recovered from TXBoard commit
 `52ae0ba`; the executed Core application revision must equal
 `compatibility/core.v1.json`. The fixture lives in the candidate Node repository
-and does not patch Core application source.
+and does not patch Core application source. For a separate Core pull request,
+`--candidate-core-sha <40-hex-SHA>` selects that exact committed Core checkout;
+the supported baseline remains recorded separately in the source evidence.
+This explicit candidate mode also requires the three native connection operations
+in preflight and executes their real pagination, foreign-node rejection,
+idempotent workflow replay, target EOF and other-stream continuity assertions.
+The default gate enables these assertions only after the reviewed Core baseline
+advertises `node-connections/v1`; it never infers support from a passing old run.
 
 The Node-owned fixture is prepared for **native installation mode** with a real
 Credential Provider process, mTLS client identities, Core signing seed, native
