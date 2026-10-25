@@ -19,7 +19,7 @@ from tls_proxy import NativeTLSProxy
 from preflight import inspect as compatibility_preflight
 from native_setup import prepare as prepare_native, render_credentials
 from recovery_diagnostic import FAILURE_CLASSES, valid_recovery
-from php_server import CORE_HTTP_WORKERS, CORE_HTTP_OPTIONS, core_http_command, core_http_environment
+from php_server import CORE_HTTP_WORKERS, CORE_HTTP_OPTIONS, CORE_SWOOLE_VERSION, core_octane_command
 
 if len(sys.argv) not in (4,6):raise SystemExit('usage: run.py API NODE NEW_EVIDENCE [--candidate-core-sha SHA]')
 candidate_core = None
@@ -76,7 +76,8 @@ artifact('sources.json',{'schema':'txnode-core-machine-sources/v1',
     'supported_core_revision':supported_core_revision,'native_connection_commands_required':connection_gate,
     'node_repository':'ANRCM0/txnode','node_revision':node_revision,'node_tree':node_tree,
     'core_installation_mode':'not_started','requested_core_installation_mode':'native','node_kernel':'txnode',
-    'php_cli_server_workers':CORE_HTTP_WORKERS,
+    'php_http_server':'octane-swoole','php_http_workers':CORE_HTTP_WORKERS,
+    'php_swoole_version_requested':CORE_SWOOLE_VERSION,
     'php_http_bytecode_cache_requested':True,
     'fixture_ancestor':'TXBoard 52ae0ba154c27e9d8c9db4096edfb5ae2e7a8645 scripts/tests/node-native-machine',
     'native_core_installation_admission':False})
@@ -129,6 +130,7 @@ def failure_summary(category):
     diagnostics = {'category': category, 'assertions': [], 'signals': []}
     if http_runtime:
         diagnostics['http_runtime'] = {key:http_runtime.get(key) is True for key in ('enabled','timestamp_validation','file_protection_disabled','jit_disabled')}
+        diagnostics['http_runtime']['swoole_version_matches'] = http_runtime.get('swoole_version') == CORE_SWOOLE_VERSION
     if command_diagnostics:
         diagnostics['command'] = dict(command_diagnostics)
     log = evidence / 'node-live.log'
@@ -356,9 +358,10 @@ def connection_operation(node_id, action, fields=None, key=None):
 
 try:
     http_runtime=command_json('http-runtime',[php,*CORE_HTTP_OPTIONS,'-r',
-        "$s=function_exists('opcache_get_status')?opcache_get_status(false):false; echo json_encode(['enabled'=>is_array($s)&&$s['opcache_enabled'],'timestamp_validation'=>(int)ini_get('opcache.validate_timestamps')===1,'file_protection_disabled'=>(int)ini_get('opcache.file_update_protection')===0,'jit_disabled'=>(int)ini_get('opcache.jit')===0]);"],api)
-    if http_runtime!={'enabled':True,'timestamp_validation':True,'file_protection_disabled':True,'jit_disabled':True}:
+        "$s=function_exists('opcache_get_status')?opcache_get_status(false):false; echo json_encode(['enabled'=>is_array($s)&&$s['opcache_enabled'],'timestamp_validation'=>(int)ini_get('opcache.validate_timestamps')===1,'file_protection_disabled'=>(int)ini_get('opcache.file_update_protection')===0,'jit_disabled'=>(int)ini_get('opcache.jit')===0,'swoole_version'=>phpversion('swoole')]);"],api)
+    if http_runtime!={'enabled':True,'timestamp_validation':True,'file_protection_disabled':True,'jit_disabled':True,'swoole_version':CORE_SWOOLE_VERSION}:
         raise RuntimeError('NATIVE_MACHINE_HTTP_BYTECODE_CACHE_REQUIRED')
+    http_runtime['server']='octane-swoole'
     provider=start('credential-provider',provider_args,node)
     deadline=time.monotonic()+10
     while True:
@@ -378,7 +381,7 @@ try:
     native_activated=True
     artifact('fixture.json',fixture)
     env['CORE_INSTALLATION_EPOCH']='2'
-    http=start('core-http',core_http_command(php,http_port,'public/index.php','public'),api,core_http_environment(env))
+    http=start('core-http',core_octane_command(php,http_port),api)
     worker=start('core-workerman',[php,'artisan','ws-server','start','--host=127.0.0.1','--port='+str(ws_port)],api)
     proxy.start()
     deadline=time.monotonic()+10
