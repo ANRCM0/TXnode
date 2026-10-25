@@ -103,9 +103,14 @@ class NativeTLSProxy:
                     body+=part
                 headers.pop('Connection',None);headers['Connection']='close'
                 upstream=http.client.HTTPConnection('127.0.0.1',owner.http_port,timeout=10)
+                started = time.monotonic_ns()
+                timing = {'kind':'http-timing', 'path':path.split('?',1)[0],
+                          'node_id':lower.get('x-tx-node-id'), 'started_monotonic_ns':started}
                 try:
                     upstream.request(method,path,body[:length] if length else None,headers)
                     response=upstream.getresponse();content=response.read(4<<20)
+                    owner.record(timing | {'outcome':'response', 'status':response.status,
+                                          'elapsed_ns':time.monotonic_ns()-started})
                     event={'kind':'http','method':method,'path':path.split('?',1)[0],'status':response.status,'node_id':lower.get('x-tx-node-id'),'machine_id':lower.get('x-tx-machine-id')}
                     if path=='/txapi/node/v1/report':
                         try:
@@ -118,6 +123,10 @@ class NativeTLSProxy:
                     output=f'HTTP/1.1 {response.status} {response.reason}\r\n'.encode()
                     output+=b''.join(f'{k}: {v}\r\n'.encode('iso-8859-1') for k,v in response.getheaders() if k.lower() not in {'connection','transfer-encoding','content-length'})
                     client.sendall(output+f'Content-Length: {len(content)}\r\nConnection: close\r\n\r\n'.encode()+content)
+                except (OSError, http.client.HTTPException) as error:
+                    owner.record(timing | {'outcome':'timeout' if isinstance(error, TimeoutError) else 'connection',
+                                          'status':0, 'elapsed_ns':time.monotonic_ns()-started})
+                    raise
                 finally:upstream.close()
         context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);context.load_cert_chain(cert,key)
         class Server(socketserver.ThreadingTCPServer):
