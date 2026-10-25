@@ -456,6 +456,25 @@
         "UDP/low-entropy-48",
         "UDP/low-entropy-56"
       ]
+    },
+    {
+      "test": "TestInteropMieruOfficialImplicitPatterns",
+      "client": "mieru",
+      "profiles": [
+        "full"
+      ],
+      "expected": "pass",
+      "owner": "native Mieru implicit seed and unlockAll traffic patterns",
+      "subtests": [
+        "TCP/seed-zero",
+        "TCP/seed-min",
+        "TCP/seed-max",
+        "TCP/host-seed",
+        "UDP/seed-zero",
+        "UDP/seed-min",
+        "UDP/seed-max",
+        "UDP/host-seed"
+      ]
     }
   ]
 }

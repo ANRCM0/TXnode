@@ -87,7 +87,7 @@ func TestTrafficPatternExplicitFieldsAndStrictRejection(t *testing.T) {
 		t.Fatal("explicit zero padding was not applied")
 	}
 	for _, raw := range []string{
-		"random", "null", `{} {}`, `{"unknown":true}`, `{"seed":0}`, `{"unlockAll":true}`,
+		"random", "null", `{} {}`, `{"unknown":true}`, `{"seed":2147483648}`, `{"seed":-2147483649}`,
 		`{"nonce":{"type":9}}`, `{"nonce":{"minLen":8,"maxLen":7}}`, `{"nonce":{"maxLen":13}}`,
 		`{"nonce":{"customHexStrings":["xx"]}}`, `{"padding":{"maxEndPaddingLen":256}}`,
 		`{"tcpFragment":{"enable":true,"maxSleepMs":101}}`, `{"lowEntropy":{"mode":5}}`,

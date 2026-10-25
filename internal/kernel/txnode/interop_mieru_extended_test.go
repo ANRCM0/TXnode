@@ -166,3 +166,40 @@ func TestInteropMieruOfficialTrafficPatterns(t *testing.T) {
 		}
 	}
 }
+
+func TestInteropMieruOfficialImplicitPatterns(t *testing.T) {
+	mieruBinary(t)
+	for _, transport := range []string{"TCP", "UDP"} {
+		for _, fixture := range []struct {
+			name string
+			seed *int32
+		}{
+			{"seed-zero", pointerInt32(0)},
+			{"seed-min", pointerInt32(-2147483648)},
+			{"seed-max", pointerInt32(2147483647)},
+			{"host-seed", nil},
+		} {
+			t.Run(transport+"/"+fixture.name, func(t *testing.T) {
+				pattern := map[string]any{"unlockAll": true, "tcpFragment": map[string]any{"maxSleepMs": 0}}
+				if fixture.seed != nil {
+					pattern["seed"] = *fixture.seed
+				}
+				raw, err := json.Marshal(pattern)
+				if err != nil {
+					t.Fatal(err)
+				}
+				port := startInteropKernelUsers(t, &model.NodeSpec{Protocol: "mieru", Transport: strings.ToLower(transport), TrafficPattern: string(raw)}, kernel.TLSCert{},
+					[]model.UserSpec{{ID: 1, UUID: "interop:secret"}})
+				addr := startMieruPatternClient(t, port, transport, pattern)
+				mieruBulkRoundTrip(t, addr, bytes.Repeat([]byte("implicit-pattern/"), 3000))
+				payload := bytes.Repeat([]byte("implicit-udp/"), 130)
+				got, err := udpThroughSocksE(t, addr, udpEcho(t), payload)
+				if err != nil || !bytes.Equal(got, payload) {
+					t.Fatalf("implicit pattern application UDP bytes=%d err=%v", len(got), err)
+				}
+			})
+		}
+	}
+}
+
+func pointerInt32(value int32) *int32 { return &value }
