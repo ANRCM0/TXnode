@@ -1,5 +1,22 @@
 # Node 镜像交付与历史阻塞记录
 
+## 2026-10-25 候选已实际交付
+
+`v2.3.0-rc.1` 已发布为 prerelease，精确来源为
+`f20965691b87558ff212eb673866eec1bf679f25`。标签 Actions `40165006752`
+的 12 项实际任务全部成功；两份 Linux 二进制、`SHA256SUMS` 和
+`release-manifest.json` 已实际取回，与原构建字节、GitHub 资产摘要及清单一致。
+Node 候选 index 为
+`sha256:d9f120277615af1c09a83772858a8552d9622c5df0ef82c8fa5a44b4be78d22e`，
+两个架构均经 Actions 元数据和离线 capabilities 验证，arm64 使用 QEMU。
+本轮使用 `preview`；stable/latest 未提升。完整子摘要、二进制校验和、Core 采用
+和保留限制见 [候选交付说明](CANDIDATE-DELIVERY.zh.md)。
+
+Node main `f2096569` 的独立开发镜像也由 `40164480241` 实际发布，artifact
+`12588205796` 的双架构原始元数据及离线能力已核对；其 dev index 为
+`sha256:4b0d7ba761428ea19273a15cc8c877f6bf403f2955b38412903611751163c725`，
+`dev` 提升一致。它与上面的候选版本标签是不同构建，不混用其版本或摘要。
+
 ## 2026-10-25 独立开发镜像
 
 连接管理已通过 Node PR #20 合并为
@@ -14,7 +31,7 @@ capabilities；arm64 使用 QEMU。它不代替 Core 组合验收或完整 S3 v3
 | linux/amd64 | `sha256:ecbff706e3870d8a9cc7d54de302a6cdc286556c69b60b7b952e019af8e750da` |
 | linux/arm64 | `sha256:a8a2a9d9d907f1e2f6fb0191ac2387abf992b977fb2e97091c662432539eeba0` |
 
-本轮候选版本准备为 `v2.3.0-rc.1`，使用已有 `preview` 通道；版本说明见
+本轮候选版本为 `v2.3.0-rc.1`，实际交付见本页顶部，使用已有 `preview` 通道；版本说明见
 `.github/release/NOTES.md`。标签工作流须完成该源码的完整互通、稳定性、固定
 Core C2/Machine、双架构发布和二进制证明，才能形成候选交付。正式 stable、
 生产部署和真实回滚继续各自验收；实际主机和固定性能 runner 目前均不可用。
