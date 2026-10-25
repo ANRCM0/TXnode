@@ -24,6 +24,7 @@ type Event struct {
 	DeltaAction string
 	DeltaUsers  []model.UserSpec
 	DeviceUsers map[int][]string
+	Connections *ConnectionCommand
 }
 
 type StatusChange struct {

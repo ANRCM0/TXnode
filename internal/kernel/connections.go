@@ -22,7 +22,7 @@ type ConnectionPage struct {
 	Next        string       `json:"next,omitempty"`
 }
 
-// ConnectionInspector is optional and does not change the panel wire protocol.
+// ConnectionInspector is optional. Native control-plane requests delegate here.
 // IDs are opaque, process scoped and never valid on another Node instance.
 type ConnectionInspector interface {
 	Connections(context.Context, string, int) (ConnectionPage, error)

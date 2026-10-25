@@ -66,7 +66,14 @@ def inspect(api, baseline):
                 documents[name] = json.loads(git(core, 'show', baseline['revision'] + ':' + path))
                 result['contract_sources'][name] = {'path': path, 'blob': git(
                     core, 'rev-parse', baseline['revision'] + ':' + path)}
-            for operation, (controller, handler, permission, mode) in REQUIRED_OPERATIONS.items():
+            required_operations = dict(REQUIRED_OPERATIONS)
+            if 'node-connections/v1' in baseline.get('protocols', []):
+                required_operations.update({
+                    'network.nodes.connections.list.request': ('NativeNodeConnectionsController', 'listConnections', 'network.nodes.read', 'workflow'),
+                    'network.nodes.connections.close': ('NativeNodeConnectionsController', 'closeConnection', 'network.nodes.manage', 'workflow'),
+                    'network.nodes.connections.result.get': ('NativeNodeConnectionsController', 'result', 'network.nodes.read', 'read'),
+                })
+            for operation, (controller, handler, permission, mode) in required_operations.items():
                 path = 'gateway/v1/core/admin/operations/' + operation
                 admitted = any(re.fullmatch(pattern, path) for pattern in inventory.get('POST', []))
                 spec = documents['operations'].get('operations', {}).get(operation, {})

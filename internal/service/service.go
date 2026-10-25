@@ -80,9 +80,10 @@ type Service struct {
 	authorizationExpired     atomic.Bool
 	authorizationFailure     error
 
-	push             *pushsync.Controller
-	machineMailbox   *controlplane.NodeMailbox
-	machineMailboxCh <-chan struct{}
+	push               *pushsync.Controller
+	machineMailbox     *controlplane.NodeMailbox
+	machineMailboxCh   <-chan struct{}
+	connectionReceipts map[string]connectionReceipt
 
 	// metricsMu guards mutable runtime snapshots consumed by reporting.
 	// Push transport state is owned independently by pushsync.Controller.
@@ -488,6 +489,9 @@ func (s *Service) drainMachineMailbox(ctx context.Context) {
 	if state.NeedsReconcile {
 		s.requestWSResync(ctx, "machine_mailbox_reconcile")
 	}
+	for i := range state.Connections {
+		s.handleConnectionCommand(ctx, &state.Connections[i])
+	}
 }
 
 func (s *Service) wsMetrics() map[string]interface{} {
@@ -499,6 +503,10 @@ func (s *Service) wsMetrics() map[string]interface{} {
 
 // handleWSEvent processes data events received via WebSocket
 func (s *Service) handleWSEvent(ctx context.Context, event controlplane.Event) {
+	if event.Type == controlplane.EventConnections {
+		s.handleConnectionCommand(ctx, event.Connections)
+		return
+	}
 	if s.authorizationEnabled() {
 		switch event.Type {
 		case controlplane.EventSyncUsers, controlplane.EventSyncUserDelta, controlplane.EventSyncConfig:

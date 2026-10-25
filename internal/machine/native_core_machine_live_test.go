@@ -497,6 +497,20 @@ func TestNativeCoreMachineLive(t *testing.T) {
 	machineCoreEcho(t, stream2, bytes.Repeat([]byte("vmess-initial"), 37))
 	machineCoreAlive(t, endpoint, fixture, fixture.Nodes[0], stream1)
 	machineCoreAlive(t, endpoint, fixture, fixture.Nodes[1], stream2)
+	if os.Getenv("TXNODE_NATIVE_CONNECTIONS_GATE") == "1" {
+		managed := machineCoreDial(t, fixture.Nodes[0], destination)
+		defer managed.Close()
+		machineCoreEcho(t, managed, []byte("managed-connection"))
+		machineCoreBarrier(t, directory, "connections-listed", map[string]any{"actual_three_streams": true})
+		machineCoreEcho(t, managed, []byte("foreign-close-did-not-retarget"))
+		machineCoreEcho(t, stream1, []byte("original-stream-continues"))
+		machineCoreEcho(t, stream2, []byte("sibling-stream-continues"))
+		machineCoreBarrier(t, directory, "connections-close", map[string]any{"foreign_close_preserved_streams": true})
+		machineCoreClosed(t, managed, 4*time.Second)
+		machineCoreEcho(t, stream1, []byte("other-stream-after-close"))
+		machineCoreEcho(t, stream2, []byte("sibling-after-close"))
+		machineCoreBarrier(t, directory, "connections-verified", map[string]any{"actual_target_eof": true, "other_streams_continue": true})
+	}
 	machineCoreBarrier(t, directory, "initial", map[string]any{"machine_id": fixture.MachineID, "real_two_streams": true, "shared_ws_connected": true})
 	machineCoreClosed(t, stream1, 8*time.Second, func(code string) { configObservation.report(t, orchestrator, fixture.Nodes[0].Port, code) })
 	oldPort := fixture.Nodes[0].Port
@@ -657,7 +671,7 @@ func TestNativeCoreMachineLive(t *testing.T) {
 	defer new2.Close()
 	machineCoreEcho(t, new1, []byte("current-vless"))
 	machineCoreEcho(t, new2, []byte("current-vmess"))
-	machineCoreWrite(t, filepath.Join(directory, "machine-live-result.json"), map[string]any{"core_installation_mode": "native", "node_kernel": "txnode", "native_core_installation_admission": true, "actual_orchestrator": true, "actual_shared_workerman": true, "actual_ws_only_config_delivery": true, "transient_transport_retry": true, "successor_session_ready": true, "foreign_machine_scope": true, "device_facts_from_socket_peer": true, "actual_vless_vmess": true, "scope_safe_config_disable": true, "membership_tail_recovered": removed, "machine_denial_tails_recovered": tails, "old_restart_denied": true, "fresh_restart_authenticated": true, "real_database_billing_verified": false})
+	machineCoreWrite(t, filepath.Join(directory, "machine-live-result.json"), map[string]any{"core_installation_mode": "native", "node_kernel": "txnode", "native_core_installation_admission": true, "actual_orchestrator": true, "native_connection_commands": os.Getenv("TXNODE_NATIVE_CONNECTIONS_GATE") == "1", "actual_shared_workerman": true, "actual_ws_only_config_delivery": true, "transient_transport_retry": true, "successor_session_ready": true, "foreign_machine_scope": true, "device_facts_from_socket_peer": true, "actual_vless_vmess": true, "scope_safe_config_disable": true, "membership_tail_recovered": removed, "machine_denial_tails_recovered": tails, "old_restart_denied": true, "fresh_restart_authenticated": true, "real_database_billing_verified": false})
 	machineCoreBarrier(t, directory, "recovered", map[string]any{"tails": tails, "actual_protocol_recovery": true})
 }
 

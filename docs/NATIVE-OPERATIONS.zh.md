@@ -35,7 +35,17 @@ ID 使用进程随机代号和全局递增的 session 序号。关闭请求只�
 完整调用链是 `ConnectionInspector -> Kernel.liveServersLocked -> Server.ConnectionPage`
 和 `Kernel.CloseConnection -> Server.CloseSession -> Session.Close -> relay teardown`。
 `Session.Close` 取消限速等待并关闭 TCP/packet 传输；原代际的 meter 仍接收 I/O 完成和尾部。
-这里提供内核能力，现有面板协议没有新增连接列表或关闭消息。
+原生 Core 可通过两个固定 WS 事件接入：`ops.node.connections.request` 和
+`ops.node.connections.result`。请求只允许 `list` / `close`，包含节点 ID、一次请求 ID、
+15 秒截止时间，以及不透明游标/连接 ID；面板分页上限 100 条，页面默认 50 条。
+Service 在原调度循环中调用上述内核 owner；Machine 通过原节点 mailbox 保持命令
+顺序，未 ready 或超过 8 条时拒绝，状态同步仍保持原合并规则。
+
+Core 的管理员读取/关闭权限分别校验，Redis 只传请求 ID，worker 从原短期回执
+读取命令并复核当前节点归属、凭据和 socket。Node 的有界短期回执复用同一请求的
+原结果，不将同一 ID 改用于另一连接。Core 只接受当前派发 socket 的匹配结果；
+“已发送”不代表“已关闭”，超过截止时间未确认记为 unknown，不自动重复关闭。
+列表和结果不含来源/目标地址、UUID 或密钥，不进入固定基数诊断指标。
 
 ## 普通授权续期
 

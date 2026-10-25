@@ -15,6 +15,7 @@ type MailboxState struct {
 	HasUsers       bool
 	HasDevices     bool
 	NeedsReconcile bool
+	Connections    []ConnectionCommand
 }
 
 // NodeMailbox buffers WS events for a machine-mode node service that is not
@@ -32,6 +33,7 @@ type NodeMailbox struct {
 	needsReconcile   bool
 	hasFullUserState bool
 	notifyCh         chan struct{}
+	connections      []ConnectionCommand
 }
 
 func NewNodeMailbox() *NodeMailbox {
@@ -60,13 +62,21 @@ func (m *NodeMailbox) SeedBaseline(users []model.UserSpec, config *model.NodeSpe
 	}
 }
 
-// Apply coalesces only native state events. Unsupported events are rejected.
+// Apply coalesces native state and queues bounded connection commands separately.
 func (m *NodeMailbox) Apply(event Event) bool {
 	m.mu.Lock()
 	changed := false
 	accepted := true
 
 	switch event.Type {
+	case EventConnections:
+		// Commands keep their order and cannot wait through child bootstrap.
+		if !m.ready || event.Connections == nil || len(m.connections) >= 8 {
+			accepted = false
+		} else {
+			m.connections = append(m.connections, *event.Connections)
+			changed = true
+		}
 	case EventSyncConfig:
 		if event.Config != nil {
 			m.config = cloneNodeSpec(event.Config)
@@ -126,6 +136,8 @@ func (m *NodeMailbox) DrainIfReady() MailboxState {
 		return MailboxState{}
 	}
 	state := MailboxState{NeedsReconcile: m.needsReconcile}
+	state.Connections = m.connections
+	m.connections = nil
 	if m.dirtyConfig && m.config != nil {
 		state.Config = cloneNodeSpec(m.config)
 		state.HasConfig = true

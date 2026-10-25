@@ -190,7 +190,7 @@ func (s *Socket) runConnection(ctx context.Context, conn *websocket.Conn, timeou
 			if f.Event == "error" {
 				return errors.New("TXBoard WS server reported error")
 			}
-			if f.Event == "heartbeat.ack" || f.Event == "traffic.ack" || f.Event == "sync.ack" || f.Event == "ops.ack" {
+			if f.Event == "heartbeat.ack" || f.Event == "traffic.ack" || f.Event == "sync.ack" || f.Event == "ops.ack" || f.Event == "ops.node.connections.ack" {
 				continue
 			}
 			var data map[string]json.RawMessage
