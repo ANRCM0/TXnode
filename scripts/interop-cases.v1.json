@@ -132,7 +132,10 @@
         "full"
       ],
       "expected": "pass",
-      "owner": "native data plane protocol compatibility"
+      "owner": "native data plane protocol compatibility",
+      "subtests": [
+        "startup-control"
+      ]
     },
     {
       "test": "TestInteropXrayVLESSTLS",
