@@ -4,6 +4,39 @@
 性能 runner 或实际测试主机。本说明跟踪本轮源码、Core 采用、验收和构建交付，
 完整 S3 v3 与实际环境验收继续单列。
 
+## 2026-10-25 实际候选交付
+
+`v2.3.0-rc.1` 已于 2026-10-25 13:28:42（Asia/Shanghai）发布为 GitHub
+prerelease。标签源码为 `f20965691b87558ff212eb673866eec1bf679f25`，tree
+`a6e99a4311478c7e5df03863a80555cfa65c77bb`。标签 Actions `40165006752`
+的 12 项实际任务全部成功：八项功能门禁、两个架构的二进制构建、镜像发布和
+Release 附件交付。未选择的 S3 与独立诊断不计通过。
+
+本标签 full artifact `12587856948` 的原始事件为 38 个顶层、38 个声明子项通过，
+两项上游不适用单列；清单、客户端 pin 与所有子项已核对。Machine `12588550762`
+本次原四份批次对应四行唯一 settled SQL；C2 `12588191594` 同样记录精确的
+Node `f2096569` / Core `097dc97` 来源。原十份批次属于前置 `9f636d4c` 运行。
+
+实际下载的四份附件、GitHub 资产摘要、`SHA256SUMS`、发布清单及原构建记录已
+交叉核对；两份 ELF 与各自原 Actions artifact 字节完全相同，内嵌版本、提交、
+GOOS/GOARCH、CGO=0 和 `vcs.modified=false` 均相符，没有在本机执行二进制。
+
+| 二进制 | 字节数 | SHA-256 |
+| --- | ---: | --- |
+| `tx-node-linux-amd64` | 45191330 | `282b9e50a6e85a3b416d5a0d108cbee2369e97591e6a0f54719ba2008730fe40` |
+| `tx-node-linux-arm64` | 41484450 | `65dccfa403b8f594bb7e3fd403b408b59ece7f8794f5ed7dc851002a2dce3772` |
+
+| Node 候选镜像 | 不可变摘要 |
+| --- | --- |
+| Index | `ghcr.io/anrcm0/txnode@sha256:d9f120277615af1c09a83772858a8552d9622c5df0ef82c8fa5a44b4be78d22e` |
+| linux/amd64 | `sha256:c4412029ed83ba50bfe99f55a973ad38f65ff5223859de6face71b59ee7291e7` |
+| linux/arm64 | `sha256:023bba4a3f6c8300eb96ddc94ce1e19217ae405a8e4309055d4ed77116e87998` |
+
+Actions 的双架构元数据与离线 capabilities 均实际通过，arm64 使用 QEMU。
+2026-10-25 13:42 的匿名注册表读取确认本标签及 `preview` 指向该 index，两个
+子 manifest/config 的实际 SHA-256、架构、版本和源码标签一致。`preview` 会变化，
+部署锁使用这里的不可变摘要；没有提升 Node stable/latest。
+
 ## 交付内容与版本关系
 
 - Mieru `seed` / `unlockAll` 已由 PR #19 交付，按固定官方 v3.38.1 语义生成，
@@ -17,15 +50,19 @@
 
 | 身份 | 精确来源与用途 |
 | --- | --- |
-| 完整功能候选 Node | `9f636d4ccaa5fd00cc2282cb8e64490d49c564e3`，tree `3958ecd15cb81b4c2fa5b2400b6b4602e14cd674` |
+| 合并前完整功能 Node | `9f636d4ccaa5fd00cc2282cb8e64490d49c564e3`，tree `3958ecd15cb81b4c2fa5b2400b6b4602e14cd674` |
 | Node 固定支持的 Core | `097dc9748bbe665ae7672c43827998f1e9420e3a`，tree `ceb234b78c450eb0791151e093601c77e5fe523e`；manifest 要求 `node-connections/v1` |
-| Core 集成选择的 Node | `9f636d4ccaa5fd00cc2282cb8e64490d49c564e3`；Core 组合候选 `e2ae095be0a0202c5702c773d8e084bd27fa91a2` |
-| 标签和二进制的精确源码 | 以该标签 Actions 和 `release-manifest.json` 中 commit/tree 为准，不从文档文件反推 |
+| Core 正式采用的 Node | `9f636d4ccaa5fd00cc2282cb8e64490d49c564e3`；PR #307 已合并为 Core `7985843ddd94faebbecd201bd7c55b4f998f677b`，tree `c671683a9a2e3476d606dad8f285493a76f6a863` |
+| 标签和二进制的精确源码 | `f20965691b87558ff212eb673866eec1bf679f25`；以 `release-manifest.json` 和标签 Actions 为准，文档后续提交不改写该构建来源 |
 
 最终候选文档与已执行完整功能验证的 Node 分别记录提交；生产 Go、模块锁与
 构建输入保持相同，不把不同提交号写成同一源码树。Core 组合候选相对固定的
 `097dc97` 只更改测试、工作流及 Node gitlink，应用、合约和 Web 源码保持相同。
 最终文档、合并、标签和构建仍须各自取得实际来源及 CI，不互相替代。
+Node PR #22 经正常 merge 保留 `9f636d4c` 在 main 历史中；其与标签源码的全部
+618 项非 Markdown blob/mode 相同。Core 正常 merge 保留 `097dc97` 在 main
+历史中；固定基线与 Core 主线除 CI、夹具脚本及 Node gitlink 外的 1603 项
+blob/mode 相同。Core 所选 Node 与标签源码分别记账，不把不同 SHA 写成同一树。
 
 ## 已取得的候选功能证据
 
@@ -53,9 +90,19 @@ Machine HTTP 使用原 Core 的 Octane/Swoole 入口、四个 worker 和固定 S
 Core 组合中八个 gzip 拒绝均被正确观测。代理只对有上限的副本解码，原响应头和
 字节继续原样转发；真实网络回归同时断言原压缩字节相等、错误码及损坏/超大拒绝。
 
-Core 的最终整合、同源必需检查及镜像结果由 PR #307 的最终记录补充。镜像 gate
-中的测试模块升级和备份恢复不等于生产升级；固定 Core 的 PHP/Workerman/Machine
-组合验证与 Core 镜像验证也分别记账。
+Core 的合并前精确 head CI `40162819951` 实际通过 26 项，Images `40162819917`
+成功。合并后 `7985843` 的真实 Machine artifact `12587559546` 本次为原八份
+批次/八行 SQL，沿相同 Node `9f636d4c` 执行；合并后完整 CI `40164915929`
+已在 `7985843` 实际通过 26 项选中检查。普通 Core API 的 43 项条件跳过不计为
+该 API job 的通过项。
+
+Core main Images `40164915924` 的构建验收及双架构发布均已成功，三映像门禁
+`12587942062` 与配对资源/备份 `12587767355` 已核对。匿名读取确认实际发布为
+`ghcr.io/anrcm0/txboard-core@sha256:4689da2c542539fd88aba9c86098cf558e6d530b94861f9d04103f81a1388d68`，
+两个架构 config 均记录 Core `7985843`；旧 `txboard` 仓库的兼容别名摘要相同。
+该 Core 发布只核对双架构注册表元数据；实际镜像运行门禁与 Node 的双架构离线
+capabilities 分别记账，不推广为 Core arm64 运行或物理主机验收。测试模块升级
+及备份恢复也不等于生产升级。
 
 ## 发布产物和读取顺序
 

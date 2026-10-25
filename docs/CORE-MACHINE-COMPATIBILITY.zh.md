@@ -19,8 +19,10 @@ Core PR #307 将管理员节点详情页接入三个封闭操作：
 的 Redis 通知 → NodeWorker 重读短期回执与当前凭据、成员关系和 socket → 原 WS
 `ops.node.connections.request` → Machine mailbox/Service 原调度 → 原 Kernel/Session
 连接登记与关闭 → `ops.node.connections.result` → Core 原回执投影。没有新增连接或
-账量 owner。Core 集成候选选择 Node `9f636d4ccaa5fd00cc2282cb8e64490d49c564e3`；
-正式采用与构建以 PR #307 的最终合并和各自 Actions 来源为准。
+账量 owner。Core 正式选择 Node `9f636d4ccaa5fd00cc2282cb8e64490d49c564e3`，
+PR #307 已正常合并为 `7985843ddd94faebbecd201bd7c55b4f998f677b`。该 Core
+与评审 head 树相同，固定 `097dc97` 仍在其 main 历史中；Node 所选提交也在
+Node main 历史中，并与发布源码 `f2096569` 的全部非 Markdown blob/mode 相同。
 
 请求绑定管理员、Node、当前 socket epoch、原输入和 15 秒截止时间；旧作用域与
 错误结构仍拒绝。匹配但迟到的合法结果只收到 `accepted:false`，保持 unknown，
@@ -51,6 +53,14 @@ HTTP 负向断言和 Workerman 预升级关闭实际发生。代理现在只对�
 副本解码，原响应头与压缩字节保持；真实网络回归、损坏/超大拒绝回归和最终
 组合均实际通过。固定 Core 和独立组合分别观察到九个、八个 gzip 授权拒绝。
 这不改写开发服务器下原两秒恢复失败或其它历史失败的唯一原因。
+
+正式标签 `v2.3.0-rc.1` 的完整 Actions `40165006752` 也已通过全部八项功能
+门禁并完成两架构构建及发布；本次固定 Core Machine artifact `12588550762`
+为四份原 batch / 四行唯一 settled SQL。Core 合并后 `7985843` 的独立实际
+组合 artifact `12587559546` 为八份 / 八行，来源为 Core `7985843` 与所选
+Node `9f636d4c`；完整合并后 CI `40164915929` 的 26 项选中检查及 Images
+`40164915924` 均成功，后者也实际发布双架构 Core 开发镜像。候选源码及镜像
+摘要见 `CANDIDATE-DELIVERY.zh.md`。
 
 前置候选 Node `50b05dfc` 与 Core `327c077` 的完整功能 Actions `40156485416`
 已成功。Core `327c077` 的组合 gate `40156326727` / artifact `12584725893`
