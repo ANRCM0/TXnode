@@ -237,6 +237,11 @@ def failure_summary(category):
                 diagnostics['signals'].append(label)
         for status, code in re.findall(r'actual foreign HTTP scope: status=([0-9]{3}) code=([A-Z][A-Z0-9_]{0,100})', text):
             diagnostics['foreign_http'] = {'status':int(status), 'code':code if code in {'NODE_NOT_FOUND','NODE_UNAUTHORIZED','INTERNAL_ERROR','CAPABILITY_UNAVAILABLE'} else 'other'}
+        for phase in re.findall(r'NATIVE_MACHINE_SCOPE_FAILURE ([a-z_]+)', text):
+            if phase in {'fixture','foreign_http_node','foreign_http_machine','foreign_ws_machine','current_foreign_ws','foreign_ws_node'}:
+                diagnostics['foreign_scope_phase'] = phase
+        for middleware, upstream in re.findall(r'NATIVE_MACHINE_UPGRADE_REFUSAL middleware=(true|false) upstream=(true|false)', text):
+            diagnostics['upgrade_refusal_evidence'] = {'middleware':middleware=='true','upstream':upstream=='true'}
     diagnostics['test_exit_code'] = None if test is None else test.poll()
     result = {'schema': 'txnode-core-machine-result/v1', 'status': 'failed',
               'failed_stage': active_stage, 'core_revision': actual,
