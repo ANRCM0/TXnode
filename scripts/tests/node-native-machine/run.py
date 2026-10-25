@@ -173,6 +173,28 @@ def failure_summary(category):
             except (ValueError, TypeError):continue
             if valid_recovery(recovery):
                 diagnostics['recovery'] = recovery
+        rotation_time = globals().get('rotation', {}).get('completed_monotonic_ns', 0)
+        usage_paths = {'/txapi/node/v2/usage/batch/get':'query', '/txapi/node/v2/usage/submit':'submit'}
+        node_roles = {str(fixture['nodes'][0]['id']):'target', str(fixture['nodes'][1]['id']):'sibling'}
+        timings = [event for event in proxy.event_snapshot()
+                   if rotation_time > 0 and event.get('kind') == 'http-timing' and event.get('path') in usage_paths
+                   and event.get('started_monotonic_ns', 0) >= rotation_time
+                   and event.get('node_id') in node_roles]
+        # Retain the startup prefix per child; a healthy sibling's later worker
+        # queries must not evict the failed child's first recovery requests.
+        selected = []
+        for role in ('target', 'sibling'):
+            child = [event for event in timings if node_roles[event['node_id']] == role]
+            selected.extend(child[:16])
+            for event in sorted(child, key=lambda event:event['elapsed_ns'], reverse=True)[:2]:
+                if event not in selected:selected.append(event)
+        diagnostics['recovery_pending_counts'] = {
+            role:sum(str(tail.get('node_id')) == identity for tail in globals().get('old', {}).get('tails', []))
+            for identity,role in node_roles.items()}
+        diagnostics['recovery_http'] = [{'operation':usage_paths[event['path']], 'node':node_roles[event['node_id']],
+                                         'started_after_rotation_ns':event['started_monotonic_ns']-rotation_time,
+                                         'elapsed_ns':event['elapsed_ns'], 'outcome':event['outcome'], 'status':event['status']}
+                                        for event in selected]
         source = (node / 'internal/machine/native_core_machine_live_test.go').read_text().splitlines()
         for match in re.finditer(r'native_core_machine_live_test\.go:([0-9]+):', text):
             line = int(match.group(1))

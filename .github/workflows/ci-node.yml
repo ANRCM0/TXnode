@@ -168,6 +168,8 @@ jobs:
           else
             echo 'SKIP - historical release prose removed; version metadata validated.'
           fi
+      - name: Reject mixed-source and incomplete release asset proofs
+        run: python3 -m unittest discover -s scripts -p 'test_release_assets.py' -v
       - name: Verify release commit is contained in Node repository main
         if: startsWith(github.ref, 'refs/tags/')
         run: |
@@ -304,10 +306,13 @@ jobs:
           else
             make build-linux-arm64
           fi
+          python3 scripts/prepare-release-assets.py --record
       - uses: actions/upload-artifact@v4
         with:
           name: tx-node-linux-${{ matrix.goarch }}
-          path: tx-node-linux-${{ matrix.goarch }}
+          path: |
+            tx-node-linux-${{ matrix.goarch }}
+            tx-node-linux-${{ matrix.goarch }}.build.json
           if-no-files-found: error
 
   publish-image:
@@ -453,6 +458,12 @@ jobs:
           pattern: tx-node-linux-*
           merge-multiple: true
           path: dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: node-published-image-${{ github.sha }}
+          path: release-image-proof
+      - name: Bind binary checksums to the published image and exact source
+        run: python3 scripts/prepare-release-assets.py
       # Node tags and release assets belong only to this repository.
       - name: Create Node release if missing and upload Node binaries
         env:
@@ -466,10 +477,14 @@ jobs:
             if [[ "$CHANNEL" == preview ]]; then
               flags=(--prerelease --latest=false)
             fi
-            gh release create "$RELEASE_TAG" --verify-tag --generate-notes \
+            notes=(--generate-notes)
+            if [[ -f .github/release/NOTES.md ]]; then
+              notes=(--notes-file .github/release/NOTES.md)
+            fi
+            gh release create "$RELEASE_TAG" --verify-tag "${notes[@]}" \
               --title "TX-Node $RELEASE_TAG" "${flags[@]}"
           fi
-          gh release upload "$RELEASE_TAG" dist/tx-node-linux-amd64 dist/tx-node-linux-arm64 --clobber
+          gh release upload "$RELEASE_TAG" dist/tx-node-linux-amd64 dist/tx-node-linux-arm64 dist/SHA256SUMS dist/release-manifest.json --clobber
 
   core-machine:
     name: Pinned Core machine contract with native Node

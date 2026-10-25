@@ -1,8 +1,9 @@
 # Mieru v2 承载、显式 traffic_pattern 与验收入口
 
-状态：已编写候选源码与测试；本地只执行格式、静态诊断和交叉编译。中间候选已有
-官方 UDP、TCP 复用与显式整形执行记录，最终源码仍须完整 Actions 验收；具体候选
-状态见 `OUTSTANDING-WORK.zh.md`，不能据此宣告可发布。
+状态：显式整形及 `seed`/`unlockAll` 已完成源码和对应 Actions 功能验证。
+隐式策略候选 `f9f09494435d6f82d05db3818d47bdd258c5ad82` 的完整运行
+`40150617452` 成功，经 PR #19 合并为 `cf837f22`；新增八项官方客户端子用例
+实际执行通过。具体候选、发布和性能边界见 `OUTSTANDING-WORK.zh.md`。
 
 ## 固定参考与兼容入口
 
@@ -96,8 +97,8 @@ underlay，已结束 session 的迟到控制帧也先完整解密以保持游标
 
 ## traffic_pattern 配置
 
-保留现有 `TrafficPattern string` 契约；非空值必须是官方 `trafficPattern` 形状的显式
-JSON object。构造 `NewHandler` 时校验未知字段、枚举和范围；任意命名字符串与无效
+保留现有 `TrafficPattern string` 契约；非空值必须是官方 `trafficPattern` 形状的
+JSON object，可显式配置或选择下面的隐式生成字段。构造 `NewHandler` 时校验未知字段、枚举和范围；任意命名字符串与无效
 参数均明确报错。`ValidateTrafficPattern` 可供外层提前校验。
 空字符串与 `{}` 保持默认行为。示例 YAML：
 
@@ -144,6 +145,8 @@ traffic_pattern: >-
 恢复验收。配置准备失败保留原流；实际 UDP socket 替换失败会恢复旧地址的监听，
 由新客户端恢复业务，不承诺原 underlay 无中断。
 
-尚需精确候选提交的完整 Go/race、上述官方客户端测试、路由/限速/计量组合、网络故障
-注入、撤权、同端口 Reload/回滚及真实固定 Core C2 证据。源码和静态检查不能关闭这些
-验收项，也不能把旧 packet 测试或 TCP 默认模式通过推广到四种组合。
+完整 `40150617452` 已执行 Go/race、runtime stability、严格 quick/full、固定 Core
+C2/Machine 和镜像冒烟。full artifact `12581983367` 的原始事件为 38 个顶层、
+37 个子项通过，另两项上游不适用单列；新隐式策略八项子用例全部通过。后续
+连接管理候选的完整功能运行 `40152154750` 再次通过这些门禁。以上仅接受固定
+客户端及实际执行组合；完整 S3 v3、实际部署与生产 PKI 仍有各自未完成项。
