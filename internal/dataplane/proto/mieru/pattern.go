@@ -12,9 +12,8 @@ import (
 	"time"
 )
 
-// TrafficPattern is the explicit v3.38.1 trafficPattern JSON subset accepted by
-// this inbound. The panel transports this JSON as its traffic_pattern string.
-// Seed-driven implicit generation is deliberately rejected, not silently ignored.
+// TrafficPattern accepts the v3.38.1 trafficPattern fields carried by the panel.
+// Empty input retains the original defaults; seed/unlockAll opt into generation.
 type TrafficPattern struct {
 	Seed        *int32          `json:"seed,omitempty"`
 	UnlockAll   *bool           `json:"unlockAll,omitempty"`
@@ -120,9 +119,6 @@ func parseTrafficPattern(raw string) (*TrafficPattern, error) {
 	if err := d.Decode(&trailing); err != io.EOF {
 		return nil, errors.New("mieru: trailing traffic_pattern JSON")
 	}
-	if p.Seed != nil || (p.UnlockAll != nil && *p.UnlockAll) {
-		return nil, errors.New("mieru: seed/unlockAll implicit traffic patterns are unsupported; configure explicit fields")
-	}
 	if f := p.TCPFragment; f != nil && f.MaxSleepMS != nil && (*f.MaxSleepMS < 0 || *f.MaxSleepMS > 100) {
 		return nil, errors.New("mieru: tcpFragment.maxSleepMs must be in [0,100]")
 	}
@@ -150,6 +146,11 @@ func parseTrafficPattern(raw string) (*TrafficPattern, error) {
 			if length != nil && (*length < 0 || *length > 255) {
 				return nil, errors.New("mieru: padding lengths must be in [0,255]")
 			}
+		}
+	}
+	if p.Seed != nil || (p.UnlockAll != nil && *p.UnlockAll) {
+		if err := p.resolveSeed(raw); err != nil {
+			return nil, err
 		}
 	}
 	return p, nil

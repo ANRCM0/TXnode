@@ -97,8 +97,8 @@ underlay，已结束 session 的迟到控制帧也先完整解密以保持游标
 ## traffic_pattern 配置
 
 保留现有 `TrafficPattern string` 契约；非空值必须是官方 `trafficPattern` 形状的显式
-JSON object。构造 `NewHandler` 时校验未知字段、枚举和范围；任意命名字符串、无效
-参数与尚未支持的隐式 seed 模式均明确报错。`ValidateTrafficPattern` 可供外层提前校验。
+JSON object。构造 `NewHandler` 时校验未知字段、枚举和范围；任意命名字符串与无效
+参数均明确报错。`ValidateTrafficPattern` 可供外层提前校验。
 空字符串与 `{}` 保持默认行为。示例 YAML：
 
 ```yaml
@@ -115,7 +115,12 @@ traffic_pattern: >-
   支持不旋转、右移 1-15、左移 1-15 的官方枚举编码。仅密文 body 膨胀，AEAD tag 原样
   保留；解码检查 mask bit 数、长度和所有非数据位一致的 padding 极性，再校验 AEAD。
   服务端只有在同一会话收到低熵数据且显式启用发送模式后，才以低熵回应。
-- `seed` 和 `unlockAll:true` 的隐式生成策略尚未提供；严格拒绝，不能配置成功后静默忽略。
+- `seed`：显式有符号 32 位整数（包括 `0`）启用确定性字段生成，遵循固定官方
+  v3.38.1 的 SHA-256 31 位映射和字段域；不引入上游 runtime 依赖。
+- `unlockAll:true`：开放官方隐式取值范围；省略 seed 时按主机名及固定参考版本
+  派生进程可重现的 seed。缺省未设置 seed/unlockAll 时保留原行为。
+  隐式模式中显式字段优先（包括 `0`、`false`）；`null` 按未设置处理，重复字段拒绝。
+  生成的 nonce 最小值高于显式最大值时拒绝配置，不会覆盖显式范围。
 
 ## 候选测试与验收状态
 
@@ -128,6 +133,8 @@ traffic_pattern: >-
 | `TestInteropMieruOfficialUDPTransport` | 官方 v3.38.1 的 TCP-over-UDP 大流量、应用 UDP-over-UDP 跨 MTU、idle/reuse |
 | `TestInteropMieruOfficialPacketFaults` | 官方 UDP 客户端经双向丢包/乱序/重复后 bulk 与应用 UDP 精确字节；撤权/轮换/重加后密文重放不增加 core 与 NativeMeter 物理计数；同端口 Reload、配置失败保流及真实绑定失败后的监听回滚与新客户端恢复 |
 | `TestInteropMieruOfficialTrafficPatterns` | TCP/UDP × 四种低熵模式；显式 nonce/padding/TCP 分段；双向 bulk 和应用 UDP |
+| `TestInteropMieruOfficialImplicitPatterns` | TCP/UDP × seed 0、int32 最小/最大值、主机 seed；官方客户端的双向 bulk 与应用 UDP |
+| `internal/dataplane/proto/mieru/pattern_seed_test.go` | 固定官方 seed 向量、显式零/false 优先、范围冲突、重复字段拒绝及实例独立性 |
 
 现有 `TestInteropMieruOfficialClient`、`Idle`、`DialFailure`、`Bulk` 保持独立回归入口。
 新增官方测试必须纳入严格完整 manifest，并由 Actions 检查 PASS/FAIL/意外 Skip；普通
