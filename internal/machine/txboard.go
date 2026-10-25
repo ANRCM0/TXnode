@@ -117,6 +117,10 @@ func (s *txboardMachineSocket) SendOpsResult(data json.RawMessage) {
 	s.Socket.Send("ops.result", body)
 }
 
+func (s *txboardMachineSocket) SendConnectionResult(result controlplane.ConnectionResult) {
+	s.Socket.Send("ops.node.connections.result", result)
+}
+
 var _ machineSocket = (*txboardMachineSocket)(nil)
 var _ machineControlPlane = (*txboardMachineControlPlane)(nil)
 var _ machineNodeClient = (*txboardMachineNodeClient)(nil)

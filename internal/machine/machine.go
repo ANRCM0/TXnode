@@ -668,7 +668,14 @@ func (o *Orchestrator) onMachineEvent(event machineEvent) {
 		return
 	}
 
-	mailbox.Apply(translated)
+	if !mailbox.Apply(translated) && translated.Connections != nil {
+		if sender, ok := o.currentWS().(controlplane.ConnectionResultSender); ok {
+			c := translated.Connections
+			sender.SendConnectionResult(controlplane.ConnectionResult{
+				NodeID: nodeID, RequestID: c.RequestID, Action: c.Action, Status: "unavailable",
+			})
+		}
+	}
 }
 
 func (o *Orchestrator) onMachineStatus(connected bool) {
@@ -763,6 +770,12 @@ func (p *machineNodePush) SendDeviceReport(devices map[int][]string) {
 	payload["devices"] = strDevices
 	data, _ := json.Marshal(payload)
 	ws.SendDeviceReport(data)
+}
+
+func (p *machineNodePush) SendConnectionResult(result controlplane.ConnectionResult) {
+	if sender, ok := p.currentWS().(controlplane.ConnectionResultSender); ok {
+		sender.SendConnectionResult(result)
+	}
 }
 
 // Only the main Run loop joins child services; a rejecting child signals once.

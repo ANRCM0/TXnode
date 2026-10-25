@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"time"
 
 	"github.com/ANRCM0/TX-Node/internal/authorization"
 	"github.com/ANRCM0/TX-Node/internal/config"
@@ -199,6 +200,9 @@ type txboardNodePush struct{ socket *txboard.Socket }
 func (p *txboardNodePush) Run(ctx context.Context)           { p.socket.Run(ctx) }
 func (p *txboardNodePush) IsConnected() bool                 { return p.socket.IsConnected() }
 func (p *txboardNodePush) SendDeviceReport(map[int][]string) {} // Native reports carry alive state via HTTP.
+func (p *txboardNodePush) SendConnectionResult(result ConnectionResult) {
+	p.socket.Send("ops.node.connections.result", result)
+}
 func (p *TXBoardControlPlane) Report(payload ReportPayload) error {
 	body := map[string]any{
 		"status": map[string]any{"cpu": payload.CPU, "mem": map[string]any{"total": payload.Mem[0], "used": payload.Mem[1]},
@@ -230,6 +234,12 @@ func (p *TXBoardControlPlane) ReportDevices(_ PushClient, _ map[int][]string) {}
 func TranslateTXBoardEvent(raw txboard.Event, k config.KernelConfig) (Event, error) {
 	var event Event
 	switch raw.Name {
+	case string(EventConnections):
+		command, err := ParseConnectionCommand(raw.Data, raw.NodeID, time.Now())
+		if err != nil {
+			return event, err
+		}
+		event = Event{Type: EventConnections, Connections: command}
 	case "sync.config":
 		var data struct {
 			Config panel.NodeConfig `json:"config"`
