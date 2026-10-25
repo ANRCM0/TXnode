@@ -1,6 +1,27 @@
 # Node 镜像交付与历史阻塞记录
 
-核对日期：2026-10-21（Asia/Shanghai）。PR #5 已合并为 main
+## 2026-10-25 独立开发镜像
+
+连接管理已通过 Node PR #20 合并为
+`e21e526ab7ec9113aacd3954f414cfc5aa84f8ff`。合并后 main CI `40152780133`
+成功，实际发布 artifact `12583761600` 已核对两个架构的元数据及按摘要离线
+capabilities；arm64 使用 QEMU。它不代替 Core 组合验收或完整 S3 v3。
+
+| 项目 | 已取得的发布证据 |
+| --- | --- |
+| 不可变标签 | `ghcr.io/anrcm0/txnode:dev-sha-e21e526ab7ec` |
+| Index | `sha256:bc2db6b34d5636725745acb2461b87b5378a3ce947d902b8e244cb0164259f17` |
+| linux/amd64 | `sha256:ecbff706e3870d8a9cc7d54de302a6cdc286556c69b60b7b952e019af8e750da` |
+| linux/arm64 | `sha256:a8a2a9d9d907f1e2f6fb0191ac2387abf992b977fb2e97091c662432539eeba0` |
+
+本轮候选版本准备为 `v2.3.0-rc.1`，使用已有 `preview` 通道；版本说明见
+`.github/release/NOTES.md`。标签工作流须完成该源码的完整互通、稳定性、固定
+Core C2/Machine、双架构发布和二进制证明，才能形成候选交付。正式 stable、
+生产部署和真实回滚继续各自验收；实际主机和固定性能 runner 目前均不可用。
+
+## 2026-10-21 首次独立交付
+
+历史核对日期：2026-10-21（Asia/Shanghai）。PR #5 已合并为 main
 `112760455433de1f9556b030b42b7a774a928fd1`，tree
 `7cf10cc16c8dc299c60db4c691bba868c26fe063`，与最终 PR head `4b7af523` 完全相同。
 相对已完成完整功能及 Machine 验证的运行时候选 `e5e98291`，仅追加七份验收文档；
