@@ -29,6 +29,8 @@ Native billing coverage and pending recovery assertions are mapped in
 historical publishing blockers are recorded in `docs/RELEASE-BLOCKERS.zh.md`.
 Native configuration changes, connection identities and opt-in diagnostics are
 described in `docs/NATIVE-OPERATIONS.zh.md`.
+The v2.3.0-rc.1 candidate, exact Core adoption and artifact verification scope are
+recorded in `docs/CANDIDATE-DELIVERY.zh.md`; full S3 v3 and physical rollout remain open.
 
 The independent workflow owns tests, actual image checks and a real native Core
 compatibility test. `compatibility/core.v1.json` pins the supported Core baseline.

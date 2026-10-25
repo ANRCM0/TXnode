@@ -16,14 +16,14 @@ advertises `node-connections/v1`; it never infers support from a passing old run
 
 The Node-owned fixture is prepared for **native installation mode** with a real
 Credential Provider process, mTLS client identities, Core signing seed, native
-activation and period-bound Usage V2. This is source preparation only; its
-positive whole Machine chain has not passed acceptance. The static compatibility
-preflight now fails before database probes, migrations, seed or application
-startup and publishes an explicit `compatibility_preflight` failure. See
-`docs/CORE-MACHINE-COMPATIBILITY.zh.md` for the exact pinned owner chain and
-required independent Core adaptation. A future native admission inventory pass
-alone is insufficient: the fixture must execute real native activation and
-Provider trust/material flow. The Node uses the `txnode` kernel, and VLESS/VMess
+activation and period-bound Usage V2. Completed candidate runs and retained
+failures are recorded separately in `docs/CORE-MACHINE-COMPATIBILITY.zh.md`;
+the final source still needs its own Actions evidence. The static compatibility
+preflight fails before database probes, migrations, seed or application startup
+when required contracts are missing and publishes a `compatibility_preflight`
+failure. An admission inventory pass alone is insufficient: the fixture must
+execute real native activation and Provider trust/material flow.
+The Node uses the `txnode` kernel, and VLESS/VMess
 clients use Node's native outbound implementation.
 
 `native_setup.py` provisions private CA/server/Core/Node certificates and starts
@@ -48,8 +48,8 @@ through `Authorization`, together with `UsageV2`; no authority is mocked.
 | Original traffic batch and SQL uniqueness | Exactly one `tx_usage_batch` row for node/source epoch/batch ID, matching payload digest, canonical payload and original period IDs; real worker settlement must reach `settled` |
 | Config update while all REST config/users reads are held | Existing real Workerman WS-only assertion remains required; signatures and REST barriers are not bypassed |
 
-The pinned Core still lacks command admission for `ws-server`. The former four
-raw admin HTTP paths are replaced by the existing canonical Core browser
+The required Core baseline admits the real `ws-server` command. The former four
+raw admin HTTP paths are replaced by the canonical Core browser
 operations: `network.nodes.configuration.get`, `.configuration.replace`, `.patch`,
 `network.machines.token.rotate` and `.credentials.get`. Each uses the original
 admin Bearer, same-origin HTTPS, `X-Core-Admin-Path`, an explicit current actor
@@ -62,11 +62,9 @@ Git blobs and each required contract. Missing admission still fails before any
 database or process work. No Core source, pin or runtime admission rule is changed
 by this fixture.
 
-Node now has source implementations and regressions for recovery receipts before
-listener admission, safe equivalent native renewal, and a narrow WS-only port
-update path preserving current signed authority. The full gate retains the strict
-original assertions; these implementations still need current-candidate Actions
-acceptance. Local syntax or compile checks do not establish their behavior.
+The full gate retains recovery receipts before listener admission, safe equivalent
+native renewal, and a narrow WS-only port update path preserving current signed
+authority. Local syntax or compile checks do not establish their behavior.
 
 The fixture also pins `CORE_RELEASE_ID` to the exact Core revision and inspects
 `InstallationAuthority.runtimeReport()` after actual activation under worker epoch
@@ -74,7 +72,7 @@ The fixture also pins `CORE_RELEASE_ID` to the exact Core revision and inspects
 replacing Core module readiness. Free checkout requires the durable owner row to
 be `completed`, in addition to order completion and idempotent replay.
 
-## Intended Coverage (Not Yet Accepted)
+## Runtime Coverage And Evidence Boundary
 
 - Two real nodes managed by the production Orchestrator and one shared
   Workerman WebSocket; real VLESS and VMess TCP traffic.
@@ -88,13 +86,24 @@ be `completed`, in addition to order completion and idempotent replay.
   durable, old credentials fail restart, and fresh credentials replay original
   batch IDs and payloads before listeners reopen.
 - Actual SQL uniqueness for replayed batches. Independent billing
-  reconciliation, physical-host operation, production PKI and Core native
-  installation Machine admission remain outside this gate.
+  reconciliation, physical-host operation and production PKI remain outside
+  this gate. Native installation Machine admission is an explicit live assertion.
+
+The HTTP fixture uses the application's existing Octane/Swoole entry point with
+four workers and Swoole 6.2.3, matching the Swoole version in the supported Core
+image. The original PHP development-server observations remain historical facts;
+they are not relabeled as production HTTP timings. The runner verifies the
+extension version and bytecode-cache settings, and records request durations for
+member re-enable and credential recovery. The two-second recovery page, twelve-second
+listener readiness, original batch payloads and SQL uniqueness assertions remain
+unchanged. A pass under this runtime does not establish the unique cause of every
+earlier failure or prove actual image deployment.
 
 ## Actions Invocation
 
 Provide Linux, Go with `CGO_ENABLED=1` and a C compiler, PHP 8.2 with Core's
-Composer dependencies and `pdo_mysql`/Redis/bcmath/curl/sodium/fileinfo extensions,
+Composer dependencies and `pdo_mysql`/Redis/bcmath/curl/sodium/fileinfo/OPcache
+extensions plus Swoole 6.2.3,
 Node.js for the pinned native recipient-render client, OpenSSL, a MySQL or
 MariaDB client, and dedicated MySQL/Redis services. Start from a clean database;
 the runner refuses a nonempty schema. Allocate the fixture databases solely to

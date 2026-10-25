@@ -4,6 +4,37 @@
 [NEXT-DEVELOPMENT.zh.md](NEXT-DEVELOPMENT.zh.md)，严格互通入口见
 [INTEROP.md](INTEROP.md)。历史 `a6d0e96` 的“29 通过、6 跳过”不代表当前候选。
 
+## 2026-10-25 候选功能与交付入口
+
+用户选择同时完成两个可选功能，并在暂无固定性能 runner、暂无实际主机的条件下
+先交付候选。Mieru `seed`/`unlockAll` 已经 PR #19 合并；Node 连接命令已经 PR #20
+合并，Core 节点详情页、三个封闭操作与当前 socket 作用域在独立 PR #307 集成。
+Node 发布准备 PR #21 已合并，二进制原构建记录、校验和及镜像摘要由原标签工作流
+绑定，不从源码存在或开发镜像成功推导正式候选已交付。
+
+功能候选 Node `9f636d4ccaa5fd00cc2282cb8e64490d49c564e3` 与固定 Core
+`097dc9748bbe665ae7672c43827998f1e9420e3a` 的完整 Actions `40162774358`
+已成功：Go/race、quick/full、runtime stability、Core C2/Machine 和镜像冒烟均
+实际通过。full 原始事件为 38 个顶层、38 个子项通过，另两项固定上游不适用；
+本次 Machine 原十份批次与十行唯一 settled SQL 对应，新增管理员分页、跨节点
+关闭拒绝、原键重放、目标 EOF、其它流持续均实际执行。
+
+迟到的合法结果保持 unknown 并获得 `accepted:false`，避免通用错误帧触发共享
+socket 重连；Node 实际 WS 回归和 Core 三种身份回归分别验证该行为。原 owner、
+截止时间、计量与回执语义保留。最终合并与构建来源见
+[候选交付说明](CANDIDATE-DELIVERY.zh.md)，固定 Core 合约见
+[Core Machine 门禁](CORE-MACHINE-COMPATIBILITY.zh.md)。
+
+独立 Mihomo DIRECT 启动控制使 full 达到 38 个顶层、38 个子项通过；原来的
+38/37 属于前置 `3258d008`，不套用到新清单。Machine 使用固定 Octane/Swoole，
+代理观测实际 gzip 拒绝且保留原压缩字节。原五份 pending 在最终固定 Core 运行
+的 HTTP 跨度为 1.89056 秒；原两秒页、十二秒就绪与全部重放/周期断言保留。
+Core `e2ae095b` 单独组合 gate 的六份原批次与六行 SQL 对应，双方数字分别记账。
+
+该候选功能结果不关闭下面的 S3 v3 拒绝、早期恢复/调度超时的归因缺口，或实际
+主机、生产 PKI、独立完整财务对账和现场回滚验收。历史结果继续按自己的 SHA 和
+profile 保留，不能把条件跳过写成当前提交重新执行通过。
+
 ## 2026-10-25 完成审计发现的延迟预算补项
 
 PR #16 的现行 S3 v2 已完整通过并交付；继续逐项核对原方案时，确认其百分位
