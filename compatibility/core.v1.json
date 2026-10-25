@@ -1,7 +1,7 @@
 {
   "schema": "txnode-core-compatibility/v1",
   "repository": "ANRCM0/TXBoard",
-  "revision": "327c07791cacc6d8b02a0ce067cef71dfeba9388",
+  "revision": "097dc9748bbe665ae7672c43827998f1e9420e3a",
   "protocols": [
     "node/v1",
     "node-usage/v2",
