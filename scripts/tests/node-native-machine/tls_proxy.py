@@ -1,5 +1,7 @@
 """Transparent trusted same-origin HTTP/WSS facade for exclusive native tests."""
 import http.client
+import gzip
+import io
 import json
 import select
 import socket
@@ -7,6 +9,26 @@ import socketserver
 import ssl
 import threading
 import time
+import zlib
+
+
+def response_error_code(content, encoding):
+    # Observe a bounded decoded copy while forwarding the original HTTP bytes.
+    try:
+        if encoding.strip().lower() == 'gzip':
+            with gzip.GzipFile(fileobj=io.BytesIO(content)) as source:
+                decoded = source.read(65537)
+        elif encoding.strip().lower() in {'', 'identity'}:
+            decoded = content
+        else:
+            return None
+        if len(decoded) > 65536:return None
+        payload = json.loads(decoded)
+        error = payload.get('error') if isinstance(payload, dict) else None
+        code = error.get('code') if isinstance(error, dict) else None
+        return code if isinstance(code, str) else None
+    except (OSError, EOFError, ValueError, zlib.error):
+        return None
 
 class NativeTLSProxy:
     def __init__(self, port, http_port, ws_port, cert, key, observation):
@@ -117,8 +139,9 @@ class NativeTLSProxy:
                             payload=json.loads(body[:length]);event['batch_id']=payload.get('traffic_batch_id');event['traffic']=payload.get('traffic',{})
                         except (ValueError,TypeError): pass
                     if response.status>=400:
-                        try:event['error_code']=json.loads(content).get('error',{}).get('code')
-                        except (ValueError,TypeError): pass
+                        encoding=response.getheader('Content-Encoding','').strip().lower()
+                        event['body_encoding']=encoding if encoding in {'','identity','gzip'} else 'other'
+                        event['error_code']=response_error_code(content, encoding)
                     owner.record(event)
                     output=f'HTTP/1.1 {response.status} {response.reason}\r\n'.encode()
                     output+=b''.join(f'{k}: {v}\r\n'.encode('iso-8859-1') for k,v in response.getheaders() if k.lower() not in {'connection','transfer-encoding','content-length'})
